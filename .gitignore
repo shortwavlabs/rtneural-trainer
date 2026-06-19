@@ -1,1 +1,17 @@
 .DS_Store
+node_modules/
+.pnpm-store/
+dist/
+target/
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+.pytest_cache/
+app/src-tauri/target/
+app/dist/
+trainer/dist/
+trainer/build/
+native/rtneural-validator/build/
+projects/*
+!projects/.gitkeep

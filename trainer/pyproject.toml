@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rttrainer"
+version = "0.1.0"
+description = "Training sidecar contract for RTNeural Trainer"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+rttrainer = "rttrainer.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rttrainer*"]
