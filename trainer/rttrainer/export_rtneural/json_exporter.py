@@ -108,14 +108,11 @@ def build_rtneural_json(
                 "shape": [None, None, hidden_size],
                 "input_size": input_size,
                 "hidden_size": hidden_size,
-                "weights": {
-                    "weight_ih": tensor_to_list(state["lstm.weight_ih_l0"]),
-                    "weight_hh": tensor_to_list(state["lstm.weight_hh_l0"]),
-                    "bias_ih": tensor_to_list(state["lstm.bias_ih_l0"]),
-                    "bias_hh": tensor_to_list(state["lstm.bias_hh_l0"]),
-                    "gate_order": "ifgo",
-                    "layout": "pytorch",
-                },
+                "weights": [
+                    tensor_to_list(state["lstm.weight_ih_l0"].transpose(0, 1)),
+                    tensor_to_list(state["lstm.weight_hh_l0"].transpose(0, 1)),
+                    tensor_to_list(state["lstm.bias_ih_l0"] + state["lstm.bias_hh_l0"]),
+                ],
             },
             {
                 "type": "dense",
@@ -123,11 +120,10 @@ def build_rtneural_json(
                 "shape": [None, None, output_size],
                 "input_size": hidden_size,
                 "output_size": output_size,
-                "weights": {
-                    "weight": tensor_to_list(state["dense.weight"]),
-                    "bias": tensor_to_list(state["dense.bias"]),
-                    "layout": "pytorch",
-                },
+                "weights": [
+                    tensor_to_list(state["dense.weight"].transpose(0, 1)),
+                    tensor_to_list(state["dense.bias"]),
+                ],
             },
         ],
         "metadata": {

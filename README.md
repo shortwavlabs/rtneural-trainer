@@ -83,6 +83,11 @@ cargo check
 
 ## Build The Native Validator
 
+If the local RTNeural clones exist under `/Users/shortwavlabs/Workspace/rt-neural`,
+the validator CMake project uses `/Users/shortwavlabs/Workspace/rt-neural/RTNeural`
+by default. Override with `RTNEURAL_LOCAL_PATH=/path/to/RTNeural` if needed. If
+no local checkout is found, CMake fetches the pinned RTNeural commit.
+
 ```bash
 cmake -S native/rtneural-validator -B native/rtneural-validator/build
 cmake --build native/rtneural-validator/build
@@ -104,8 +109,9 @@ native/rtneural-validator/build/rtneural-validator benchmark \
   --report projects/demo/exports/export_001/native-benchmark-report.json
 ```
 
-The native validator is currently a sidecar stub that writes structured reports.
-Wiring it to RTNeural's real dynamic JSON parser is still on the roadmap.
+The native validator loads RTNeural dynamic JSON, runs mono WAV input through the
+model, compares against mono reference audio, and writes structured validation
+and benchmark reports.
 
 ## Use The Trainer CLI
 
@@ -302,6 +308,7 @@ Native validator:
 
 ```bash
 cmake --build native/rtneural-validator/build
+python3 scripts/smoke_rtneural_validator.py
 ```
 
 ## Useful Docs

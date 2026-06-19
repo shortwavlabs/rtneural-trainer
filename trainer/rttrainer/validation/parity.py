@@ -55,21 +55,32 @@ def run_exported_json(torch, model_json_path: Path, samples: list[float]) -> lis
     weights = lstm_layer["weights"]
     dense = dense_layer["weights"]
 
-    weight_ih = torch.tensor(weights["weight_ih"], dtype=torch.float32)
-    weight_hh = torch.tensor(weights["weight_hh"], dtype=torch.float32)
-    bias_ih = torch.tensor(weights["bias_ih"], dtype=torch.float32)
-    bias_hh = torch.tensor(weights["bias_hh"], dtype=torch.float32)
-    dense_weight = torch.tensor(dense["weight"], dtype=torch.float32)
-    dense_bias = torch.tensor(dense["bias"], dtype=torch.float32)
+    if isinstance(weights, dict):
+        weight_ih = torch.tensor(weights["weight_ih"], dtype=torch.float32)
+        weight_hh = torch.tensor(weights["weight_hh"], dtype=torch.float32)
+        bias = torch.tensor(weights["bias_ih"], dtype=torch.float32) + torch.tensor(
+            weights["bias_hh"], dtype=torch.float32
+        )
+    else:
+        weight_ih = torch.tensor(weights[0], dtype=torch.float32).transpose(0, 1)
+        weight_hh = torch.tensor(weights[1], dtype=torch.float32).transpose(0, 1)
+        bias = torch.tensor(weights[2], dtype=torch.float32)
 
-    hidden_size = int(lstm_layer["hidden_size"])
+    if isinstance(dense, dict):
+        dense_weight = torch.tensor(dense["weight"], dtype=torch.float32)
+        dense_bias = torch.tensor(dense["bias"], dtype=torch.float32)
+    else:
+        dense_weight = torch.tensor(dense[0], dtype=torch.float32).transpose(0, 1)
+        dense_bias = torch.tensor(dense[1], dtype=torch.float32)
+
+    hidden_size = int(lstm_layer.get("hidden_size", weight_hh.shape[1]))
     h = torch.zeros(hidden_size, dtype=torch.float32)
     c = torch.zeros(hidden_size, dtype=torch.float32)
     outputs: list[float] = []
 
     for sample in samples:
         x = torch.tensor([sample], dtype=torch.float32)
-        gates = weight_ih @ x + bias_ih + weight_hh @ h + bias_hh
+        gates = weight_ih @ x + weight_hh @ h + bias
         i_gate, f_gate, g_gate, o_gate = gates.chunk(4)
         i_gate = torch.sigmoid(i_gate)
         f_gate = torch.sigmoid(f_gate)

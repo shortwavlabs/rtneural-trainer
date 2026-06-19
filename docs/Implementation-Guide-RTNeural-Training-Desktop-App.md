@@ -140,6 +140,9 @@ repo. Pinning early matters because parity failures are often version-sensitive.
    - Platform audio libraries needed by Python packages
 3. Pin RTNeural to the commit from the research note:
    - `1fb1f075a5d66e85bfc8f488c3f3626840cb3a1d`
+   - On the current workstation, prefer the local checkout at
+     `/Users/shortwavlabs/Workspace/rt-neural/RTNeural` and fall back to fetching
+     only when the local clone is absent.
 4. Record expected Python package versions:
    - `numpy`
    - `tensorflow` for canonical Keras export fixtures and compatible presets

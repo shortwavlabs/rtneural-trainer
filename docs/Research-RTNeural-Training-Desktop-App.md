@@ -9,6 +9,13 @@ users train neural audio models that are easy to deploy with
 RTNeural repo inspected at commit `1fb1f075a5d66e85bfc8f488c3f3626840cb3a1d`
 from 2025-11-08.
 
+Local reference clones are available on this workstation under
+`/Users/shortwavlabs/Workspace/rt-neural`:
+
+- `RTNeural`
+- `RTNeural-example`
+- `RTNeural-compare`
+
 ## Executive Summary
 
 RTNeural should be treated as the real-time inference target, not the training
