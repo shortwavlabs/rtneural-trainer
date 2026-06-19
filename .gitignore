@@ -9,6 +9,7 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 app/src-tauri/target/
+app/src-tauri/gen/
 app/dist/
 trainer/dist/
 trainer/build/

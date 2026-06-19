@@ -228,7 +228,7 @@ fn create_project(
     payload: CreateProjectRequest,
 ) -> Result<ProjectDetail, String> {
     let id = format!("project_{}", Uuid::new_v4().simple());
-    let now = now();
+    let run_created_at = now();
     let project_dir = state.projects_dir.join(&id);
     fs::create_dir_all(project_dir.join("audio/original")).map_err(to_error)?;
     fs::create_dir_all(project_dir.join("audio/prepared")).map_err(to_error)?;
@@ -244,8 +244,8 @@ fn create_project(
         },
         target_kind: payload.target_kind,
         status: ProjectStatus::Draft,
-        created_at: now.clone(),
-        updated_at: now,
+        created_at: run_created_at.clone(),
+        updated_at: run_created_at,
         notes: String::new(),
         project_dir: project_dir.display().to_string(),
         audio: None,
@@ -331,7 +331,7 @@ fn start_training(
     }
 
     let run_id = format!("run_{}", Uuid::new_v4().simple());
-    let now = now();
+    let run_created_at = now();
     let project_dir = PathBuf::from(&project.project_dir);
     let run_dir = project_dir.join("runs").join(&run_id);
     let checkpoint_dir = run_dir.join("checkpoints");
@@ -370,8 +370,8 @@ fn start_training(
         status: RunStatus::Completed,
         device: detected_device(),
         epochs: 60,
-        created_at: now.clone(),
-        updated_at: now,
+        created_at: run_created_at.clone(),
+        updated_at: run_created_at,
         metrics: Some(metrics),
         log_path: log_path.display().to_string(),
     };
