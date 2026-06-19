@@ -10,8 +10,8 @@ artifacts. The core product promise is intentionally narrow:
 
 > Give the app a dry input file and a matching processed target file. It trains a
 > real-time-safe model, proves the exported RTNeural JSON matches the trained
-> PyTorch model, proves RTNeural can load it, and reports runtime cost before the
-> user ships the model.
+> model, proves RTNeural can load it, and reports runtime cost before the user
+> ships the model.
 
 ## 1. Non-Negotiable Product Decisions
 
@@ -19,22 +19,25 @@ Start by locking these constraints into the implementation. They keep the first
 version buildable and protect the app from becoming a generic ML IDE.
 
 1. Treat RTNeural as the inference target, not the training framework.
-2. Train in Python with PyTorch.
+2. Use TensorFlow/Keras as the canonical RTNeural JSON export path.
 3. Export only app-owned, curated architectures.
-4. Do not support arbitrary PyTorch, TensorFlow, or ONNX import in v1.
-5. Validate every export twice: PyTorch parity and native RTNeural parity.
-6. Use dynamic RTNeural JSON loading for v1.
-7. Keep live low-latency monitoring out of v1 unless the MVP is already stable.
-8. Prefer 48 kHz WAV workflows for v1, while still recording conversion metadata.
-9. Benchmark every exported model before letting the user publish it.
-10. Avoid copying trainer/exporter code from reference projects until licenses
+4. Keep PyTorch as an optional backend only for presets with proven parity.
+5. Do not support arbitrary PyTorch, TensorFlow/Keras, or ONNX import in v1.
+6. Validate every export twice: backend parity and native RTNeural parity.
+7. Use dynamic RTNeural JSON loading for v1.
+8. Keep live low-latency monitoring out of v1 unless the MVP is already stable.
+9. Prefer 48 kHz WAV workflows for v1, while still recording conversion metadata.
+10. Benchmark every exported model before letting the user publish it.
+11. Avoid copying trainer/exporter code from reference projects until licenses
     have been reviewed.
 
 ## 2. Target Architecture
 
 Use a Tauri v2 desktop shell with a React/TypeScript UI, a Rust orchestration
-layer, a Python/PyTorch trainer sidecar, and a native C++ RTNeural validator
-sidecar.
+layer, a `uv`-managed Python trainer/export sidecar, and a native C++ RTNeural
+validator sidecar. The Python sidecar should make TensorFlow/Keras the canonical
+RTNeural JSON path while keeping PyTorch isolated behind optional extras and
+known-good parity tests.
 
 ```text
 rtneural-trainer/
@@ -113,7 +116,7 @@ train, export, and validate one boring LSTM preset.
 
 | Phase | Name | Goal | Exit Criteria |
 | --- | --- | --- | --- |
-| 0 | Export spike | Prove PyTorch to RTNeural parity | Tiny LSTM/GRU exports load in native RTNeural and match within tolerance |
+| 0 | Export spike | Prove Keras to RTNeural JSON parity | Tiny Dense/LSTM/GRU exports load in native RTNeural and match within tolerance |
 | 1 | CLI trainer | Build product core without UI | Paired WAVs produce validated RTNeural JSON, metrics, and preview audio |
 | 2 | Desktop MVP | Make the workflow usable by non-developers | Project creation, import, align, train, evaluate, export all work without a terminal |
 | 3 | Runtime integrations | Make exports immediately useful | `.aidax` envelope, generated player, compile-time model, or cloud training path |
@@ -130,17 +133,18 @@ repo. Pinning early matters because parity failures are often version-sensitive.
    - Linux x64 if the product scope includes it
 2. Install local development tools:
    - Rust stable toolchain
-   - Node.js LTS package manager chosen by the team
-   - Python 3.11 or 3.12
+   - Node.js LTS with `pnpm` 11
+   - Python 3.11 or 3.12 managed by `uv`
    - CMake
    - A C++17-capable compiler
    - Platform audio libraries needed by Python packages
 3. Pin RTNeural to the commit from the research note:
    - `1fb1f075a5d66e85bfc8f488c3f3626840cb3a1d`
 4. Record expected Python package versions:
-   - `torch`
-   - `torchaudio` if used for audio IO/resampling
    - `numpy`
+   - `tensorflow` for canonical Keras export fixtures and compatible presets
+   - `torch` only for the optional PyTorch training/export backend
+   - `torchaudio` if used for PyTorch-side audio IO/resampling
    - `scipy`
    - `soundfile`
    - `pydantic`
@@ -151,19 +155,32 @@ repo. Pinning early matters because parity failures are often version-sensitive.
    - React
    - TypeScript
    - Vite or the selected frontend build tool
-6. Decide whether the default packaged trainer includes PyTorch, or whether the
-   app also supports an advanced external Python environment.
+6. Decide whether the default packaged trainer includes TensorFlow and/or
+   PyTorch, or whether the app also supports an advanced external Python
+   environment.
+
+Recommended local commands:
+
+```bash
+cd trainer
+uv lock
+uv sync
+uv sync --extra tensorflow
+uv sync --extra training
+```
 
 Acceptance criteria:
 
 - A new developer can install the toolchains and run skeleton tests.
 - RTNeural commit, Python version, and C++ compiler requirements are documented.
-- The decision about packaged PyTorch versus external Python is explicit.
+- The decision about packaged TensorFlow/PyTorch versus external Python is
+  explicit.
 
 ## 5. Phase 0: Export Spike
 
 Phase 0 is the most important technical milestone. Keep it small and ruthless:
-one synthetic dataset, one LSTM preset, one GRU preset, and a native parity test.
+one synthetic dataset, one Keras Dense/LSTM/GRU export path, the optional PyTorch
+presets kept behind parity tests, and a native parity test.
 
 ### Step 5.1 Create The Minimal Python Package
 
@@ -175,7 +192,9 @@ Initial modules:
 trainer/rttrainer/
   cli.py
   models/presets.py
+  export_rtneural/keras_exporter.py
   export_rtneural/json_exporter.py
+  export_rtneural/registry.py
   validation/parity.py
   training/synthetic.py
 ```
@@ -190,9 +209,9 @@ Implementation tasks:
    - simple nonlinear saturation target
 4. Train a tiny recurrent model quickly enough for CI.
 5. Save:
-   - `checkpoint.pt`
+   - backend checkpoint
    - `training-config.json`
-   - `pytorch-output.npy`
+   - `backend-output.npy`
    - `test-input.npy`
 
 Acceptance criteria:
@@ -201,7 +220,7 @@ Acceptance criteria:
 - The same seed produces stable outputs.
 - The model uses only layers planned for RTNeural export.
 
-### Step 5.2 Implement First Model Presets
+### Step 5.2 Implement First Model Presets And Support Matrix
 
 Implement presets as code-owned architecture factories. Do not serialize
 arbitrary model definitions.
@@ -220,32 +239,54 @@ Model rules:
 1. Use mono input and mono output first.
 2. Keep tensor shape conventions documented in the model file.
 3. Avoid BatchNorm in v1 unless export parity is already covered.
-4. Avoid Conv1D/TCN in v1 until recurrent export and validation are boring.
+4. Avoid Conv1D/TCN in the UI until recurrent export and validation are boring,
+   but keep Conv1D in the fixture/support scripts because RTNeural-compare
+   benchmarks it.
 5. Add each preset to a known-good compatibility matrix.
+6. Keep the RTNeural layer/activation support matrix in code and generate docs
+   from it instead of hand-maintaining scattered tables.
+
+Benchmark-driven v1 support:
+
+| Kind | v1 | v1-plus | Later | Defer |
+| --- | --- | --- | --- | --- |
+| Layers | Dense, GRU, LSTM | Conv1D | Conv2D, BatchNorm1D, BatchNorm2D, PReLU | MaxPooling |
+| Activations | tanh, ReLU, sigmoid |  | softmax, ELU, PReLU |  |
 
 Acceptance criteria:
 
 - Presets can be created by stable string IDs.
 - Each preset declares input channels, output channels, hidden size, layer count,
   estimated CPU tier, and export support.
+- `scripts/rtneural_support_matrix.py --format markdown` prints the current
+  layer and activation plan.
+- `scripts/generate_rtneural_keras_fixtures.py --list` reports the default
+  fixture scope without importing TensorFlow.
 
-### Step 5.3 Build The RTNeural JSON Exporter
+### Step 5.3 Build The RTNeural JSON Exporters
 
-Create `trainer/rttrainer/export_rtneural/json_exporter.py`.
+Create `trainer/rttrainer/export_rtneural/keras_exporter.py` first, then keep
+`trainer/rttrainer/export_rtneural/json_exporter.py` for the optional PyTorch
+path.
 
 Exporter responsibilities:
 
-1. Accept a known preset instance and a `state_dict`.
-2. Convert tensor layouts to RTNeural's expected format.
-3. Emit the RTNeural JSON layer list.
-4. Attach metadata required by the desktop app.
-5. Reject unsupported layers with clear errors.
+1. Accept a known Keras Sequential model and emit RTNeural's `in_shape` and
+   `layers` JSON structure.
+2. For optional PyTorch presets, accept a known preset instance and a
+   `state_dict`.
+3. Convert tensor layouts to RTNeural's expected format when the source backend
+   does not already match RTNeural's JSON conventions.
+4. Emit the RTNeural JSON layer list.
+5. Attach metadata required by the desktop app.
+6. Reject unsupported layers with clear errors.
 
 Important conversion checks:
 
-- Dense and recurrent weights may need transposition.
+- Keras Sequential export is the reference JSON shape.
+- Dense and recurrent PyTorch weights may need transposition.
 - GRU gate order must be verified against RTNeural expectations.
-- Conv1D kernel reversal matters later if Conv1D presets are added.
+- Conv1D kernel reversal matters for PyTorch Conv1D exports.
 - Recurrent activations must be explicit because RTNeural recurrent
   post-activation handling has known caveats.
 
@@ -291,7 +332,7 @@ Create `trainer/rttrainer/validation/parity.py`.
 
 The Python parity validator should:
 
-1. Load the original PyTorch checkpoint.
+1. Load the original backend checkpoint or Keras model.
 2. Load the exported JSON.
 3. Run the same test input through both paths.
 4. Compare output arrays sample by sample.
@@ -497,30 +538,21 @@ Acceptance criteria:
 
 Create `rttrainer/training/runner.py`.
 
-Device selection should prefer CUDA, then Apple MPS, then CPU. PyTorch exposes
-this through `torch.cuda.is_available()` and MPS checks through
-`torch.backends.mps.is_available()` / `torch.backends.mps.is_built()`.
+The default runner should train Keras models whose layer graph is known to export
+through `rttrainer.export_rtneural.keras_exporter`. Keep backend selection
+explicit in the run manifest: `keras` for the canonical path and `pytorch` only
+for presets that have matching parity fixtures.
 
-Device helper:
-
-```python
-import torch
-
-
-def choose_device(preferred: str | None = None) -> torch.device:
-    if preferred:
-        return torch.device(preferred)
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        return torch.device("mps")
-    return torch.device("cpu")
-```
+Device selection should be reported, but the first reliable requirement is
+reproducibility. Record TensorFlow-visible accelerators for Keras runs and
+PyTorch CUDA/MPS availability for optional PyTorch runs.
 
 Training loop requirements:
 
-1. Move model and tensors to the selected `torch.device`.
-2. Save `model.state_dict()` rather than pickling full model objects.
+1. Build the model from a stable preset ID rather than deserializing arbitrary
+   user graphs.
+2. Save Keras model weights/config for the canonical path, or
+   `model.state_dict()` for optional PyTorch runs.
 3. Save optimizer state and scheduler state for resume.
 4. Checkpoint every configured N epochs.
 5. Track best checkpoint by validation ESR or selected quality metric.
@@ -530,8 +562,9 @@ Training loop requirements:
 
 Validation/inference preview requirements:
 
-1. Call `model.eval()`.
-2. Use `torch.no_grad()` or `torch.inference_mode()`.
+1. Run the backend in inference mode.
+2. For PyTorch, call `model.eval()` and use `torch.no_grad()` or
+   `torch.inference_mode()`.
 3. Restore training mode only if the training loop continues afterward.
 4. Render target, prediction, and residual WAV files.
 5. Compute metrics on the same aligned test segment used for preview audio.
@@ -540,7 +573,7 @@ Acceptance criteria:
 
 - Training can resume from a checkpoint.
 - Cancelling leaves a valid interrupted state and latest checkpoint.
-- Validation previews do not allocate autograd graphs.
+- Validation previews do not allocate training graphs.
 - Run metadata is sufficient to reproduce the run.
 
 ### Step 6.5 Implement Losses And Metrics
@@ -929,13 +962,22 @@ Exit criteria:
 Tasks:
 
 1. Generate a small JUCE standalone or plugin project.
-2. Embed or load the RTNeural JSON dynamically.
-3. Add gain, bypass, and meters.
-4. Add a benchmark or smoke test.
+2. Use RTNeural-example as the implementation reference for the generated
+   project shape.
+3. Embed the RTNeural JSON with JUCE `BinaryData` for fixed exports, or load it
+   from disk for user-swappable models.
+4. Link RTNeural with CMake and choose the backend explicitly:
+   `RTNEURAL_STL`, `RTNEURAL_XSIMD`, or `RTNEURAL_EIGEN`.
+5. Parse dynamic JSON with `RTNeural::json_parser::parseJson<float>()`.
+6. Keep one model instance per audio channel unless the exported architecture is
+   explicitly multi-channel.
+7. Reset models in `prepareToPlay` and call `forward()` in the sample loop.
+8. Add gain, bypass, meters, and a benchmark or smoke test.
 
 Exit criteria:
 
 - A user can immediately audition the model in a simple native player.
+- The generated player can load this app's exported JSON without manual edits.
 
 ### Option 8.3 Compile-Time RTNeural Model Generation
 
@@ -945,6 +987,8 @@ Tasks:
 2. Emit C++ model type and weight arrays.
 3. Compare compile-time output to dynamic JSON output.
 4. Benchmark compile-time versus dynamic loading.
+5. Use RTNeural-example's compile-time path as a reference, but keep dynamic JSON
+   as the canonical v1 path.
 
 Exit criteria:
 
@@ -1031,8 +1075,8 @@ Acceptance criteria:
 
 ## 10. Packaging Strategy
 
-Packaging is one of the highest-risk areas because PyTorch is large and
-platform-specific.
+Packaging is one of the highest-risk areas because TensorFlow and PyTorch are
+large and platform-specific.
 
 Recommended v1 approach:
 
@@ -1090,17 +1134,18 @@ Release gate checklist:
 
 ## 12. Known-Good Preset Matrix
 
-Maintain this table in code and docs. Update it whenever RTNeural, PyTorch, or
-export logic changes.
+Maintain this table in code and docs. Update it whenever RTNeural, TensorFlow,
+PyTorch, or export logic changes.
 
-| Preset | PyTorch Train | JSON Export | Python Parity | Native Validate | Benchmark | Release |
-| --- | --- | --- | --- | --- | --- | --- |
-| `lstm_light` | Required | Required | Required | Required | Required | v1 |
-| `lstm_standard` | Required | Required | Required | Required | Required | v1 |
-| `gru_light` | Required | Required | Required | Required | Required | v1 if stable |
-| `dense_memoryless` | Required | Required | Required | Required | Required | v1 if useful |
-| `heavy_recurrent` | Required | Required | Required | Required | Required | Warned v1 or later |
-| `conv1d_tcn` | Later | Later | Later | Later | Later | Defer |
+| Preset | Keras Train/Build | PyTorch Train | JSON Export | Python Parity | Native Validate | Benchmark | Release |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `lstm_light` | Required | Optional | Required | Required | Required | Required | v1 |
+| `lstm_standard` | Required | Optional | Required | Required | Required | Required | v1 |
+| `gru_light` | Required | Optional | Required | Required | Required | Required | v1 if stable |
+| `dense_memoryless` | Required | Optional | Required | Required | Required | Required | v1 if useful |
+| `conv1d_fixture` | Required | Optional | Required | Required | Required | Required | v1-plus |
+| `heavy_recurrent` | Later | Later | Required before exposure | Required | Required | Required | Warned v1 or later |
+| `conv1d_tcn` | Later | Later | Later | Later | Later | Later | Defer |
 
 Do not expose a preset in the UI unless its row is green for the target release.
 
@@ -1130,7 +1175,7 @@ Schema rules:
 2. Store paths relative to the project root when possible.
 3. Store absolute paths only for imported sources outside the project.
 4. Include UTC timestamps.
-5. Include app, trainer, validator, PyTorch, and RTNeural versions.
+5. Include app, trainer, validator, TensorFlow, PyTorch, and RTNeural versions.
 6. Include hardware and device selection metadata for training runs.
 
 Acceptance criteria:
@@ -1162,7 +1207,9 @@ Use this order to avoid UI-first churn.
 17. Build Evaluate and Export screens.
 18. Package sidecars.
 19. Run packaged smoke tests.
-20. Add optional runtime integration only after v1 gates pass.
+20. Add optional runtime integration only after v1 gates pass, starting with an
+    RTNeural-example-style JUCE player if immediate plugin auditioning is the
+    highest-value path.
 
 ## 15. First End-To-End Demo Target
 
@@ -1216,7 +1263,7 @@ Success means:
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| PyTorch sidecar is too large | Large installers and slow updates | Support external Python env as advanced path; keep trainer sidecar versioned |
+| Python ML sidecar is too large | Large installers and slow updates | Use `uv` lockfiles, keep TensorFlow/PyTorch extras explicit, support external Python env as advanced path |
 | Export weight layouts are wrong | Bad audio or crashes | Golden parity tests for every preset and layer |
 | Latency alignment is wrong | Model learns delay instead of tone | Impulse alignment, cross-correlation fallback, manual nudge UI |
 | User capture data is poor | Bad trained models | Preflight warnings, capture checklist, clipping/silence detection |
@@ -1232,7 +1279,7 @@ V1 is done when all of the following are true:
 1. A user can create a project from paired WAV files.
 2. The app validates audio and shows actionable warnings.
 3. The app estimates and stores latency.
-4. The user can train at least one LSTM preset locally.
+4. The user can train at least one Keras LSTM preset locally.
 5. Training progress, logs, checkpoints, and metrics persist.
 6. The app renders target, prediction, and residual preview audio.
 7. The app exports RTNeural JSON.

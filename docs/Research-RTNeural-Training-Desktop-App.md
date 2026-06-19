@@ -13,8 +13,11 @@ from 2025-11-08.
 
 RTNeural should be treated as the real-time inference target, not the training
 engine. The desktop app should provide a guided local training workflow around
-PyTorch, then export RTNeural-compatible JSON and run a native RTNeural
-validation harness before the user can publish or use the model.
+curated TensorFlow/Keras-compatible architectures first, then export
+RTNeural-compatible JSON and run a native RTNeural validation harness before the
+user can publish or use the model. PyTorch can still be supported, but it should
+be treated as a secondary path that must prove parity against the Keras/RTNeural
+export contract.
 
 Recommended v1: a desktop app for black-box audio effect capture, starting with
 guitar/bass amps, pedals, and simple line-level effects. Users import or record
@@ -26,14 +29,15 @@ metadata for AIDA-X-like workflows.
 The best technical shape is:
 
 1. Tauri v2 desktop shell with a React/TypeScript UI.
-2. Python/PyTorch training sidecar managed by the app.
+2. Python training sidecar managed with `uv`, with TensorFlow/Keras as the
+   canonical RTNeural JSON export path and PyTorch as an optional backend.
 3. Native C++ RTNeural validator/benchmark sidecar built with CMake.
 4. SQLite project/job store plus filesystem-backed project folders.
 5. A small set of curated model architectures instead of arbitrary neural-net
    graph import.
 
 The hardest product problems are not the UI shell. They are audio data quality,
-latency alignment, export correctness, PyTorch environment packaging, and making
+latency alignment, export correctness, Python environment packaging, and making
 users understand CPU/runtime tradeoffs before they train a model that cannot run
 comfortably in real time.
 
@@ -46,6 +50,12 @@ flexibility, size, and convenience under hard real-time constraints.
 RTNeural's README says it can load weights from an already-trained network and
 run inference. Training is expected to happen in Python libraries such as
 TensorFlow or PyTorch, then weights are exported to JSON for RTNeural.
+
+The RTNeural repository's main Python exporter is Keras/TensorFlow-oriented:
+`python/model_utils.py` accepts sequential Keras models and emits the JSON shape
+used by RTNeural's dynamic parser. PyTorch helpers and examples exist, but they
+are a parallel compatibility path rather than the default exporter documented by
+the README examples.
 
 Supported layer families in the current repo:
 
@@ -64,7 +74,8 @@ Important caveats:
   issue asking about MaxPool support.
 - The JSON parser does not currently add post-activation layers for GRU/LSTM
   layers, which is tracked in open issue #124. Exporters should set recurrent
-  layer activations intentionally and validate parity against PyTorch.
+  layer activations intentionally and validate parity against the trained
+  backend and native RTNeural.
 - There is an open large-GRU segmentation fault issue around a 512-hidden-size,
   multi-layer GRU static model. v1 presets should stay conservative and benchmark
   every exported model.
@@ -80,6 +91,9 @@ Important caveats:
 Existing RTNeural-facing workflows are powerful but developer-shaped:
 
 - RTNeural provides examples and exporters, but not a productized training UI.
+- RTNeural-example shows the downstream plugin side: a JUCE CMake project embeds
+  an exported RTNeural JSON, parses it with RTNeural's dynamic JSON parser, keeps
+  one model per audio channel, and runs per-sample inference in the audio block.
 - AIDA-X is a real RTNeural-based amp model player with model loading, IR support,
   meters, and standalone/plugin builds. Its public workflow sends users to a Colab
   notebook for training and export.
@@ -102,15 +116,17 @@ Build a local desktop "RTNeural Trainer" with one primary workflow:
    silence.
 6. Auto-align input/output latency and let the user inspect/adjust it.
 7. Pick a model preset: light, standard, heavy.
-8. Train locally with PyTorch on `mps`, `cuda`, or CPU.
+8. Train locally with TensorFlow/Keras by default; allow PyTorch only for
+   curated presets whose export parity is covered.
 9. Monitor loss, ESR, validation audio, waveform overlay, and residual error.
 10. Export RTNeural JSON.
 11. Run RTNeural C++ validation and CPU benchmark.
 12. Save model package with metadata, plots, test audio, and benchmark results.
 
-The MVP should not try to support arbitrary PyTorch, ONNX, or TensorFlow models.
-That path creates an unbounded compatibility problem. Users should choose from
-app-curated architectures that we know can be exported and loaded by RTNeural.
+The MVP should not try to support arbitrary PyTorch, ONNX, or TensorFlow/Keras
+models. That path creates an unbounded compatibility problem. Users should choose
+from app-curated architectures that we know can be exported and loaded by
+RTNeural.
 
 ## Training Pipeline
 
@@ -161,16 +177,15 @@ streaming-state details.
 
 ### Training Runtime
 
-Use PyTorch for the training sidecar. Current PyTorch docs support runtime device
-selection across CUDA, MPS, and CPU. The app should select in this order:
+Use TensorFlow/Keras as the canonical training/export runtime for RTNeural JSON
+compatibility. Manage the sidecar environment with `uv` so the app can lock,
+sync, and reproduce Python dependencies without asking users to hand-edit virtual
+environments.
 
-1. CUDA when available.
-2. Apple MPS when available.
-3. CPU fallback.
-
-For Apple Silicon, PyTorch's MPS backend is checked via
-`torch.backends.mps.is_available()` / `torch.backends.mps.is_built()` and models
-move to `torch.device("mps")`.
+Keep PyTorch as an optional backend for known-good presets only. PyTorch remains
+useful for MPS/CUDA workflows and for compatibility with RTNeural's
+`torch_helpers.h`, but every PyTorch export must prove parity against the native
+RTNeural validator before it is exposed in the UI.
 
 The training process should run outside the UI process:
 
@@ -181,8 +196,9 @@ The training process should run outside the UI process:
 - Persist stdout/stderr logs.
 - Save exact package versions and hardware device in metadata.
 
-Use `model.eval()` and `torch.no_grad()` for validation/inference previews. This
-matters for memory use and for layers such as BatchNorm.
+For the optional PyTorch backend, use `model.eval()` and `torch.no_grad()` for
+validation/inference previews. This matters for memory use and for layers such as
+BatchNorm.
 
 ### Loss And Metrics
 
@@ -239,12 +255,14 @@ Export artifact:
 
 Exporter details:
 
-- For TensorFlow/Keras sequential models, RTNeural's `python/model_utils.py`
-  already demonstrates the expected `in_shape` and `layers` JSON structure.
-- For PyTorch, export from `state_dict()` and transform weight layouts to match
-  RTNeural. RTNeural's `torch_helpers.h` documents key differences such as
-  transposed dense/recurrent weights, Conv1D kernel reversal, and GRU reset/update
-  gate swapping.
+- Treat TensorFlow/Keras sequential export as the canonical JSON path.
+  RTNeural's `python/model_utils.py` demonstrates the expected `in_shape` and
+  `layers` JSON structure for Dense, GRU, LSTM, Conv1D, Conv2D, BatchNorm, PReLU,
+  and supported activations.
+- For PyTorch, export from `state_dict()` only for curated presets and transform
+  weight layouts to match RTNeural. RTNeural's `torch_helpers.h` documents key
+  differences such as transposed dense/recurrent weights, Conv1D kernel reversal,
+  and GRU reset/update gate swapping.
 - AIDA-X's `modelToRTNeural.py` is a useful reference for converting PyTorch
   SimpleRNN/LSTM/GRU style models into RTNeural JSON, but it should not be copied
   into a proprietary product without a license review. Reimplement the logic and
@@ -252,8 +270,8 @@ Exporter details:
 
 Every export should run two validators:
 
-1. Python parity validator: compare PyTorch prediction to exported JSON loaded by
-   a small Python-side simulator or C++ harness.
+1. Python parity validator: compare the trained backend prediction to exported
+   JSON loaded by a small Python-side simulator or C++ harness.
 2. RTNeural native validator: parse the JSON with RTNeural, run known input
    batches, compare output tolerance, and benchmark Eigen/xsimd/STL where
    practical.
@@ -298,7 +316,7 @@ Alternative stacks:
 
 - Electron: easiest Node ecosystem and Python process spawning, but much heavier.
 - Electrobun: attractive for macOS-first apps and already appears in this repo's
-  other research, but the Python/PyTorch packaging story is less established than
+  other research, but the Python ML packaging story is less established than
   Tauri sidecars.
 - Qt/PySide: simplest if everything is Python, but less appealing for a polished
   modern product UI and native code signing/updating.
@@ -378,14 +396,15 @@ Useful defaults:
 
 ### Phase 0: Export Spike
 
-Goal: prove PyTorch -> RTNeural JSON -> RTNeural C++ parity.
+Goal: prove Keras -> RTNeural JSON -> RTNeural C++ parity, then keep the PyTorch
+path behind the same parity gate.
 
 Tasks:
 
-- Train a tiny LSTM and GRU on synthetic data.
+- Train or build tiny Dense, LSTM, and GRU Keras models on synthetic data.
 - Export JSON.
 - Load with `RTNeural::json_parser::parseJson<float>()`.
-- Compare PyTorch and RTNeural output sample-by-sample.
+- Compare backend and RTNeural output sample-by-sample.
 - Benchmark dynamic JSON model with Eigen/xsimd/STL.
 
 Exit criteria:
@@ -434,17 +453,21 @@ Goal: make models immediately useful.
 Options:
 
 - Export `.aidax`-compatible metadata envelope.
-- Generate a tiny JUCE standalone/player project.
-- Generate C++ compile-time model type for known architecture.
+- Generate a tiny JUCE standalone/player project using RTNeural-example as the
+  lifecycle reference: CMake links RTNeural/JUCE, the JSON is embedded or loaded,
+  models are reset in prepare, and inference happens per channel/sample.
+- Generate C++ compile-time model type for known architecture after dynamic JSON
+  validation is stable. RTNeural-example includes both dynamic and compile-time
+  model paths, which makes it a useful comparison target.
 - Add cloud training as a paid acceleration path.
 
 ## Technical Risks
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| PyTorch packaging is large and platform-specific | App install/update complexity | Package trainer as a sidecar, document hardware support, allow advanced external Python env |
+| TensorFlow/PyTorch packaging is large and platform-specific | App install/update complexity | Manage dependencies with `uv`, package trainer as a sidecar, document hardware support, allow advanced external Python env |
 | RTNeural supports a limited layer set | Arbitrary model import fails | Curated presets only; export compatibility tests |
-| Exported weights are subtly wrong | Bad models or crashes | Golden parity tests against PyTorch for every layer/preset |
+| Exported weights are subtly wrong | Bad models or crashes | Golden parity tests against Keras/RTNeural for every layer/preset, with PyTorch parity before optional backend exposure |
 | Audio latency alignment is wrong | Model learns phase/latency errors | Impulse-based alignment, cross-correlation fallback, manual nudge UI |
 | User data clips or lacks coverage | Poor captures | Preflight analysis and capture checklist |
 | Heavy models do not run in real time | Bad downstream experience | Benchmark before export; label target CPU cost |
@@ -463,9 +486,10 @@ Do not begin with arbitrary model design, ONNX import, or live low-latency
 monitoring. Those are tempting, but they expand the problem before the core
 value is proven.
 
-The first internal milestone should be a command-line pipeline that trains and
-validates one LSTM preset. Once parity and export are boring, wrap it in the
-desktop UI.
+The first internal milestone should be a command-line pipeline that trains or
+builds one Keras LSTM preset and validates its RTNeural export. Once parity and
+export are boring, wrap it in the desktop UI and reintroduce PyTorch presets only
+where they pass the same gates.
 
 ## Source Links
 
@@ -473,7 +497,10 @@ desktop UI.
 - [RTNeural paper on arXiv](https://arxiv.org/abs/2106.03037)
 - [Real-Time Neural Network Inferencing for Audio Processing](https://jatinchowdhury18.medium.com/real-time-neural-network-inferencing-for-audio-processing-857313fd84e1)
 - [RTNeural `model_utils.py`](https://github.com/jatinchowdhury18/RTNeural/blob/main/python/model_utils.py)
+- [RTNeural Python examples](https://github.com/jatinchowdhury18/RTNeural/tree/main/python)
 - [RTNeural `torch_helpers.h`](https://github.com/jatinchowdhury18/RTNeural/blob/main/RTNeural/torch_helpers.h)
+- [RTNeural-compare benchmarks](https://github.com/jatinchowdhury18/RTNeural-compare)
+- [RTNeural-example plugin](https://github.com/jatinchowdhury18/RTNeural-example)
 - [RTNeural open issue #102](https://github.com/jatinchowdhury18/RTNeural/issues/102)
 - [RTNeural open issue #120](https://github.com/jatinchowdhury18/RTNeural/issues/120)
 - [RTNeural open issue #124](https://github.com/jatinchowdhury18/RTNeural/issues/124)
