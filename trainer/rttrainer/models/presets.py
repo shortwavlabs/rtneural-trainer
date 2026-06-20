@@ -11,9 +11,31 @@ class PresetConfig:
     hidden_size: int
     output_size: int
     num_layers: int
+    kernel_size: int = 3
+    conv_filters: int | None = None
+    dense_units: int | None = None
+    batchnorm: bool = False
+    prelu: bool = False
 
 
 PRESETS: dict[str, PresetConfig] = {
+    "dense_only": PresetConfig(
+        preset_id="dense_only",
+        architecture="dense",
+        input_size=1,
+        hidden_size=8,
+        output_size=1,
+        num_layers=2,
+        dense_units=8,
+    ),
+    "gru_light": PresetConfig(
+        preset_id="gru_light",
+        architecture="gru",
+        input_size=1,
+        hidden_size=10,
+        output_size=1,
+        num_layers=1,
+    ),
     "lstm_light": PresetConfig(
         preset_id="lstm_light",
         architecture="lstm",
@@ -30,6 +52,38 @@ PRESETS: dict[str, PresetConfig] = {
         output_size=1,
         num_layers=1,
     ),
+    "conv1d_light": PresetConfig(
+        preset_id="conv1d_light",
+        architecture="conv1d",
+        input_size=1,
+        hidden_size=8,
+        output_size=1,
+        num_layers=1,
+        kernel_size=3,
+        conv_filters=8,
+    ),
+    "conv1d_bn_prelu": PresetConfig(
+        preset_id="conv1d_bn_prelu",
+        architecture="conv1d",
+        input_size=1,
+        hidden_size=8,
+        output_size=1,
+        num_layers=1,
+        kernel_size=3,
+        conv_filters=8,
+        batchnorm=True,
+        prelu=True,
+    ),
+    "conv_gru_hybrid": PresetConfig(
+        preset_id="conv_gru_hybrid",
+        architecture="conv_gru",
+        input_size=1,
+        hidden_size=10,
+        output_size=1,
+        num_layers=2,
+        kernel_size=3,
+        conv_filters=6,
+    ),
 }
 
 
@@ -45,7 +99,10 @@ def build_model(config: PresetConfig):
     import torch
 
     if config.architecture != "lstm":
-        raise ValueError(f"Unsupported PyTorch preset architecture: {config.architecture}")
+        raise ValueError(
+            f"PyTorch training/export currently supports only LSTM presets; "
+            f"'{config.preset_id}' is a Keras-first {config.architecture} preset."
+        )
 
     class LstmAudioModel(torch.nn.Module):
         def __init__(self) -> None:
@@ -66,18 +123,82 @@ def build_model(config: PresetConfig):
 
 
 def build_keras_model(config: PresetConfig, keras):
-    if config.architecture != "lstm":
+    layers = keras.layers
+    model_layers = [keras.Input(shape=(None, config.input_size), name="audio_input")]
+
+    if config.architecture == "dense":
+        model_layers.extend(
+            [
+                layers.Dense(
+                    config.dense_units or config.hidden_size,
+                    activation="tanh",
+                    name="dense_hidden",
+                ),
+                layers.Dense(config.output_size, name="dense_out"),
+            ]
+        )
+    elif config.architecture == "gru":
+        model_layers.extend(
+            [
+                layers.GRU(
+                    config.hidden_size,
+                    return_sequences=True,
+                    activation="tanh",
+                    recurrent_activation="sigmoid",
+                    reset_after=True,
+                    name="gru",
+                ),
+                layers.Dense(config.output_size, name="dense_out"),
+            ]
+        )
+    elif config.architecture == "lstm":
+        model_layers.extend(
+            [
+                layers.LSTM(
+                    config.hidden_size,
+                    return_sequences=True,
+                    name="lstm",
+                ),
+                layers.Dense(config.output_size, name="dense_out"),
+            ]
+        )
+    elif config.architecture == "conv1d":
+        model_layers.append(
+            layers.Conv1D(
+                config.conv_filters or config.hidden_size,
+                kernel_size=config.kernel_size,
+                padding="causal",
+                activation=None if config.batchnorm or config.prelu else "tanh",
+                name="conv1d",
+            )
+        )
+        if config.batchnorm:
+            model_layers.append(layers.BatchNormalization(epsilon=0.01, name="batchnorm"))
+        if config.prelu:
+            model_layers.append(layers.PReLU(shared_axes=[1], name="prelu"))
+        model_layers.append(layers.Dense(config.output_size, name="dense_out"))
+    elif config.architecture == "conv_gru":
+        model_layers.extend(
+            [
+                layers.Conv1D(
+                    config.conv_filters or 6,
+                    kernel_size=config.kernel_size,
+                    padding="causal",
+                    activation="tanh",
+                    name="conv1d",
+                ),
+                layers.GRU(
+                    config.hidden_size,
+                    return_sequences=True,
+                    activation="tanh",
+                    recurrent_activation="sigmoid",
+                    reset_after=True,
+                    name="gru",
+                ),
+                layers.Dense(config.output_size, name="dense_out"),
+            ]
+        )
+    else:
         raise ValueError(f"Unsupported Keras preset architecture: {config.architecture}")
 
-    return keras.Sequential(
-        [
-            keras.Input(shape=(None, config.input_size), name="audio_input"),
-            keras.layers.LSTM(
-                config.hidden_size,
-                return_sequences=True,
-                name="lstm",
-            ),
-            keras.layers.Dense(config.output_size, name="dense"),
-        ],
-        name=config.preset_id,
-    )
+    return keras.Sequential(model_layers, name=config.preset_id)

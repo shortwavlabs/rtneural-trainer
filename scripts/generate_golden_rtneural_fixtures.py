@@ -114,6 +114,20 @@ def assign_deterministic_weights(model, seed: int) -> None:  # type: ignore[no-u
     import numpy as np
 
     for layer_index, layer in enumerate(model.layers):
+        class_name = layer.__class__.__name__
+        if class_name == "BatchNormalization":
+            channels = int(layer.gamma.shape[0])
+            gamma = np.linspace(0.82, 1.18, channels, dtype=np.float32)
+            beta = np.linspace(-0.025, 0.025, channels, dtype=np.float32)
+            mean = np.linspace(-0.04, 0.04, channels, dtype=np.float32)
+            variance = np.linspace(0.70, 1.30, channels, dtype=np.float32)
+            layer.set_weights([gamma, beta, mean, variance])
+            continue
+        if class_name == "PReLU":
+            alpha = layer.get_weights()[0]
+            layer.set_weights([np.full(alpha.shape, 0.18, dtype=np.float32)])
+            continue
+
         weights = layer.get_weights()
         next_weights = []
         for weight_index, weight in enumerate(weights):

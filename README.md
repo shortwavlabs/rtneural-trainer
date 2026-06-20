@@ -243,6 +243,18 @@ Keras runs save `checkpoints/best-model.keras` plus checkpoint metadata. To use
 the optional PyTorch path, set `"backend": "pytorch"` and install the
 `training` extra.
 
+Current Keras-first presets are:
+
+- `dense_only`: memoryless Dense baseline for very fast checks.
+- `gru_light`: compact GRU recurrent model.
+- `lstm_light`: low-CPU LSTM recurrent model.
+- `lstm_standard`: default LSTM recurrent model.
+- `conv1d_light`: causal Conv1D model.
+- `conv1d_bn_prelu`: causal Conv1D with safe BatchNorm/PReLU.
+- `conv_gru_hybrid`: causal Conv1D front-end feeding a compact GRU.
+
+The PyTorch compatibility backend is currently limited to the LSTM presets.
+
 ### 3. Evaluate
 
 Create `projects/demo/evaluate.json`:

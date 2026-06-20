@@ -890,7 +890,8 @@ Screen 3: Align
 
 Screen 4: Train
 
-- Preset picker: Light, Standard, Heavy, Dense
+- Preset picker: Dense, GRU, Light LSTM, Standard LSTM, Conv1D, Conv1D
+  BatchNorm/PReLU, Hybrid
 - Hardware indicator: CUDA, MPS, or CPU
 - Runtime warning for heavy presets
 - Progress chart
@@ -1175,13 +1176,13 @@ PyTorch, or export logic changes.
 
 | Preset | Keras Train/Build | PyTorch Train | JSON Export | Python Parity | Native Validate | Benchmark | Release |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `dense_only` | Required | Later | Required | Required | Required | Required | v1 |
+| `gru_light` | Required | Later | Required | Required | Required | Required | v1 |
 | `lstm_light` | Required | Optional | Required | Required | Required | Required | v1 |
 | `lstm_standard` | Required | Optional | Required | Required | Required | Required | v1 |
-| `gru_light` | Required | Optional | Required | Required | Required | Required | v1 if stable |
-| `dense_memoryless` | Required | Optional | Required | Required | Required | Required | v1 if useful |
-| `conv1d_fixture` | Required | Optional | Required | Required | Required | Required | v1-plus |
-| `activations_fixture` | Required | Optional | Required | Required | Required | Required | v1-plus |
-| `batchnorm_prelu_fixture` | Required | Optional | Required | Required | Required | Required | v1-plus |
+| `conv1d_light` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `conv1d_bn_prelu` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `conv_gru_hybrid` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `heavy_recurrent` | Later | Later | Required before exposure | Required | Required | Required | Warned v1 or later |
 | `conv1d_tcn` | Later | Later | Later | Later | Later | Later | Defer |
 

@@ -68,18 +68,61 @@ const targetLabels: Record<TargetKind, string> = {
 
 const presets = [
   {
+    id: "dense_only",
+    label: "Dense",
+    detail: "2x Dense, tanh",
+    cpu: "Tiny CPU",
+    backends: ["keras"],
+  },
+  {
+    id: "gru_light",
+    label: "GRU",
+    detail: "1x GRU, hidden 10",
+    cpu: "Low CPU",
+    backends: ["keras"],
+  },
+  {
     id: "lstm_light",
     label: "Light",
     detail: "1x LSTM, hidden 12",
     cpu: "Low CPU",
+    backends: ["keras", "pytorch"],
   },
   {
     id: "lstm_standard",
     label: "Standard",
     detail: "1x LSTM, hidden 16",
     cpu: "Default",
+    backends: ["keras", "pytorch"],
   },
-];
+  {
+    id: "conv1d_light",
+    label: "Conv1D",
+    detail: "Causal Conv1D, 8 filters",
+    cpu: "Fast",
+    backends: ["keras"],
+  },
+  {
+    id: "conv1d_bn_prelu",
+    label: "Conv + PReLU",
+    detail: "Conv1D, BatchNorm, PReLU",
+    cpu: "Moderate",
+    backends: ["keras"],
+  },
+  {
+    id: "conv_gru_hybrid",
+    label: "Hybrid",
+    detail: "Conv1D front-end + GRU",
+    cpu: "Moderate",
+    backends: ["keras"],
+  },
+] satisfies Array<{
+  id: string;
+  label: string;
+  detail: string;
+  cpu: string;
+  backends: RuntimeBackend[];
+}>;
 
 export default function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -302,6 +345,7 @@ export default function App() {
               {activeTab === "train" ? (
                 <TrainView
                   project={project}
+                  backend={runtimeSettings?.selected_backend ?? "keras"}
                   busy={busy === "train"}
                   onTrain={async (preset) => {
                     setProgressEvents([]);
@@ -958,18 +1002,22 @@ function AlignView({ project }: { project: ProjectDetail }) {
 
 function TrainView({
   project,
+  backend,
   busy,
   onTrain,
   onCancel,
   onResume,
 }: {
   project: ProjectDetail;
+  backend: RuntimeBackend;
   busy: boolean;
   onTrain: (preset: string) => Promise<void>;
   onCancel: (runId: string) => Promise<void>;
   onResume: (runId: string) => Promise<void>;
 }) {
   const [preset, setPreset] = useState("lstm_standard");
+  const selectedPreset = presets.find((item) => item.id === preset) ?? presets[0];
+  const selectedPresetSupported = selectedPreset.backends.includes(backend);
   const canTrain = project.audio?.status === "ready";
   const activeRun = [...project.runs]
     .reverse()
@@ -977,6 +1025,11 @@ function TrainView({
   const resumableRun = [...project.runs]
     .reverse()
     .find((run) => run.status === "failed" || run.status === "interrupted");
+
+  useEffect(() => {
+    if (selectedPresetSupported) return;
+    setPreset(presets.find((item) => item.backends.includes(backend))?.id ?? "lstm_standard");
+  }, [backend, selectedPresetSupported]);
 
   return (
     <div className="screen-grid">
@@ -987,25 +1040,30 @@ function TrainView({
           detail="Curated architectures keep RTNeural export predictable."
         />
         <div className="preset-list">
-          {presets.map((item) => (
-            <button
-              className={preset === item.id ? "preset active" : "preset"}
-              key={item.id}
-              type="button"
-              onClick={() => setPreset(item.id)}
-            >
-              <span>
-                <strong>{item.label}</strong>
-                <small>{item.detail}</small>
-              </span>
-              <em>{item.cpu}</em>
-            </button>
-          ))}
+          {presets.map((item) => {
+            const supported = item.backends.includes(backend);
+            return (
+              <button
+                className={preset === item.id ? "preset active" : "preset"}
+                disabled={!supported}
+                key={item.id}
+                title={supported ? item.detail : "Select TensorFlow/Keras to train this preset."}
+                type="button"
+                onClick={() => setPreset(item.id)}
+              >
+                <span>
+                  <strong>{item.label}</strong>
+                  <small>{item.detail}</small>
+                </span>
+                <em>{supported ? item.cpu : "Keras only"}</em>
+              </button>
+            );
+          })}
         </div>
         <button
           className="primary-button wide"
           type="button"
-          disabled={!canTrain || busy || Boolean(activeRun)}
+          disabled={!canTrain || !selectedPresetSupported || busy || Boolean(activeRun)}
           onClick={() => void onTrain(preset)}
         >
           {busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}

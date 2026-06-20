@@ -5,8 +5,8 @@ What’s left is mostly productization:
 1. **Release automation**
    GitHub Actions now runs Python tests, golden fixture checks, native validator build/smoke, frontend build, Rust tests, Tauri workflow smoke, and packaged-app smoke. Remaining release work is cross-platform bundle smoke, signing/notarization where needed, and artifact publishing.
 
-2. **Expand actual exported presets**
-   The support matrix covers Dense, GRU, LSTM, Conv1D, activations, BatchNorm/PReLU, but the real app presets are still only `lstm_light` and `lstm_standard` in [presets.py](/Users/shortwavlabs/Workspace/shortwavlabs/rtneural-trainer/trainer/rttrainer/models/presets.py:14). Next step is product-ready Dense-only, GRU, Conv1D, and maybe hybrid presets exposed in the UI, each with golden JSON and native parity.
+2. **Preset tuning**
+   The app now exposes Dense-only, GRU, LSTM, Conv1D, Conv1D BatchNorm/PReLU, and Conv+GRU hybrid presets, each covered by golden JSON plus Python/native RTNeural parity. Remaining work is real-world capture tuning, default recommendation logic, and PyTorch parity only where it is worth supporting.
 
 3. **Production packaging**
    The debug packaged-app smoke passes, but real release packaging still needs cross-platform release sidecars, PyInstaller validation, Tauri bundle smoke, signing/notarization where needed, and release artifacts.
