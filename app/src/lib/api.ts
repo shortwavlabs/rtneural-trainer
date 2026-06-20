@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppStatus,
   CreateProjectRequest,
+  ExportFolderRequest,
   ExportRunRequest,
   ProjectDetail,
   ProjectSummary,
@@ -46,6 +47,8 @@ export const api = {
     call<ProjectDetail>("resume_training_run", { payload }),
   exportRun: (payload: ExportRunRequest) =>
     call<ProjectDetail>("export_run", { payload }),
+  openExportFolder: (payload: ExportFolderRequest) =>
+    call<void>("open_export_folder", { payload }),
   updateNotes: (payload: UpdateNotesRequest) =>
     call<ProjectDetail>("update_notes", { payload }),
 };

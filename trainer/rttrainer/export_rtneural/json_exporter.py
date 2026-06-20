@@ -69,23 +69,58 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
     benchmark_path = export_dir / "benchmark-report.json"
     write_json(benchmark_path, benchmark)
 
+    created_at = now()
     package = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "package_format": "rtneural-trainer-export",
         "name": str(manifest.get("name", "RTNeural model")),
+        "status": "exported",
         "preset": preset.preset_id,
         "backend": checkpoint.get("backend", "pytorch"),
         "sample_rate": sample_rate,
         "latency_samples": latency_samples,
-        "model_path": str(model_path),
-        "validation_path": str(validation_path),
-        "benchmark_path": str(benchmark_path),
+        "model": {
+            "format": "rtneural-json",
+            "path": model_path.name,
+            "sample_rate": sample_rate,
+            "latency_samples": latency_samples,
+            "backend": checkpoint.get("backend", "pytorch"),
+            "metadata": model_json.get("metadata", {}),
+        },
+        "artifacts": [
+            artifact_metadata(export_dir, "model", model_path, "application/json"),
+            artifact_metadata(export_dir, "validation_report", validation_path, "application/json"),
+            artifact_metadata(export_dir, "benchmark_report", benchmark_path, "application/json"),
+        ],
+        "model_path": model_path.name,
+        "validation_path": validation_path.name,
+        "benchmark_path": benchmark_path.name,
+        "package_path": "package.json",
         "quality": checkpoint.get("metrics", {}),
+        "validation": validation,
+        "benchmark": benchmark,
+        "training": {
+            "preset": preset.preset_id,
+            "backend": checkpoint.get("backend", "pytorch"),
+            "checkpoint_epoch": checkpoint.get("epoch"),
+            "metrics": checkpoint.get("metrics", {}),
+        },
+        "generated_by": {
+            "app": "rttrainer",
+            "pipeline": "rttrainer export",
+        },
         "compatibility": {
             "rtneural_commit": RTNEURAL_COMMIT,
+            "rtneural_json": True,
             "dynamic_json": True,
             "schema": "rttrainer-rtneural-json-v0",
+            "aidax": {
+                "status": "deferred",
+                "reason": "Pending format and license review before emitting an AIDA-X envelope.",
+            },
         },
-        "created_at": now(),
+        "created_at": created_at,
+        "updated_at": created_at,
     }
     package_path = export_dir / "package.json"
     write_json(package_path, package)
@@ -96,6 +131,17 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         "benchmark_path": str(benchmark_path),
         "package_path": str(package_path),
         "validation": validation,
+    }
+
+
+def artifact_metadata(export_dir: Path, role: str, path: Path, media_type: str) -> dict[str, Any]:
+    exists = path.exists()
+    return {
+        "role": role,
+        "path": path.relative_to(export_dir).as_posix() if path.is_relative_to(export_dir) else str(path),
+        "media_type": media_type,
+        "exists": exists,
+        "size_bytes": path.stat().st_size if exists else None,
     }
 
 

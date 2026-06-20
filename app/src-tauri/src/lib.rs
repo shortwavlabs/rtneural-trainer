@@ -149,6 +149,14 @@ struct ExportPackage {
     package_path: String,
     validation_path: String,
     benchmark_path: String,
+    #[serde(default)]
+    export_dir: String,
+    #[serde(default)]
+    package_metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    validation_report: Option<serde_json::Value>,
+    #[serde(default)]
+    benchmark_report: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -201,6 +209,12 @@ struct RunPreviewRequest {
 struct ExportRunRequest {
     project_id: String,
     run_id: String,
+}
+
+#[derive(Deserialize)]
+struct ExportFolderRequest {
+    project_id: String,
+    export_id: String,
 }
 
 #[derive(Deserialize)]
@@ -282,6 +296,20 @@ struct WavPreviewSummary {
     duration_seconds: f64,
     peak: f64,
     peaks: Vec<f64>,
+}
+
+struct FinalExportPackageInput<'a> {
+    project_name: &'a str,
+    project_id: &'a str,
+    export_id: &'a str,
+    run: &'a TrainingRun,
+    sample_rate: u32,
+    latency_samples: i32,
+    export_dir: &'a Path,
+    model_path: &'a Path,
+    package_path: &'a Path,
+    validation_path: &'a Path,
+    benchmark_path: &'a Path,
 }
 
 #[derive(Deserialize)]
@@ -760,6 +788,10 @@ fn export_run(
         package_path: relative_path_string(&project_dir, &package_path),
         validation_path: relative_path_string(&project_dir, &validation_path),
         benchmark_path: relative_path_string(&project_dir, &benchmark_path),
+        export_dir: relative_path_string(&project_dir, &export_dir),
+        package_metadata: None,
+        validation_report: None,
+        benchmark_report: None,
     };
     {
         let db = state.db.lock().map_err(lock_error)?;
@@ -882,10 +914,52 @@ fn export_run(
     }
     mark_job_completed(&state, &benchmark_job_id)?;
 
+    write_final_export_package_metadata(FinalExportPackageInput {
+        project_name: &project_name,
+        project_id: &project_id,
+        export_id: &export_id,
+        run: &run,
+        sample_rate,
+        latency_samples,
+        export_dir: &export_dir,
+        model_path: &model_path,
+        package_path: &package_path,
+        validation_path: &validation_path,
+        benchmark_path: &benchmark_path,
+    })?;
+
     let db = state.db.lock().map_err(lock_error)?;
     update_export_status(&db, &export_id, &ExportStatus::Ready, None)?;
     update_project_status(&db, &project_id, &ProjectStatus::Exported, &now())?;
     load_project_detail(&db, &project_id)
+}
+
+#[tauri::command]
+fn open_export_folder(
+    state: tauri::State<AppState>,
+    payload: ExportFolderRequest,
+) -> Result<(), String> {
+    let (project_dir, export_dir) = {
+        let db = state.db.lock().map_err(lock_error)?;
+        let project = load_project_detail(&db, &payload.project_id)?;
+        let export_dir = db
+            .query_row(
+                "SELECT export_dir FROM exports WHERE id = ?1 AND project_id = ?2",
+                params![payload.export_id, payload.project_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(to_error)?
+            .ok_or_else(|| "Export package not found.".to_string())?;
+        let project_dir = PathBuf::from(project.project_dir);
+        let export_dir = artifact_path(&project_dir, &export_dir);
+        (project_dir, export_dir)
+    };
+    ensure_artifact_inside(&project_dir, &export_dir)?;
+    if !export_dir.is_dir() {
+        return Err("Export folder is missing.".to_string());
+    }
+    open_folder(&export_dir)
 }
 
 #[tauri::command]
@@ -937,6 +1011,7 @@ pub fn run() {
             cancel_training_run,
             resume_training_run,
             export_run,
+            open_export_folder,
             update_notes
         ])
         .run(tauri::generate_context!())
@@ -946,6 +1021,12 @@ pub fn run() {
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
     let raw = fs::read_to_string(path).map_err(to_error)?;
     serde_json::from_str(&raw).map_err(to_error)
+}
+
+fn read_optional_json_value(path: &Path) -> Option<serde_json::Value> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
 fn configure_database(db: &mut Connection) -> Result<(), String> {
@@ -1317,7 +1398,7 @@ fn load_exports(
 ) -> Result<Vec<ExportPackage>, String> {
     let mut stmt = db
         .prepare(
-            "SELECT id, run_id, status, created_at, model_path, package_path, validation_path, benchmark_path
+            "SELECT id, run_id, status, created_at, model_path, package_path, validation_path, benchmark_path, export_dir
              FROM exports
              WHERE project_id = ?1
              ORDER BY created_at ASC",
@@ -1334,6 +1415,7 @@ fn load_exports(
                 row.get::<_, String>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, String>(7)?,
+                row.get::<_, String>(8)?,
             ))
         })
         .map_err(to_error)?;
@@ -1349,24 +1431,26 @@ fn load_exports(
             package_path,
             validation_path,
             benchmark_path,
+            export_dir,
         ) = row.map_err(to_error)?;
+        let model_path = artifact_path(project_dir, &model_path);
+        let package_path = artifact_path(project_dir, &package_path);
+        let validation_path = artifact_path(project_dir, &validation_path);
+        let benchmark_path = artifact_path(project_dir, &benchmark_path);
+        let export_dir = artifact_path(project_dir, &export_dir);
         exports.push(ExportPackage {
             id,
             run_id,
             status: enum_from_string(&status)?,
             created_at,
-            model_path: artifact_path(project_dir, &model_path)
-                .display()
-                .to_string(),
-            package_path: artifact_path(project_dir, &package_path)
-                .display()
-                .to_string(),
-            validation_path: artifact_path(project_dir, &validation_path)
-                .display()
-                .to_string(),
-            benchmark_path: artifact_path(project_dir, &benchmark_path)
-                .display()
-                .to_string(),
+            model_path: model_path.display().to_string(),
+            package_path: package_path.display().to_string(),
+            validation_path: validation_path.display().to_string(),
+            benchmark_path: benchmark_path.display().to_string(),
+            export_dir: export_dir.display().to_string(),
+            package_metadata: read_optional_json_value(&package_path),
+            validation_report: read_optional_json_value(&validation_path),
+            benchmark_report: read_optional_json_value(&benchmark_path),
         });
     }
     Ok(exports)
@@ -1611,6 +1695,122 @@ fn best_checkpoint_path(run_dir: &Path) -> Option<PathBuf> {
         return Some(torch);
     }
     None
+}
+
+fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Result<(), String> {
+    let existing_package =
+        read_optional_json_value(input.package_path).unwrap_or_else(|| serde_json::json!({}));
+    let validation_report = read_optional_json_value(input.validation_path);
+    let benchmark_report = read_optional_json_value(input.benchmark_path);
+    let model_json = read_optional_json_value(input.model_path);
+    let model_metadata = model_json
+        .as_ref()
+        .and_then(|value| value.get("metadata"))
+        .cloned();
+    let backend = existing_package
+        .get("backend")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            model_metadata
+                .as_ref()
+                .and_then(|value| value.get("backend"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or("unknown");
+    let rtneural_commit = existing_package
+        .get("compatibility")
+        .and_then(|value| value.get("rtneural_commit"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            model_metadata
+                .as_ref()
+                .and_then(|value| value.get("rtneural_commit"))
+                .and_then(serde_json::Value::as_str)
+        });
+    let created_at = existing_package
+        .get("created_at")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(now);
+    let updated_at = now();
+    let package = serde_json::json!({
+        "schema_version": 2,
+        "package_format": "rtneural-trainer-export",
+        "id": input.export_id,
+        "name": input.project_name,
+        "status": "ready",
+        "preset": input.run.preset,
+        "backend": backend,
+        "sample_rate": input.sample_rate,
+        "latency_samples": input.latency_samples,
+        "project": {
+            "id": input.project_id,
+            "name": input.project_name
+        },
+        "run": {
+            "id": input.run.id,
+            "preset": input.run.preset,
+            "device": input.run.device,
+            "epochs": input.run.epochs,
+            "created_at": input.run.created_at,
+            "updated_at": input.run.updated_at,
+            "metrics": input.run.metrics
+        },
+        "model": {
+            "format": "rtneural-json",
+            "path": relative_path_string(input.export_dir, input.model_path),
+            "sample_rate": input.sample_rate,
+            "latency_samples": input.latency_samples,
+            "backend": backend,
+            "metadata": model_metadata
+        },
+        "artifacts": [
+            export_artifact_metadata(input.export_dir, "model", input.model_path, "application/json"),
+            export_artifact_metadata(input.export_dir, "validation_report", input.validation_path, "application/json"),
+            export_artifact_metadata(input.export_dir, "benchmark_report", input.benchmark_path, "application/json")
+        ],
+        "model_path": relative_path_string(input.export_dir, input.model_path),
+        "validation_path": relative_path_string(input.export_dir, input.validation_path),
+        "benchmark_path": relative_path_string(input.export_dir, input.benchmark_path),
+        "package_path": relative_path_string(input.export_dir, input.package_path),
+        "quality": input.run.metrics,
+        "validation": validation_report,
+        "benchmark": benchmark_report,
+        "generated_by": {
+            "app": "RTNeural Trainer",
+            "version": env!("CARGO_PKG_VERSION"),
+            "pipeline": "rttrainer export + native rtneural-validator"
+        },
+        "compatibility": {
+            "rtneural_commit": rtneural_commit,
+            "rtneural_json": true,
+            "dynamic_json": true,
+            "schema": "rttrainer-rtneural-json-v0",
+            "aidax": {
+                "status": "deferred",
+                "reason": "Pending format and license review before emitting an AIDA-X envelope."
+            }
+        },
+        "created_at": created_at,
+        "updated_at": updated_at
+    });
+    write_json(input.package_path, &package)
+}
+
+fn export_artifact_metadata(
+    export_dir: &Path,
+    role: &str,
+    path: &Path,
+    media_type: &str,
+) -> serde_json::Value {
+    let metadata = fs::metadata(path).ok();
+    serde_json::json!({
+        "role": role,
+        "path": relative_path_string(export_dir, path),
+        "media_type": media_type,
+        "exists": metadata.is_some(),
+        "size_bytes": metadata.map(|item| item.len())
+    })
 }
 
 fn insert_export_package(
@@ -1965,6 +2165,36 @@ fn read_wav_preview_summary(path: &Path, bins: usize) -> Result<WavPreviewSummar
         peak,
         peaks,
     })
+}
+
+fn open_folder(path: &Path) -> Result<(), String> {
+    let status = open_folder_command(path).status().map_err(to_error)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Failed to open export folder: {status}"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_folder_command(path: &Path) -> Command {
+    let mut command = Command::new("open");
+    command.arg(path);
+    command
+}
+
+#[cfg(target_os = "windows")]
+fn open_folder_command(path: &Path) -> Command {
+    let mut command = Command::new("explorer");
+    command.arg(path);
+    command
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_folder_command(path: &Path) -> Command {
+    let mut command = Command::new("xdg-open");
+    command.arg(path);
+    command
 }
 
 fn summarize_project(project: &ProjectDetail) -> ProjectSummary {
@@ -2503,6 +2733,77 @@ mod tests {
         assert_eq!(summary.peaks.len(), 4);
         assert!((summary.duration_seconds - (4.0 / 48_000.0)).abs() < f64::EPSILON);
         assert_eq!(summary.peak, 1.0);
+    }
+
+    #[test]
+    fn final_export_package_metadata_includes_native_reports() {
+        let root =
+            std::env::temp_dir().join(format!("rttrainer-export-test-{}", Uuid::new_v4().simple()));
+        let export_dir = root.join("exports/export_test");
+        fs::create_dir_all(&export_dir).expect("create export dir");
+        let model_path = export_dir.join("model.rtneural.json");
+        let package_path = export_dir.join("package.json");
+        let validation_path = export_dir.join("validation-report.json");
+        let benchmark_path = export_dir.join("benchmark-report.json");
+        write_json(
+            &model_path,
+            &serde_json::json!({
+                "metadata": {
+                    "backend": "keras",
+                    "schema": "rttrainer-rtneural-json-v0"
+                }
+            }),
+        )
+        .expect("write model json");
+        write_json(
+            &validation_path,
+            &serde_json::json!({
+                "status": "pass",
+                "max_abs_error": 0.00001
+            }),
+        )
+        .expect("write validation report");
+        write_json(
+            &benchmark_path,
+            &serde_json::json!({
+                "status": "pass",
+                "realtime_factor": 42.0
+            }),
+        )
+        .expect("write benchmark report");
+        let run = TrainingRun {
+            id: "run_test".to_string(),
+            preset: "lstm_light".to_string(),
+            status: RunStatus::Completed,
+            device: "tensorflow-cpu".to_string(),
+            epochs: 2,
+            created_at: now(),
+            updated_at: now(),
+            metrics: None,
+            log_path: "runs/run_test/events.jsonl".to_string(),
+        };
+
+        write_final_export_package_metadata(FinalExportPackageInput {
+            project_name: "Package Test",
+            project_id: "project_test",
+            export_id: "export_test",
+            run: &run,
+            sample_rate: 48_000,
+            latency_samples: 12,
+            export_dir: &export_dir,
+            model_path: &model_path,
+            package_path: &package_path,
+            validation_path: &validation_path,
+            benchmark_path: &benchmark_path,
+        })
+        .expect("write final package metadata");
+
+        let package: serde_json::Value = read_json(&package_path).expect("read package");
+        assert_eq!(package["schema_version"], 2);
+        assert_eq!(package["backend"], "keras");
+        assert_eq!(package["validation"]["status"], "pass");
+        assert_eq!(package["benchmark"]["realtime_factor"], 42.0);
+        assert_eq!(package["compatibility"]["aidax"]["status"], "deferred");
     }
 
     #[test]

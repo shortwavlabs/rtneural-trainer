@@ -739,20 +739,87 @@ dd,
 }
 
 .export-item {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.export-main {
+  display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.export-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.export-actions .secondary-button {
+  min-height: 32px;
+  padding: 0 10px;
 }
 
 .export-item strong,
-.export-item small {
+.export-item small,
+.artifact-grid span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.export-item small {
+.export-item small,
+.artifact-grid {
   margin-top: 5px;
   color: #9da9a1;
+}
+
+.report-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-pill {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  background: #171a1b;
+  border: 1px solid #303735;
+  border-radius: 8px;
+}
+
+.report-pill span {
+  color: #9da9a1;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.report-pill strong {
+  color: #f5e0b8;
+}
+
+.report-pill.pass strong {
+  color: #8ee690;
+}
+
+.report-pill.fail strong {
+  color: #ffaaa0;
+}
+
+.report-pill small {
+  margin-top: 0;
+}
+
+.artifact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  font-size: 0.76rem;
 }
 
 .artifact-path {
@@ -952,7 +1019,10 @@ dd,
 
   .summary-strip,
   .quality-grid,
-  .report-grid {
+  .report-grid,
+  .report-strip,
+  .artifact-grid,
+  .export-main {
     grid-template-columns: 1fr;
   }
 

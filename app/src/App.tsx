@@ -7,6 +7,7 @@ import {
   Crosshair,
   Download,
   FileAudio,
+  FolderOpen,
   FolderPlus,
   Gauge,
   LoaderCircle,
@@ -303,6 +304,19 @@ export default function App() {
                         run_id: runId,
                       });
                       await commitProject(nextProject, "export");
+                    } catch (caught) {
+                      setError(toMessage(caught));
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                  onOpenExport={async (exportId) => {
+                    setBusy("open-export");
+                    try {
+                      await api.openExportFolder({
+                        project_id: project.id,
+                        export_id: exportId,
+                      });
                     } catch (caught) {
                       setError(toMessage(caught));
                     } finally {
@@ -808,10 +822,12 @@ function ExportView({
   project,
   busy,
   onExport,
+  onOpenExport,
 }: {
   project: ProjectDetail;
   busy: boolean;
   onExport: (runId: string) => Promise<void>;
+  onOpenExport: (exportId: string) => Promise<void>;
 }) {
   const completedRuns = project.runs.filter((run) => run.status === "completed");
   const selectedRun = completedRuns[completedRuns.length - 1] ?? null;
@@ -841,7 +857,7 @@ function ExportView({
           title="Packages"
           detail="Each package contains model JSON, metadata, reports, and previews."
         />
-        <ExportList exports={project.exports} />
+        <ExportList exports={project.exports} onOpenExport={onOpenExport} />
       </div>
     </div>
   );
@@ -1117,7 +1133,13 @@ function GateList({
   );
 }
 
-function ExportList({ exports }: { exports: ExportPackage[] }) {
+function ExportList({
+  exports,
+  onOpenExport,
+}: {
+  exports: ExportPackage[];
+  onOpenExport: (exportId: string) => Promise<void>;
+}) {
   if (exports.length === 0) {
     return <p className="muted">No export package yet.</p>;
   }
@@ -1126,13 +1148,60 @@ function ExportList({ exports }: { exports: ExportPackage[] }) {
     <div className="export-list">
       {exports.map((item) => (
         <div className="export-item" key={item.id}>
-          <div>
-            <strong>{item.id}</strong>
-            <small>{item.model_path}</small>
+          <div className="export-main">
+            <div>
+              <strong>{item.id}</strong>
+              <small>{exportPackageSummary(item)}</small>
+            </div>
+            <div className="export-actions">
+              <span className="badge">{item.status}</span>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void onOpenExport(item.id)}
+              >
+                <FolderOpen size={16} />
+                Open
+              </button>
+            </div>
           </div>
-          <span className="badge">{item.status}</span>
+          <div className="report-strip">
+            <ReportPill
+              label="Validation"
+              status={getString(item.validation_report, "status")}
+              detail={validationSummary(item.validation_report)}
+            />
+            <ReportPill
+              label="Benchmark"
+              status={getString(item.benchmark_report, "status")}
+              detail={benchmarkSummary(item.benchmark_report)}
+            />
+          </div>
+          <div className="artifact-grid">
+            <span>{compactPath(item.model_path)}</span>
+            <span>{compactPath(item.package_path)}</span>
+          </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function ReportPill({
+  label,
+  status,
+  detail,
+}: {
+  label: string;
+  status: string | null;
+  detail: string;
+}) {
+  const normalized = status ?? "pending";
+  return (
+    <div className={`report-pill ${normalized}`}>
+      <span>{label}</span>
+      <strong>{normalized}</strong>
+      <small>{detail}</small>
     </div>
   );
 }
@@ -1333,6 +1402,25 @@ function getArray(value: Record<string, unknown> | null, key: string) {
   return Array.isArray(item) ? item : [];
 }
 
+function getNestedString(value: Record<string, unknown> | null, keys: string[]) {
+  const item = getNestedValue(value, keys);
+  return typeof item === "string" ? item : null;
+}
+
+function getNestedNumber(value: Record<string, unknown> | null, keys: string[]) {
+  const item = getNestedValue(value, keys);
+  return typeof item === "number" ? item : null;
+}
+
+function getNestedValue(value: Record<string, unknown> | null, keys: string[]) {
+  let current: unknown = value;
+  for (const key of keys) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return null;
+    current = (current as Record<string, unknown>)[key];
+  }
+  return current;
+}
+
 function operationLabel(operation: string) {
   return operation
     .replace(/_/g, " ")
@@ -1352,6 +1440,58 @@ function previewArtifactDetail(artifact: RunPreviewArtifact) {
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+function exportPackageSummary(item: ExportPackage) {
+  const metadata = item.package_metadata;
+  const backend =
+    getNestedString(metadata, ["model", "backend"]) ??
+    getString(metadata, "backend") ??
+    "unknown";
+  const sampleRate =
+    getNestedNumber(metadata, ["model", "sample_rate"]) ?? getNumber(metadata, "sample_rate");
+  const latency =
+    getNestedNumber(metadata, ["model", "latency_samples"]) ??
+    getNumber(metadata, "latency_samples");
+  return [
+    backend,
+    sampleRate !== null ? `${sampleRate / 1000} kHz` : null,
+    latency !== null ? `${latency} samples` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function validationSummary(report: Record<string, unknown> | null) {
+  if (!report) return "waiting for report";
+  const maxAbs = getNumber(report, "max_abs_error");
+  const rmse = getNumber(report, "rmse");
+  const tolerance = getNumber(report, "tolerance");
+  return [
+    maxAbs !== null ? `max ${formatMetric(maxAbs)}` : null,
+    rmse !== null ? `rmse ${formatMetric(rmse)}` : null,
+    tolerance !== null ? `tol ${formatMetric(tolerance)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function benchmarkSummary(report: Record<string, unknown> | null) {
+  if (!report) return "waiting for report";
+  const realtimeFactor = getNumber(report, "realtime_factor");
+  const elapsedMs = getNumber(report, "elapsed_ms");
+  const frames = getNumber(report, "frames_processed");
+  return [
+    realtimeFactor !== null ? `${realtimeFactor.toFixed(0)}x realtime` : null,
+    elapsedMs !== null ? `${elapsedMs.toFixed(1)} ms` : null,
+    frames !== null ? `${frames.toLocaleString()} frames` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function compactPath(path: string) {
+  return path.split(/[\\/]/).slice(-2).join("/");
 }
 
 function formatSeconds(value: number) {

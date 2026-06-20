@@ -80,6 +80,10 @@ export interface ExportPackage {
   package_path: string;
   validation_path: string;
   benchmark_path: string;
+  export_dir: string;
+  package_metadata: Record<string, unknown> | null;
+  validation_report: Record<string, unknown> | null;
+  benchmark_report: Record<string, unknown> | null;
 }
 
 export interface ProjectDetail {
@@ -115,6 +119,11 @@ export interface StartTrainingRequest {
 export interface ExportRunRequest {
   project_id: string;
   run_id: string;
+}
+
+export interface ExportFolderRequest {
+  project_id: string;
+  export_id: string;
 }
 
 export interface RunControlRequest {
