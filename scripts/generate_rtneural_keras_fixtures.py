@@ -29,7 +29,7 @@ def main() -> int:
     ]
     selected_activations = [
         key for key, spec in ACTIVATION_SPECS.items()
-        if spec.status == "supported" and (args.include_later or spec.priority == "v1")
+        if spec.status == "supported" and (args.include_later or spec.priority in {"v1", "v1-plus"})
     ]
 
     if args.list:
@@ -67,7 +67,12 @@ def build_layer_model(keras, layer: str, size: int):  # type: ignore[no-untyped-
         return keras.Sequential(
             [
                 keras.layers.Input(shape=(None, 1)),
-                keras.layers.Conv1D(size, kernel_size=max(1, size - 1), activation="linear"),
+                keras.layers.Conv1D(
+                    size,
+                    kernel_size=max(1, size - 1),
+                    padding="causal",
+                    activation="linear",
+                ),
             ]
         )
     if layer == "conv2d":
@@ -87,7 +92,7 @@ def build_layer_model(keras, layer: str, size: int):  # type: ignore[no-untyped-
         )
     if layer == "prelu":
         return keras.Sequential(
-            [keras.layers.Input(shape=(None, size)), keras.layers.PReLU()]
+            [keras.layers.Input(shape=(None, size)), keras.layers.PReLU(shared_axes=[1])]
         )
     raise ValueError(f"No fixture builder for layer: {layer}")
 
@@ -95,7 +100,7 @@ def build_layer_model(keras, layer: str, size: int):  # type: ignore[no-untyped-
 def build_activation_model(keras, activation: str, size: int):  # type: ignore[no-untyped-def]
     if activation == "prelu":
         return keras.Sequential(
-            [keras.layers.Input(shape=(None, size)), keras.layers.PReLU()]
+            [keras.layers.Input(shape=(None, size)), keras.layers.PReLU(shared_axes=[1])]
         )
     return keras.Sequential(
         [

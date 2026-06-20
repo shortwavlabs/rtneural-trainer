@@ -116,7 +116,7 @@ train, export, and validate one boring LSTM preset.
 
 | Phase | Name | Goal | Exit Criteria |
 | --- | --- | --- | --- |
-| 0 | Export spike | Prove Keras to RTNeural JSON parity | Tiny Dense/LSTM/GRU exports load in native RTNeural and match within tolerance |
+| 0 | Export spike | Prove Keras to RTNeural JSON parity | Tiny Dense/LSTM/GRU/Conv1D/activation/BatchNorm/PReLU exports load in native RTNeural and match within tolerance |
 | 1 | CLI trainer | Build product core without UI | Paired WAVs produce validated RTNeural JSON, metrics, and preview audio |
 | 2 | Desktop MVP | Make the workflow usable by non-developers | Project creation, import, align, train, evaluate, export all work without a terminal |
 | 3 | Runtime integrations | Make exports immediately useful | `.aidax` envelope, generated player, compile-time model, or cloud training path |
@@ -1147,6 +1147,8 @@ PyTorch, or export logic changes.
 | `gru_light` | Required | Optional | Required | Required | Required | Required | v1 if stable |
 | `dense_memoryless` | Required | Optional | Required | Required | Required | Required | v1 if useful |
 | `conv1d_fixture` | Required | Optional | Required | Required | Required | Required | v1-plus |
+| `activations_fixture` | Required | Optional | Required | Required | Required | Required | v1-plus |
+| `batchnorm_prelu_fixture` | Required | Optional | Required | Required | Required | Required | v1-plus |
 | `heavy_recurrent` | Later | Later | Required before exposure | Required | Required | Required | Warned v1 or later |
 | `conv1d_tcn` | Later | Later | Later | Later | Later | Later | Defer |
 

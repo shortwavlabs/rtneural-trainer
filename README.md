@@ -328,6 +328,18 @@ UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
   ../scripts/smoke_keras_training_export.py
 ```
 
+Supported Keras layer export matrix through native RTNeural:
+
+```bash
+cd trainer
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
+  ../scripts/smoke_rtneural_keras_layers.py
+```
+
+That smoke covers Dense-only, GRU, causal Conv1D, supported activations
+(`tanh`, `relu`, `sigmoid`, `softmax`, `elu`), and the safe 1D
+BatchNorm/PReLU path.
+
 ## Useful Docs
 
 - [Research note](docs/Research-RTNeural-Training-Desktop-App.md)

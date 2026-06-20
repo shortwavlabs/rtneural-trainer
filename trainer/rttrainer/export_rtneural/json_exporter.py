@@ -167,10 +167,23 @@ def build_keras_rtneural_json(
             kernel, recurrent_kernel, _bias = layer["weights"]
             layer["input_size"] = len(kernel)
             layer["hidden_size"] = len(recurrent_kernel)
+        elif layer.get("type") == "gru":
+            kernel, recurrent_kernel, _bias = layer["weights"]
+            layer["input_size"] = len(kernel)
+            layer["hidden_size"] = len(recurrent_kernel)
         elif layer.get("type") == "dense":
             kernel, _bias = layer["weights"]
             layer["input_size"] = len(kernel)
             layer["output_size"] = len(kernel[0]) if kernel else 0
+        elif layer.get("type") == "conv1d":
+            kernel, _bias = layer["weights"]
+            layer["input_size"] = len(kernel[0]) if kernel else 0
+            layer["output_size"] = len(kernel[0][0]) if kernel and kernel[0] else 0
+        elif layer.get("type") in ("batchnorm", "prelu", "activation"):
+            shape = layer.get("shape") or []
+            if shape:
+                layer["input_size"] = shape[-1]
+                layer["output_size"] = shape[-1]
 
     model_json["metadata"] = {
         "schema_version": 1,

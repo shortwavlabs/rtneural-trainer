@@ -94,8 +94,8 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         keras="keras.layers.BatchNormalization",
         pytorch="torch.nn.BatchNorm1d",
         benchmarked=False,
-        priority="later",
-        notes="Export after parity fixtures exist for running statistics.",
+        priority="v1-plus",
+        notes="Safe 1D inference path covered by Keras parity and native validation fixtures.",
     ),
     "batchnorm2d": LayerSpec(
         key="batchnorm2d",
@@ -114,8 +114,8 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         keras="keras.layers.PReLU",
         pytorch="torch.nn.PReLU",
         benchmarked=False,
-        priority="later",
-        notes="Supported activation layer; keep behind fixture tests.",
+        priority="v1-plus",
+        notes="Safe shared temporal-axis PReLU is covered by Keras parity and native validation fixtures.",
     ),
     "maxpooling": LayerSpec(
         key="maxpooling",
@@ -167,8 +167,8 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
         keras="keras.activations.softmax",
         pytorch="torch.nn.Softmax",
         benchmarked=False,
-        priority="later",
-        notes="Supported by RTNeural; not a common audio regression output.",
+        priority="v1-plus",
+        notes="Covered as a hidden activation fixture; not a common audio regression output.",
     ),
     "elu": ActivationSpec(
         key="elu",
@@ -177,8 +177,8 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
         keras="keras.activations.elu",
         pytorch="torch.nn.ELU",
         benchmarked=False,
-        priority="later",
-        notes="Supported by RTNeural; add parity fixtures before UI exposure.",
+        priority="v1-plus",
+        notes="Covered as a hidden activation fixture before UI exposure.",
     ),
     "prelu": ActivationSpec(
         key="prelu",
@@ -187,8 +187,8 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
         keras="keras.layers.PReLU",
         pytorch="torch.nn.PReLU",
         benchmarked=False,
-        priority="later",
-        notes="Parametric activation represented as its own layer.",
+        priority="v1-plus",
+        notes="Parametric activation represented as its own safe shared-axis layer fixture.",
     ),
 }
 

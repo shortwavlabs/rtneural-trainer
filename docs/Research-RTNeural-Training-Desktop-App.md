@@ -494,9 +494,11 @@ monitoring. Those are tempting, but they expand the problem before the core
 value is proven.
 
 The first internal milestone should be a command-line pipeline that trains or
-builds one Keras LSTM preset and validates its RTNeural export. Once parity and
-export are boring, wrap it in the desktop UI and reintroduce PyTorch presets only
-where they pass the same gates.
+builds one Keras LSTM preset and validates its RTNeural export, then runs the
+same gate across Dense-only, GRU, causal Conv1D, supported activations, and safe
+BatchNorm/PReLU fixture exports. Once parity and export are boring, wrap it in
+the desktop UI and reintroduce PyTorch presets only where they pass the same
+gates.
 
 ## Source Links
 
