@@ -212,6 +212,11 @@ UV_CACHE_DIR=../.uv-cache uv run python -m rttrainer inspect-device --json
 
 ### 1. Prepare Paired WAV Files
 
+Before recording a profile set, read the
+[audio capture guidelines](docs/Audio-Capture-Guidelines.md) for input/target
+pairing, output level consistency, headroom, latency, and source material
+recommendations.
+
 Create a manifest, for example `projects/demo/prepare.json`:
 
 ```json
@@ -495,6 +500,7 @@ Tauri bundle outputs, staged sidecars, and
 
 - [Research note](docs/Research-RTNeural-Training-Desktop-App.md)
 - [Implementation guide](docs/Implementation-Guide-RTNeural-Training-Desktop-App.md)
+- [Audio capture guidelines](docs/Audio-Capture-Guidelines.md)
 - [RTNeural upstream](https://github.com/jatinchowdhury18/RTNeural)
 - [RTNeural Python examples](https://github.com/jatinchowdhury18/RTNeural/tree/main/python)
 - [RTNeural-compare benchmarks](https://github.com/jatinchowdhury18/RTNeural-compare)

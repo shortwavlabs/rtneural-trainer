@@ -162,13 +162,15 @@ Recommended next move:
   - Include Keras/PyTorch support, native parity, benchmark tier, and UI exposure
     rules.
 
-- [ ] Create `docs/Audio-Capture-Guidelines.md`.
+- [x] Create `docs/Audio-Capture-Guidelines.md`.
   - Owner: Shared.
   - You: provide capture preferences, target use cases, and any house style for
     recommended source material.
   - Codex: document input/target pairing, gain staging, silence, clipping,
     duration, latency, stereo policy, resampling, and recommended capture
     material.
+  - Initial version created from the 2025 profile-family level analysis; refine
+    as more real captures are reviewed.
 
 - [ ] Create `docs/Packaging-And-Sidecars.md`.
   - Owner: Codex after release policy decisions.
