@@ -91,6 +91,9 @@ jobs:
       - name: Build frontend
         run: pnpm --filter rtneural-trainer-app build
 
+      - name: Stage Tauri dev sidecars
+        run: pnpm --filter rtneural-trainer-app package:sidecars:dev
+
       - name: Run Rust tests
         working-directory: app/src-tauri
         run: cargo test
