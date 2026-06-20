@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "labs.shortwav.rtneural-trainer",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm dev:tauri-assets",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm build:tauri-assets",
     "frontendDist": "../dist"
   },
   "app": {
@@ -29,6 +29,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": "all",
+    "externalBin": [
+      "binaries/rttrainer",
+      "binaries/rtneural-validator"
+    ]
   }
 }

@@ -73,6 +73,13 @@ For the Tauri desktop shell:
 pnpm --filter rtneural-trainer-app tauri dev
 ```
 
+`tauri dev` runs `pnpm dev:tauri-assets` first. That creates local development
+sidecar shims in `app/src-tauri/binaries/` using Tauri's required target-triple
+filenames. The shims keep development fast by delegating to:
+
+- `uv run --extra tensorflow python -m rttrainer`
+- `native/rtneural-validator/build/rtneural-validator`
+
 Build the frontend:
 
 ```bash
@@ -85,6 +92,52 @@ Check the Rust side:
 cd app/src-tauri
 cargo check
 ```
+
+## Package Tauri Sidecars
+
+Tauri's `bundle.externalBin` entries use logical names without a target triple:
+
+```json
+{
+  "externalBin": [
+    "binaries/rttrainer",
+    "binaries/rtneural-validator"
+  ]
+}
+```
+
+The source files on disk must include the target triple suffix:
+
+```text
+app/src-tauri/binaries/
+  rttrainer-<target-triple>
+  rtneural-validator-<target-triple>
+```
+
+For local development, generate ignored shim binaries:
+
+```bash
+pnpm --filter rtneural-trainer-app package:sidecars:dev
+```
+
+For production packaging, build or copy real sidecars:
+
+```bash
+pnpm --filter rtneural-trainer-app package:sidecars
+```
+
+The production script packages `rttrainer` with PyInstaller through `uv` and
+builds the native validator with CMake release settings. You can also provide
+prebuilt executables:
+
+```bash
+RTTRAINER_SIDECAR_SOURCE=/path/to/rttrainer \
+RTNEURAL_VALIDATOR_SOURCE=/path/to/rtneural-validator \
+pnpm --filter rtneural-trainer-app package:sidecars
+```
+
+`tauri build` runs `pnpm build:tauri-assets`, which stages these sidecars before
+building the frontend and app bundle.
 
 ## Build The Native Validator
 

@@ -4,15 +4,22 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    fs,
+    fmt, fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command as StdCommand, Stdio},
     sync::Mutex,
     thread::{self, JoinHandle},
 };
 use tauri::{Emitter, Manager};
+use tauri_plugin_shell::{
+    process::{Command as ShellCommand, CommandEvent},
+    ShellExt,
+};
 use uuid::Uuid;
+
+const RTTRAINER_SIDECAR: &str = "rttrainer";
+const RTNEURAL_VALIDATOR_SIDECAR: &str = "rtneural-validator";
 
 #[derive(Clone, Serialize)]
 struct AppStatus {
@@ -339,11 +346,6 @@ struct TrainingReport {
 
 #[tauri::command]
 fn app_status(state: tauri::State<AppState>) -> AppStatus {
-    let binaries_dir = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| state.projects_dir.clone());
-
     AppStatus {
         version: env!("CARGO_PKG_VERSION").to_string(),
         data_dir: state
@@ -352,8 +354,8 @@ fn app_status(state: tauri::State<AppState>) -> AppStatus {
             .unwrap_or(&state.projects_dir)
             .display()
             .to_string(),
-        trainer_sidecar_present: binary_exists(&binaries_dir, "rttrainer"),
-        validator_sidecar_present: binary_exists(&binaries_dir, "rtneural-validator"),
+        trainer_sidecar_present: bundled_sidecar_exists(RTTRAINER_SIDECAR),
+        validator_sidecar_present: bundled_sidecar_exists(RTNEURAL_VALIDATOR_SIDECAR),
     }
 }
 
@@ -2177,22 +2179,22 @@ fn open_folder(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_folder_command(path: &Path) -> Command {
-    let mut command = Command::new("open");
+fn open_folder_command(path: &Path) -> StdCommand {
+    let mut command = StdCommand::new("open");
     command.arg(path);
     command
 }
 
 #[cfg(target_os = "windows")]
-fn open_folder_command(path: &Path) -> Command {
-    let mut command = Command::new("explorer");
+fn open_folder_command(path: &Path) -> StdCommand {
+    let mut command = StdCommand::new("explorer");
     command.arg(path);
     command
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn open_folder_command(path: &Path) -> Command {
-    let mut command = Command::new("xdg-open");
+fn open_folder_command(path: &Path) -> StdCommand {
+    let mut command = StdCommand::new("xdg-open");
     command.arg(path);
     command
 }
@@ -2219,12 +2221,6 @@ fn summarize_project(project: &ProjectDetail) -> ProjectSummary {
         best_quality,
         export_status: project.exports.last().map(|export| export.status.clone()),
     }
-}
-
-fn binary_exists(dir: &Path, stem: &str) -> bool {
-    let direct = dir.join(stem);
-    let exe = dir.join(format!("{stem}.exe"));
-    direct.exists() || exe.exists()
 }
 
 fn write_json<P: AsRef<Path>, T: Serialize>(path: P, value: &T) -> Result<(), String> {
@@ -2407,31 +2403,41 @@ fn run_rttrainer(
     manifest_path: &Path,
     context: SidecarContext,
 ) -> Result<SidecarOutput, String> {
-    let trainer_dir = state.workspace_root.join("trainer");
-    let cache_dir = state.workspace_root.join(".uv-cache");
-    let mut process = Command::new("uv");
-    process
-        .current_dir(&trainer_dir)
-        .env("UV_CACHE_DIR", &cache_dir)
-        .arg("run");
-    if matches!(command, "train" | "evaluate" | "export") {
-        process.arg("--extra").arg("tensorflow");
-    }
-    process
-        .arg("python")
-        .arg("-m")
-        .arg("rttrainer")
-        .arg(command)
-        .arg("--manifest")
-        .arg(manifest_path);
-
     emit_sidecar_line(
         app,
         &context,
         "system",
         &format!("rttrainer {command} started"),
     );
-    let output = run_streaming_process(app, &context, process)?;
+    let output = if bundled_sidecar_exists(RTTRAINER_SIDECAR) {
+        let process = app
+            .shell()
+            .sidecar(RTTRAINER_SIDECAR)
+            .map_err(to_error)?
+            .arg(command)
+            .arg("--manifest")
+            .arg(manifest_path);
+        run_streaming_shell_command(app, &context, process)?
+    } else {
+        let trainer_dir = state.workspace_root.join("trainer");
+        let cache_dir = state.workspace_root.join(".uv-cache");
+        let mut process = StdCommand::new("uv");
+        process
+            .current_dir(&trainer_dir)
+            .env("UV_CACHE_DIR", &cache_dir)
+            .arg("run");
+        if matches!(command, "train" | "evaluate" | "export") {
+            process.arg("--extra").arg("tensorflow");
+        }
+        process
+            .arg("python")
+            .arg("-m")
+            .arg("rttrainer")
+            .arg(command)
+            .arg("--manifest")
+            .arg(manifest_path);
+        run_streaming_process(app, &context, process)?
+    };
     if output.status.success() {
         emit_sidecar_line(
             app,
@@ -2463,10 +2469,7 @@ fn run_validator(
     args: Vec<String>,
     context: SidecarContext,
 ) -> Result<SidecarOutput, String> {
-    let validator = validator_binary_path(state)?;
     let action = args.first().cloned().unwrap_or_else(|| "run".to_string());
-    let mut process = Command::new(&validator);
-    process.args(args);
 
     emit_sidecar_line(
         app,
@@ -2474,7 +2477,25 @@ fn run_validator(
         "system",
         &format!("rtneural-validator {action} started"),
     );
-    let output = run_streaming_process(app, &context, process)?;
+    let (output, validator_label) = if bundled_sidecar_exists(RTNEURAL_VALIDATOR_SIDECAR) {
+        let process = app
+            .shell()
+            .sidecar(RTNEURAL_VALIDATOR_SIDECAR)
+            .map_err(to_error)?
+            .args(args);
+        (
+            run_streaming_shell_command(app, &context, process)?,
+            RTNEURAL_VALIDATOR_SIDECAR.to_string(),
+        )
+    } else {
+        let validator = validator_binary_path(state)?;
+        let mut process = StdCommand::new(&validator);
+        process.args(args);
+        (
+            run_streaming_process(app, &context, process)?,
+            validator.display().to_string(),
+        )
+    };
     if output.status.success() {
         emit_sidecar_line(
             app,
@@ -2496,23 +2517,50 @@ fn run_validator(
     );
     Err(format!(
         "{} failed with status {}.\nstdout:\n{}\nstderr:\n{}",
-        validator.display(),
-        output.status,
-        output.stdout,
-        output.stderr
+        validator_label, output.status, output.stdout, output.stderr
     ))
 }
 
 struct StreamingProcessOutput {
-    status: std::process::ExitStatus,
+    status: StreamingExitStatus,
     stdout: String,
     stderr: String,
+}
+
+struct StreamingExitStatus {
+    code: Option<i32>,
+    signal: Option<i32>,
+}
+
+impl StreamingExitStatus {
+    fn success(&self) -> bool {
+        self.code == Some(0)
+    }
+}
+
+impl From<std::process::ExitStatus> for StreamingExitStatus {
+    fn from(status: std::process::ExitStatus) -> Self {
+        Self {
+            code: status.code(),
+            signal: None,
+        }
+    }
+}
+
+impl fmt::Display for StreamingExitStatus {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (self.code, self.signal) {
+            (Some(code), _) => write!(formatter, "exit code {code}"),
+            (None, Some(signal)) => write!(formatter, "signal {signal}"),
+            (None, None) => write!(formatter, "terminated without exit code"),
+        }
+    }
 }
 
 fn run_streaming_process(
     app: &tauri::AppHandle,
     context: &SidecarContext,
-    mut process: Command,
+    mut process: StdCommand,
 ) -> Result<StreamingProcessOutput, String> {
     let mut child = process
         .stdout(Stdio::piped())
@@ -2543,10 +2591,85 @@ fn run_streaming_process(
     let stderr = join_stream_reader(stderr_reader, "stderr")?;
 
     Ok(StreamingProcessOutput {
-        status,
+        status: status.into(),
         stdout,
         stderr,
     })
+}
+
+fn run_streaming_shell_command(
+    app: &tauri::AppHandle,
+    context: &SidecarContext,
+    process: ShellCommand,
+) -> Result<StreamingProcessOutput, String> {
+    let (mut rx, child) = process.spawn().map_err(to_error)?;
+    register_active_process(app, context, child.pid())?;
+    if context.operation == "train" && job_is_cancelling(app, &context.job_id)? {
+        if let Err(error) = terminate_pid(child.pid()) {
+            emit_sidecar_line(app, context, "system", &error);
+        }
+    }
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut status = None;
+    let mut command_error = None;
+
+    tauri::async_runtime::block_on(async {
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(bytes) => {
+                    collect_shell_output(app, context, "stdout", &mut stdout, bytes);
+                }
+                CommandEvent::Stderr(bytes) => {
+                    collect_shell_output(app, context, "stderr", &mut stderr, bytes);
+                }
+                CommandEvent::Error(error) => {
+                    command_error = Some(error);
+                }
+                CommandEvent::Terminated(payload) => {
+                    status = Some(StreamingExitStatus {
+                        code: payload.code,
+                        signal: payload.signal,
+                    });
+                }
+                _ => {}
+            }
+        }
+    });
+
+    unregister_active_process(app, &context.job_id);
+    if let Some(error) = command_error {
+        return Err(error);
+    }
+
+    Ok(StreamingProcessOutput {
+        status: status.unwrap_or(StreamingExitStatus {
+            code: None,
+            signal: None,
+        }),
+        stdout,
+        stderr,
+    })
+}
+
+fn collect_shell_output(
+    app: &tauri::AppHandle,
+    context: &SidecarContext,
+    stream: &str,
+    collected: &mut String,
+    bytes: Vec<u8>,
+) {
+    let text = String::from_utf8_lossy(&bytes);
+    collected.push_str(&text);
+    if !text.ends_with('\n') {
+        collected.push('\n');
+    }
+    for line in text.lines() {
+        if !line.trim().is_empty() {
+            emit_sidecar_line(app, context, stream, line);
+        }
+    }
 }
 
 fn spawn_stream_reader<R>(
@@ -2621,7 +2744,7 @@ fn job_is_cancelling(app: &tauri::AppHandle, job_id: &str) -> Result<bool, Strin
 
 #[cfg(unix)]
 fn terminate_pid(pid: u32) -> Result<(), String> {
-    let status = Command::new("kill")
+    let status = StdCommand::new("kill")
         .arg("-TERM")
         .arg(pid.to_string())
         .status()
@@ -2635,7 +2758,7 @@ fn terminate_pid(pid: u32) -> Result<(), String> {
 
 #[cfg(windows)]
 fn terminate_pid(pid: u32) -> Result<(), String> {
-    let status = Command::new("taskkill")
+    let status = StdCommand::new("taskkill")
         .arg("/PID")
         .arg(pid.to_string())
         .arg("/T")
@@ -2669,7 +2792,7 @@ fn emit_sidecar_line(app: &tauri::AppHandle, context: &SidecarContext, stream: &
 fn validator_binary_path(state: &AppState) -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            if let Some(path) = existing_binary(dir, "rtneural-validator") {
+            if let Some(path) = existing_binary(dir, RTNEURAL_VALIDATOR_SIDECAR) {
                 return Ok(path);
             }
         }
@@ -2681,6 +2804,16 @@ fn validator_binary_path(state: &AppState) -> Result<PathBuf, String> {
     }
 
     Err("rtneural-validator binary not found. Build it with: cmake --build native/rtneural-validator/build".to_string())
+}
+
+fn bundled_sidecar_exists(stem: &str) -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.parent()
+                .map(|dir| existing_binary(dir, stem).is_some())
+        })
+        .unwrap_or(false)
 }
 
 fn existing_binary(dir: &Path, stem: &str) -> Option<PathBuf> {

@@ -700,6 +700,10 @@ app/src-tauri/binaries/
   rtneural-validator-<target-triple>
 ```
 
+The `externalBin` paths intentionally omit the target triple. Tauri resolves the
+configured logical path to the platform-specific source file during bundling and
+copies the resulting executable into the app bundle under the logical stem.
+
 Tauri config shape:
 
 ```json
@@ -736,6 +740,31 @@ Capability shape:
     }
   ]
 }
+```
+
+Development staging command:
+
+```bash
+pnpm --filter rtneural-trainer-app package:sidecars:dev
+```
+
+This should create ignored POSIX shims for local work. The `rttrainer` shim can
+delegate to `uv run --extra tensorflow python -m rttrainer`; the validator shim
+can delegate to `native/rtneural-validator/build/rtneural-validator`.
+
+Production staging command:
+
+```bash
+pnpm --filter rtneural-trainer-app package:sidecars
+```
+
+This should build or copy real executables into `app/src-tauri/binaries/`.
+Support prebuilt override paths for release automation:
+
+```bash
+RTTRAINER_SIDECAR_SOURCE=/path/to/rttrainer \
+RTNEURAL_VALIDATOR_SOURCE=/path/to/rtneural-validator \
+pnpm --filter rtneural-trainer-app package:sidecars
 ```
 
 Rust invocation should use `tauri_plugin_shell::ShellExt` and stream events from
@@ -1095,10 +1124,15 @@ Packaging tasks:
 1. Build Python sidecar with PyInstaller or equivalent.
 2. Build native validator with CMake release settings.
 3. Copy sidecars into Tauri binary folder.
-4. Run a packaged-app smoke test.
-5. Verify sidecar execution permissions.
-6. Verify code signing and notarization requirements on macOS.
-7. Verify Windows signing and antivirus false-positive risk.
+4. Name sidecars as `rttrainer-<target-triple>` and
+   `rtneural-validator-<target-triple>`.
+5. Configure Tauri `bundle.externalBin` with unsuffixed logical paths.
+6. Execute packaged sidecars through `tauri-plugin-shell`, not through arbitrary
+   shell command spawning.
+7. Run a packaged-app smoke test.
+8. Verify sidecar execution permissions.
+9. Verify code signing and notarization requirements on macOS.
+10. Verify Windows signing and antivirus false-positive risk.
 
 Acceptance criteria:
 

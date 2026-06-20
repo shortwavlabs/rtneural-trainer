@@ -3,5 +3,22 @@
   "identifier": "default",
   "description": "Default permissions for the RTNeural Trainer desktop window.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/rttrainer",
+          "sidecar": true,
+          "args": true
+        },
+        {
+          "name": "binaries/rtneural-validator",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    }
+  ]
 }

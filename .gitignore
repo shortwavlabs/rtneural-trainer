@@ -11,6 +11,8 @@ __pycache__/
 .pytest_cache/
 app/src-tauri/target/
 app/src-tauri/gen/
+app/src-tauri/binaries/*
+!app/src-tauri/binaries/.gitkeep
 app/dist/
 trainer/dist/
 trainer/build/
