@@ -1,4 +1,6 @@
 use chrono::Utc;
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -48,7 +50,10 @@ enum AudioStatus {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum RunStatus {
+    Queued,
+    Preparing,
     Running,
+    Cancelling,
     Completed,
     Failed,
     Interrupted,
@@ -58,7 +63,21 @@ enum RunStatus {
 #[serde(rename_all = "snake_case")]
 enum ExportStatus {
     Blocked,
+    Pending,
+    Validating,
+    Failed,
     Ready,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum JobStatus {
+    Queued,
+    Running,
+    Cancelling,
+    Completed,
+    Failed,
+    Interrupted,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -183,10 +202,10 @@ struct Store {
 }
 
 struct AppState {
-    store_path: PathBuf,
+    db_path: PathBuf,
     projects_dir: PathBuf,
     workspace_root: PathBuf,
-    store: Mutex<Store>,
+    db: Mutex<Connection>,
 }
 
 struct SidecarOutput {
@@ -196,6 +215,7 @@ struct SidecarOutput {
 
 #[derive(Clone)]
 struct SidecarContext {
+    job_id: String,
     operation: String,
     project_id: Option<String>,
     run_id: Option<String>,
@@ -204,6 +224,7 @@ struct SidecarContext {
 
 #[derive(Clone, Serialize)]
 struct SidecarProgressEvent {
+    job_id: String,
     operation: String,
     stream: String,
     line: String,
@@ -249,7 +270,7 @@ fn app_status(state: tauri::State<AppState>) -> AppStatus {
     AppStatus {
         version: env!("CARGO_PKG_VERSION").to_string(),
         data_dir: state
-            .projects_dir
+            .db_path
             .parent()
             .unwrap_or(&state.projects_dir)
             .display()
@@ -261,19 +282,24 @@ fn app_status(state: tauri::State<AppState>) -> AppStatus {
 
 #[tauri::command]
 fn list_projects(state: tauri::State<AppState>) -> Result<Vec<ProjectSummary>, String> {
-    let store = state.store.lock().map_err(lock_error)?;
-    Ok(store.projects.iter().map(summarize_project).collect())
+    let db = state.db.lock().map_err(lock_error)?;
+    let projects = load_all_projects(&db)?;
+    Ok(projects.iter().map(summarize_project).collect())
 }
 
 #[tauri::command]
 fn get_project(state: tauri::State<AppState>, project_id: String) -> Result<ProjectDetail, String> {
-    let store = state.store.lock().map_err(lock_error)?;
-    store
-        .projects
-        .iter()
-        .find(|project| project.id == project_id)
-        .cloned()
-        .ok_or_else(|| "Project not found".to_string())
+    let db = state.db.lock().map_err(lock_error)?;
+    load_project_detail(&db, &project_id)
+}
+
+#[tauri::command]
+fn list_project_events(
+    state: tauri::State<AppState>,
+    project_id: String,
+) -> Result<Vec<SidecarProgressEvent>, String> {
+    let db = state.db.lock().map_err(lock_error)?;
+    load_project_events(&db, &project_id, 120)
 }
 
 #[tauri::command]
@@ -307,10 +333,8 @@ fn create_project(
         exports: Vec::new(),
     };
 
-    let mut store = state.store.lock().map_err(lock_error)?;
-    store.projects.insert(0, project.clone());
-    persist(&state, &store)?;
-    write_json(project_dir.join("project.json"), &project)?;
+    let db = state.db.lock().map_err(lock_error)?;
+    insert_project(&db, &project)?;
     Ok(project)
 }
 
@@ -331,13 +355,8 @@ fn update_project_audio(
     }
 
     let project_dir = {
-        let store = state.store.lock().map_err(lock_error)?;
-        store
-            .projects
-            .iter()
-            .find(|project| project.id == payload.project_id)
-            .map(|project| PathBuf::from(&project.project_dir))
-            .ok_or_else(|| "Project not found".to_string())?
+        let db = state.db.lock().map_err(lock_error)?;
+        PathBuf::from(load_project_detail(&db, &payload.project_id)?.project_dir)
     };
 
     let prepared_dir = project_dir.join("audio/prepared");
@@ -352,18 +371,25 @@ fn update_project_audio(
             "output_dir": prepared_dir
         }),
     )?;
-    run_rttrainer(
+    let job_id = create_job(&state, "prepare", Some(&payload.project_id), None, None)?;
+    let prepare_result = run_rttrainer(
         &app,
         &state,
         "prepare",
         &manifest_path,
         SidecarContext {
+            job_id: job_id.clone(),
             operation: "prepare".to_string(),
             project_id: Some(payload.project_id.clone()),
             run_id: None,
             export_id: None,
         },
-    )?;
+    );
+    if let Err(error) = prepare_result {
+        mark_job_failed(&state, &job_id, &error)?;
+        return Err(error);
+    }
+    mark_job_completed(&state, &job_id)?;
 
     let prepare_report_path = prepared_dir.join("preparation-report.json");
     let prepare_report: PrepareReport = read_json(&prepare_report_path)?;
@@ -377,20 +403,16 @@ fn update_project_audio(
         status: prepare_report.status,
     };
 
-    let mut store = state.store.lock().map_err(lock_error)?;
-    let project = find_project_mut(&mut store, &payload.project_id)?;
-    project.audio = Some(report.clone());
-    project.status = if matches!(report.status, AudioStatus::Ready) {
+    let project_status = if matches!(report.status, AudioStatus::Ready) {
         ProjectStatus::Ready
     } else {
         ProjectStatus::Draft
     };
-    project.updated_at = now();
-
-    write_json(project_dir.join("project.json"), &*project)?;
-    let cloned = project.clone();
-    persist(&state, &store)?;
-    Ok(cloned)
+    let updated_at = now();
+    let db = state.db.lock().map_err(lock_error)?;
+    upsert_audio_report(&db, &payload.project_id, &report)?;
+    update_project_status(&db, &payload.project_id, &project_status, &updated_at)?;
+    load_project_detail(&db, &payload.project_id)
 }
 
 #[tauri::command]
@@ -401,12 +423,8 @@ fn start_training(
 ) -> Result<ProjectDetail, String> {
     let run_id = format!("run_{}", Uuid::new_v4().simple());
     let project_dir = {
-        let store = state.store.lock().map_err(lock_error)?;
-        let project = store
-            .projects
-            .iter()
-            .find(|project| project.id == payload.project_id)
-            .ok_or_else(|| "Project not found".to_string())?;
+        let db = state.db.lock().map_err(lock_error)?;
+        let project = load_project_detail(&db, &payload.project_id)?;
         let audio_ready = project
             .audio
             .as_ref()
@@ -438,19 +456,61 @@ fn start_training(
         }),
     )?;
 
-    let sidecar = run_rttrainer(
+    let created_at = now();
+    let log_path = run_dir.join("events.jsonl");
+    let run = TrainingRun {
+        id: run_id.clone(),
+        preset: payload.preset.clone(),
+        status: RunStatus::Running,
+        device: "pending".to_string(),
+        epochs: 0,
+        created_at: created_at.clone(),
+        updated_at: created_at.clone(),
+        metrics: None,
+        log_path: relative_path_string(&project_dir, &log_path),
+    };
+    {
+        let db = state.db.lock().map_err(lock_error)?;
+        insert_training_run(&db, &payload.project_id, &run, &project_dir, &run_dir)?;
+        update_project_status(
+            &db,
+            &payload.project_id,
+            &ProjectStatus::Training,
+            &created_at,
+        )?;
+    }
+
+    let job_id = create_job(
+        &state,
+        "train",
+        Some(&payload.project_id),
+        Some(&run_id),
+        None,
+    )?;
+    let sidecar_result = run_rttrainer(
         &app,
         &state,
         "train",
         &manifest_path,
         SidecarContext {
+            job_id: job_id.clone(),
             operation: "train".to_string(),
             project_id: Some(payload.project_id.clone()),
             run_id: Some(run_id.clone()),
             export_id: None,
         },
-    )?;
-    let log_path = run_dir.join("events.jsonl");
+    );
+    let sidecar = match sidecar_result {
+        Ok(output) => output,
+        Err(error) => {
+            mark_job_failed(&state, &job_id, &error)?;
+            let db = state.db.lock().map_err(lock_error)?;
+            update_training_run_failure(&db, &run_id, &error)?;
+            update_project_status(&db, &payload.project_id, &ProjectStatus::Ready, &now())?;
+            return Err(error);
+        }
+    };
+    mark_job_completed(&state, &job_id)?;
     fs::write(&log_path, sidecar.stdout).map_err(to_error)?;
     if !sidecar.stderr.trim().is_empty() {
         fs::write(run_dir.join("stderr.log"), sidecar.stderr).map_err(to_error)?;
@@ -458,7 +518,7 @@ fn start_training(
 
     let report: TrainingReport = read_json(&run_dir.join("training-report.json"))?;
 
-    let run = TrainingRun {
+    let completed_run = TrainingRun {
         id: report.run_id,
         preset: report.preset,
         status: RunStatus::Completed,
@@ -467,18 +527,13 @@ fn start_training(
         created_at: report.created_at.clone(),
         updated_at: now(),
         metrics: Some(report.metrics),
-        log_path: log_path.display().to_string(),
+        log_path: relative_path_string(&project_dir, &log_path),
     };
 
-    let mut store = state.store.lock().map_err(lock_error)?;
-    let project = find_project_mut(&mut store, &payload.project_id)?;
-    project.status = ProjectStatus::Ready;
-    project.updated_at = now();
-    project.runs.push(run);
-    write_json(project_dir.join("project.json"), &*project)?;
-    let cloned = project.clone();
-    persist(&state, &store)?;
-    Ok(cloned)
+    let db = state.db.lock().map_err(lock_error)?;
+    update_training_run_success(&db, &completed_run)?;
+    update_project_status(&db, &payload.project_id, &ProjectStatus::Ready, &now())?;
+    load_project_detail(&db, &payload.project_id)
 }
 
 #[tauri::command]
@@ -489,12 +544,8 @@ fn export_run(
 ) -> Result<ProjectDetail, String> {
     let export_id = format!("export_{}", Uuid::new_v4().simple());
     let (project_name, project_id, project_dir, run, sample_rate, latency_samples) = {
-        let store = state.store.lock().map_err(lock_error)?;
-        let project = store
-            .projects
-            .iter()
-            .find(|project| project.id == payload.project_id)
-            .ok_or_else(|| "Project not found".to_string())?;
+        let db = state.db.lock().map_err(lock_error)?;
+        let project = load_project_detail(&db, &payload.project_id)?;
         let run = project
             .runs
             .iter()
@@ -542,24 +593,69 @@ fn export_run(
         }),
     )?;
 
-    let sidecar = run_rttrainer(
+    let package = ExportPackage {
+        id: export_id.clone(),
+        run_id: run.id.clone(),
+        status: ExportStatus::Pending,
+        created_at: now(),
+        model_path: relative_path_string(&project_dir, &model_path),
+        package_path: relative_path_string(&project_dir, &package_path),
+        validation_path: relative_path_string(&project_dir, &validation_path),
+        benchmark_path: relative_path_string(&project_dir, &benchmark_path),
+    };
+    {
+        let db = state.db.lock().map_err(lock_error)?;
+        insert_export_package(&db, &project_id, &package, &project_dir, &export_dir)?;
+    }
+
+    let export_job_id = create_job(
+        &state,
+        "export",
+        Some(&project_id),
+        Some(&run.id),
+        Some(&export_id),
+    )?;
+    let sidecar_result = run_rttrainer(
         &app,
         &state,
         "export",
         &manifest_path,
         SidecarContext {
+            job_id: export_job_id.clone(),
             operation: "export".to_string(),
             project_id: Some(project_id.clone()),
             run_id: Some(run.id.clone()),
             export_id: Some(export_id.clone()),
         },
-    )?;
+    );
+    let sidecar = match sidecar_result {
+        Ok(output) => output,
+        Err(error) => {
+            mark_job_failed(&state, &export_job_id, &error)?;
+            let db = state.db.lock().map_err(lock_error)?;
+            update_export_status(&db, &export_id, &ExportStatus::Failed, Some(&error))?;
+            return Err(error);
+        }
+    };
+    mark_job_completed(&state, &export_job_id)?;
     fs::write(export_dir.join("export-events.jsonl"), sidecar.stdout).map_err(to_error)?;
     if !sidecar.stderr.trim().is_empty() {
         fs::write(export_dir.join("stderr.log"), sidecar.stderr).map_err(to_error)?;
     }
 
-    run_validator(
+    {
+        let db = state.db.lock().map_err(lock_error)?;
+        update_export_status(&db, &export_id, &ExportStatus::Validating, None)?;
+    }
+
+    let validate_job_id = create_job(
+        &state,
+        "native_validate",
+        Some(&project_id),
+        Some(&run.id),
+        Some(&export_id),
+    )?;
+    let validate_result = run_validator(
         &app,
         &state,
         vec![
@@ -576,13 +672,29 @@ fn export_run(
             "0.0001".to_string(),
         ],
         SidecarContext {
+            job_id: validate_job_id.clone(),
             operation: "native_validate".to_string(),
             project_id: Some(project_id.clone()),
             run_id: Some(run.id.clone()),
             export_id: Some(export_id.clone()),
         },
+    );
+    if let Err(error) = validate_result {
+        mark_job_failed(&state, &validate_job_id, &error)?;
+        let db = state.db.lock().map_err(lock_error)?;
+        update_export_status(&db, &export_id, &ExportStatus::Failed, Some(&error))?;
+        return Err(error);
+    }
+    mark_job_completed(&state, &validate_job_id)?;
+
+    let benchmark_job_id = create_job(
+        &state,
+        "native_benchmark",
+        Some(&project_id),
+        Some(&run.id),
+        Some(&export_id),
     )?;
-    run_validator(
+    let benchmark_result = run_validator(
         &app,
         &state,
         vec![
@@ -597,33 +709,25 @@ fn export_run(
             benchmark_path.display().to_string(),
         ],
         SidecarContext {
+            job_id: benchmark_job_id.clone(),
             operation: "native_benchmark".to_string(),
             project_id: Some(project_id.clone()),
             run_id: Some(run.id.clone()),
             export_id: Some(export_id.clone()),
         },
-    )?;
+    );
+    if let Err(error) = benchmark_result {
+        mark_job_failed(&state, &benchmark_job_id, &error)?;
+        let db = state.db.lock().map_err(lock_error)?;
+        update_export_status(&db, &export_id, &ExportStatus::Failed, Some(&error))?;
+        return Err(error);
+    }
+    mark_job_completed(&state, &benchmark_job_id)?;
 
-    let package = ExportPackage {
-        id: export_id,
-        run_id: run.id,
-        status: ExportStatus::Ready,
-        created_at: now(),
-        model_path: model_path.display().to_string(),
-        package_path: package_path.display().to_string(),
-        validation_path: validation_path.display().to_string(),
-        benchmark_path: benchmark_path.display().to_string(),
-    };
-
-    let mut store = state.store.lock().map_err(lock_error)?;
-    let project = find_project_mut(&mut store, &project_id)?;
-    project.status = ProjectStatus::Exported;
-    project.updated_at = now();
-    project.exports.push(package);
-    write_json(project_dir.join("project.json"), &*project)?;
-    let cloned = project.clone();
-    persist(&state, &store)?;
-    Ok(cloned)
+    let db = state.db.lock().map_err(lock_error)?;
+    update_export_status(&db, &export_id, &ExportStatus::Ready, None)?;
+    update_project_status(&db, &project_id, &ProjectStatus::Exported, &now())?;
+    load_project_detail(&db, &project_id)
 }
 
 #[tauri::command]
@@ -631,17 +735,9 @@ fn update_notes(
     state: tauri::State<AppState>,
     payload: UpdateNotesRequest,
 ) -> Result<ProjectDetail, String> {
-    let mut store = state.store.lock().map_err(lock_error)?;
-    let project = find_project_mut(&mut store, &payload.project_id)?;
-    project.notes = payload.notes;
-    project.updated_at = now();
-    write_json(
-        PathBuf::from(&project.project_dir).join("project.json"),
-        &*project,
-    )?;
-    let cloned = project.clone();
-    persist(&state, &store)?;
-    Ok(cloned)
+    let db = state.db.lock().map_err(lock_error)?;
+    update_project_notes(&db, &payload.project_id, &payload.notes, &now())?;
+    load_project_detail(&db, &payload.project_id)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -656,12 +752,17 @@ pub fn run() {
             let projects_dir = app_dir.join("projects");
             fs::create_dir_all(&projects_dir).expect("failed to create project directory");
             let store_path = app_dir.join("store.json");
-            let store = load_store(&store_path);
+            let db_path = app_dir.join("rtneural-trainer.sqlite3");
+            let mut db = Connection::open(&db_path).expect("failed to open SQLite project store");
+            configure_database(&mut db).expect("failed to migrate SQLite project store");
+            migrate_legacy_store(&db, &store_path).expect("failed to migrate legacy JSON store");
+            recover_interrupted_jobs(&db).expect("failed to recover interrupted jobs");
+            audit_missing_artifacts(&db).expect("failed to audit project artifacts");
             app.manage(AppState {
-                store_path,
+                db_path,
                 projects_dir,
                 workspace_root: workspace_root(),
-                store: Mutex::new(store),
+                db: Mutex::new(db),
             });
             Ok(())
         })
@@ -669,6 +770,7 @@ pub fn run() {
             app_status,
             list_projects,
             get_project,
+            list_project_events,
             create_project,
             update_project_audio,
             start_training,
@@ -679,31 +781,771 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn load_store(path: &Path) -> Store {
-    let Ok(raw) = fs::read_to_string(path) else {
-        return Store::default();
-    };
-    serde_json::from_str(&raw).unwrap_or_default()
-}
-
-fn persist(state: &AppState, store: &Store) -> Result<(), String> {
-    write_json(&state.store_path, store)
-}
-
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
     let raw = fs::read_to_string(path).map_err(to_error)?;
     serde_json::from_str(&raw).map_err(to_error)
 }
 
-fn find_project_mut<'a>(
-    store: &'a mut Store,
+fn configure_database(db: &mut Connection) -> Result<(), String> {
+    db.execute_batch(
+        r#"
+        PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            id TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        );
+        "#,
+    )
+    .map_err(to_error)?;
+    apply_migrations(db)
+}
+
+fn apply_migrations(db: &mut Connection) -> Result<(), String> {
+    for (id, sql) in MIGRATIONS {
+        let already_applied = db
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE id = ?1",
+                params![id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(to_error)?
+            .is_some();
+        if already_applied {
+            continue;
+        }
+
+        let tx = db.transaction().map_err(to_error)?;
+        tx.execute_batch(sql).map_err(to_error)?;
+        tx.execute(
+            "INSERT INTO schema_migrations (id, applied_at) VALUES (?1, ?2)",
+            params![id, now()],
+        )
+        .map_err(to_error)?;
+        tx.commit().map_err(to_error)?;
+    }
+    Ok(())
+}
+
+const MIGRATIONS: &[(&str, &str)] = &[(
+    "001_initial_project_store",
+    r#"
+    CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        notes TEXT NOT NULL DEFAULT '',
+        project_dir TEXT NOT NULL
+    );
+
+    CREATE TABLE audio_files (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        report_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE training_runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        preset TEXT NOT NULL,
+        status TEXT NOT NULL,
+        device TEXT NOT NULL,
+        epochs INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        metrics_json TEXT,
+        log_path TEXT NOT NULL,
+        run_dir TEXT NOT NULL,
+        error TEXT
+    );
+
+    CREATE INDEX idx_training_runs_project
+        ON training_runs(project_id, created_at);
+
+    CREATE TABLE exports (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        run_id TEXT NOT NULL REFERENCES training_runs(id) ON DELETE CASCADE,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        model_path TEXT NOT NULL,
+        package_path TEXT NOT NULL,
+        validation_path TEXT NOT NULL,
+        benchmark_path TEXT NOT NULL,
+        export_dir TEXT NOT NULL,
+        error TEXT
+    );
+
+    CREATE INDEX idx_exports_project
+        ON exports(project_id, created_at);
+
+    CREATE TABLE jobs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        run_id TEXT,
+        export_id TEXT,
+        operation TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        error TEXT
+    );
+
+    CREATE INDEX idx_jobs_project
+        ON jobs(project_id, created_at);
+
+    CREATE TABLE job_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+        project_id TEXT,
+        run_id TEXT,
+        export_id TEXT,
+        operation TEXT NOT NULL,
+        stream TEXT NOT NULL,
+        line TEXT NOT NULL,
+        event_json TEXT,
+        created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX idx_job_events_job
+        ON job_events(job_id, id);
+
+    CREATE TABLE app_settings (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    "#,
+)];
+
+fn migrate_legacy_store(db: &Connection, store_path: &Path) -> Result<(), String> {
+    let existing_projects: i64 = db
+        .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+        .map_err(to_error)?;
+    if existing_projects > 0 || !store_path.exists() {
+        return Ok(());
+    }
+
+    let raw = fs::read_to_string(store_path).map_err(to_error)?;
+    let legacy: Store = serde_json::from_str(&raw).map_err(to_error)?;
+    for project in legacy.projects {
+        insert_project(db, &project)?;
+        if let Some(audio) = &project.audio {
+            upsert_audio_report(db, &project.id, audio)?;
+        }
+        let project_dir = PathBuf::from(&project.project_dir);
+        for run in &project.runs {
+            let run_dir = project_dir.join("runs").join(&run.id);
+            insert_training_run(db, &project.id, run, &project_dir, &run_dir)?;
+        }
+        for export in &project.exports {
+            let export_dir = project_dir.join("exports").join(&export.id);
+            insert_export_package(db, &project.id, export, &project_dir, &export_dir)?;
+        }
+    }
+    Ok(())
+}
+
+fn recover_interrupted_jobs(db: &Connection) -> Result<(), String> {
+    let timestamp = now();
+    let message = "App restarted before the job completed.";
+    db.execute(
+        "UPDATE jobs
+         SET status = 'interrupted', updated_at = ?1, finished_at = ?1, error = COALESCE(error, ?2)
+         WHERE status IN ('queued', 'running', 'cancelling')",
+        params![timestamp, message],
+    )
+    .map_err(to_error)?;
+    db.execute(
+        "UPDATE training_runs
+         SET status = 'interrupted', updated_at = ?1, error = COALESCE(error, ?2)
+         WHERE status IN ('queued', 'preparing', 'running', 'cancelling')",
+        params![timestamp, message],
+    )
+    .map_err(to_error)?;
+    db.execute(
+        "UPDATE exports
+         SET status = 'failed', error = COALESCE(error, ?2)
+         WHERE status IN ('pending', 'validating')",
+        params![timestamp, message],
+    )
+    .map_err(to_error)?;
+    db.execute(
+        "UPDATE projects
+         SET status = CASE
+             WHEN EXISTS (SELECT 1 FROM exports WHERE exports.project_id = projects.id AND exports.status = 'ready') THEN 'exported'
+             WHEN EXISTS (SELECT 1 FROM audio_files WHERE audio_files.project_id = projects.id AND audio_files.status = 'ready') THEN 'ready'
+             ELSE 'draft'
+         END,
+         updated_at = ?1
+         WHERE status = 'training'",
+        params![timestamp],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn audit_missing_artifacts(db: &Connection) -> Result<(), String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT exports.id, projects.project_dir, exports.model_path, exports.package_path,
+                    exports.validation_path, exports.benchmark_path
+             FROM exports
+             JOIN projects ON projects.id = exports.project_id
+             WHERE exports.status = 'ready'",
+        )
+        .map_err(to_error)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(to_error)?;
+
+    let mut missing_exports = Vec::new();
+    for row in rows {
+        let (id, project_dir, model, package, validation, benchmark) = row.map_err(to_error)?;
+        let root = PathBuf::from(project_dir);
+        let missing = [model, package, validation, benchmark]
+            .iter()
+            .any(|path| !artifact_path(&root, path).exists());
+        if missing {
+            missing_exports.push(id);
+        }
+    }
+
+    for export_id in missing_exports {
+        update_export_status(
+            db,
+            &export_id,
+            &ExportStatus::Failed,
+            Some("One or more export artifacts are missing."),
+        )?;
+    }
+    Ok(())
+}
+
+fn load_all_projects(db: &Connection) -> Result<Vec<ProjectDetail>, String> {
+    let mut stmt = db
+        .prepare("SELECT id FROM projects ORDER BY updated_at DESC, created_at DESC")
+        .map_err(to_error)?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(to_error)?;
+    let mut projects = Vec::new();
+    for row in rows {
+        projects.push(load_project_detail(db, &row.map_err(to_error)?)?);
+    }
+    Ok(projects)
+}
+
+fn load_project_detail(db: &Connection, project_id: &str) -> Result<ProjectDetail, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT id, name, target_kind, status, created_at, updated_at, notes, project_dir
+             FROM projects
+             WHERE id = ?1",
+        )
+        .map_err(to_error)?;
+    let mut rows = stmt.query(params![project_id]).map_err(to_error)?;
+    let Some(row) = rows.next().map_err(to_error)? else {
+        return Err("Project not found".to_string());
+    };
+
+    let project_dir = row.get::<_, String>(7).map_err(to_error)?;
+    let mut project = ProjectDetail {
+        id: row.get(0).map_err(to_error)?,
+        name: row.get(1).map_err(to_error)?,
+        target_kind: enum_from_string(&row.get::<_, String>(2).map_err(to_error)?)?,
+        status: enum_from_string(&row.get::<_, String>(3).map_err(to_error)?)?,
+        created_at: row.get(4).map_err(to_error)?,
+        updated_at: row.get(5).map_err(to_error)?,
+        notes: row.get(6).map_err(to_error)?,
+        project_dir,
+        audio: load_audio_report(db, project_id)?,
+        runs: Vec::new(),
+        exports: Vec::new(),
+    };
+    let root = PathBuf::from(&project.project_dir);
+    project.runs = load_training_runs(db, project_id, &root)?;
+    project.exports = load_exports(db, project_id, &root)?;
+    Ok(project)
+}
+
+fn load_audio_report(db: &Connection, project_id: &str) -> Result<Option<AudioReport>, String> {
+    let raw = db
+        .query_row(
+            "SELECT report_json FROM audio_files WHERE project_id = ?1",
+            params![project_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(to_error)?;
+    raw.map(|value| serde_json::from_str(&value).map_err(to_error))
+        .transpose()
+}
+
+fn load_training_runs(
+    db: &Connection,
     project_id: &str,
-) -> Result<&'a mut ProjectDetail, String> {
-    store
-        .projects
-        .iter_mut()
-        .find(|project| project.id == project_id)
-        .ok_or_else(|| "Project not found".to_string())
+    project_dir: &Path,
+) -> Result<Vec<TrainingRun>, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT id, preset, status, device, epochs, created_at, updated_at, metrics_json, log_path
+             FROM training_runs
+             WHERE project_id = ?1
+             ORDER BY created_at ASC",
+        )
+        .map_err(to_error)?;
+    let rows = stmt
+        .query_map(params![project_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, u32>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, String>(8)?,
+            ))
+        })
+        .map_err(to_error)?;
+
+    let mut runs = Vec::new();
+    for row in rows {
+        let (id, preset, status, device, epochs, created_at, updated_at, metrics_json, log_path) =
+            row.map_err(to_error)?;
+        runs.push(TrainingRun {
+            id,
+            preset,
+            status: enum_from_string(&status)?,
+            device,
+            epochs,
+            created_at,
+            updated_at,
+            metrics: metrics_json
+                .map(|value| serde_json::from_str(&value).map_err(to_error))
+                .transpose()?,
+            log_path: artifact_path(project_dir, &log_path).display().to_string(),
+        });
+    }
+    Ok(runs)
+}
+
+fn load_exports(
+    db: &Connection,
+    project_id: &str,
+    project_dir: &Path,
+) -> Result<Vec<ExportPackage>, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT id, run_id, status, created_at, model_path, package_path, validation_path, benchmark_path
+             FROM exports
+             WHERE project_id = ?1
+             ORDER BY created_at ASC",
+        )
+        .map_err(to_error)?;
+    let rows = stmt
+        .query_map(params![project_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+            ))
+        })
+        .map_err(to_error)?;
+
+    let mut exports = Vec::new();
+    for row in rows {
+        let (
+            id,
+            run_id,
+            status,
+            created_at,
+            model_path,
+            package_path,
+            validation_path,
+            benchmark_path,
+        ) = row.map_err(to_error)?;
+        exports.push(ExportPackage {
+            id,
+            run_id,
+            status: enum_from_string(&status)?,
+            created_at,
+            model_path: artifact_path(project_dir, &model_path)
+                .display()
+                .to_string(),
+            package_path: artifact_path(project_dir, &package_path)
+                .display()
+                .to_string(),
+            validation_path: artifact_path(project_dir, &validation_path)
+                .display()
+                .to_string(),
+            benchmark_path: artifact_path(project_dir, &benchmark_path)
+                .display()
+                .to_string(),
+        });
+    }
+    Ok(exports)
+}
+
+fn load_project_events(
+    db: &Connection,
+    project_id: &str,
+    limit: u32,
+) -> Result<Vec<SidecarProgressEvent>, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT job_id, operation, stream, line, event_json, project_id, run_id, export_id, created_at
+             FROM (
+                SELECT id, job_id, operation, stream, line, event_json, project_id, run_id, export_id, created_at
+                FROM job_events
+                WHERE project_id = ?1
+                ORDER BY id DESC
+                LIMIT ?2
+             )
+             ORDER BY id ASC",
+        )
+        .map_err(to_error)?;
+    let rows = stmt
+        .query_map(params![project_id, limit], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, String>(8)?,
+            ))
+        })
+        .map_err(to_error)?;
+
+    let mut events = Vec::new();
+    for row in rows {
+        let (job_id, operation, stream, line, event_json, project_id, run_id, export_id, timestamp) =
+            row.map_err(to_error)?;
+        events.push(SidecarProgressEvent {
+            job_id,
+            operation,
+            stream,
+            line,
+            json: event_json
+                .map(|value| serde_json::from_str(&value).map_err(to_error))
+                .transpose()?,
+            project_id,
+            run_id,
+            export_id,
+            timestamp,
+        });
+    }
+    Ok(events)
+}
+
+fn insert_project(db: &Connection, project: &ProjectDetail) -> Result<(), String> {
+    db.execute(
+        "INSERT OR REPLACE INTO projects
+         (id, name, target_kind, status, created_at, updated_at, notes, project_dir)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            project.id,
+            project.name,
+            enum_to_string(&project.target_kind)?,
+            enum_to_string(&project.status)?,
+            project.created_at,
+            project.updated_at,
+            project.notes,
+            project.project_dir
+        ],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn upsert_audio_report(
+    db: &Connection,
+    project_id: &str,
+    report: &AudioReport,
+) -> Result<(), String> {
+    db.execute(
+        "INSERT INTO audio_files (project_id, status, report_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(project_id) DO UPDATE SET
+            status = excluded.status,
+            report_json = excluded.report_json,
+            updated_at = excluded.updated_at",
+        params![
+            project_id,
+            enum_to_string(&report.status)?,
+            serde_json::to_string(report).map_err(to_error)?,
+            now()
+        ],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn insert_training_run(
+    db: &Connection,
+    project_id: &str,
+    run: &TrainingRun,
+    project_dir: &Path,
+    run_dir: &Path,
+) -> Result<(), String> {
+    db.execute(
+        "INSERT OR REPLACE INTO training_runs
+         (id, project_id, preset, status, device, epochs, created_at, updated_at, metrics_json, log_path, run_dir, error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL)",
+        params![
+            run.id,
+            project_id,
+            run.preset,
+            enum_to_string(&run.status)?,
+            run.device,
+            run.epochs,
+            run.created_at,
+            run.updated_at,
+            optional_json(&run.metrics)?,
+            relative_path_string(project_dir, Path::new(&run.log_path)),
+            relative_path_string(project_dir, run_dir)
+        ],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn update_training_run_success(db: &Connection, run: &TrainingRun) -> Result<(), String> {
+    db.execute(
+        "UPDATE training_runs
+         SET status = ?1, device = ?2, epochs = ?3, updated_at = ?4, metrics_json = ?5, error = NULL
+         WHERE id = ?6",
+        params![
+            enum_to_string(&RunStatus::Completed)?,
+            run.device,
+            run.epochs,
+            run.updated_at,
+            optional_json(&run.metrics)?,
+            run.id
+        ],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn update_training_run_failure(db: &Connection, run_id: &str, error: &str) -> Result<(), String> {
+    db.execute(
+        "UPDATE training_runs
+         SET status = ?1, updated_at = ?2, error = ?3
+         WHERE id = ?4",
+        params![enum_to_string(&RunStatus::Failed)?, now(), error, run_id],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn insert_export_package(
+    db: &Connection,
+    project_id: &str,
+    package: &ExportPackage,
+    project_dir: &Path,
+    export_dir: &Path,
+) -> Result<(), String> {
+    db.execute(
+        "INSERT OR REPLACE INTO exports
+         (id, project_id, run_id, status, created_at, model_path, package_path, validation_path, benchmark_path, export_dir, error)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL)",
+        params![
+            package.id,
+            project_id,
+            package.run_id,
+            enum_to_string(&package.status)?,
+            package.created_at,
+            relative_path_string(project_dir, Path::new(&package.model_path)),
+            relative_path_string(project_dir, Path::new(&package.package_path)),
+            relative_path_string(project_dir, Path::new(&package.validation_path)),
+            relative_path_string(project_dir, Path::new(&package.benchmark_path)),
+            relative_path_string(project_dir, export_dir)
+        ],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn update_export_status(
+    db: &Connection,
+    export_id: &str,
+    status: &ExportStatus,
+    error: Option<&str>,
+) -> Result<(), String> {
+    db.execute(
+        "UPDATE exports SET status = ?1, error = ?2 WHERE id = ?3",
+        params![enum_to_string(status)?, error, export_id],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn update_project_status(
+    db: &Connection,
+    project_id: &str,
+    status: &ProjectStatus,
+    updated_at: &str,
+) -> Result<(), String> {
+    db.execute(
+        "UPDATE projects SET status = ?1, updated_at = ?2 WHERE id = ?3",
+        params![enum_to_string(status)?, updated_at, project_id],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn update_project_notes(
+    db: &Connection,
+    project_id: &str,
+    notes: &str,
+    updated_at: &str,
+) -> Result<(), String> {
+    db.execute(
+        "UPDATE projects SET notes = ?1, updated_at = ?2 WHERE id = ?3",
+        params![notes, updated_at, project_id],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn create_job(
+    state: &AppState,
+    operation: &str,
+    project_id: Option<&str>,
+    run_id: Option<&str>,
+    export_id: Option<&str>,
+) -> Result<String, String> {
+    let job_id = format!("job_{}", Uuid::new_v4().simple());
+    let timestamp = now();
+    let db = state.db.lock().map_err(lock_error)?;
+    db.execute(
+        "INSERT INTO jobs
+         (id, project_id, run_id, export_id, operation, status, created_at, updated_at, started_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
+        params![
+            job_id,
+            project_id,
+            run_id,
+            export_id,
+            operation,
+            enum_to_string(&JobStatus::Running)?,
+            timestamp
+        ],
+    )
+    .map_err(to_error)?;
+    Ok(job_id)
+}
+
+fn mark_job_completed(state: &AppState, job_id: &str) -> Result<(), String> {
+    update_job_status(state, job_id, &JobStatus::Completed, None)
+}
+
+fn mark_job_failed(state: &AppState, job_id: &str, error: &str) -> Result<(), String> {
+    update_job_status(state, job_id, &JobStatus::Failed, Some(error))
+}
+
+fn update_job_status(
+    state: &AppState,
+    job_id: &str,
+    status: &JobStatus,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let timestamp = now();
+    let db = state.db.lock().map_err(lock_error)?;
+    db.execute(
+        "UPDATE jobs
+         SET status = ?1, updated_at = ?2, finished_at = ?2, error = ?3
+         WHERE id = ?4",
+        params![enum_to_string(status)?, timestamp, error, job_id],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn persist_job_event(event: &SidecarProgressEvent, state: &AppState) -> Result<(), String> {
+    let db = state.db.lock().map_err(lock_error)?;
+    db.execute(
+        "INSERT INTO job_events
+         (job_id, project_id, run_id, export_id, operation, stream, line, event_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            event.job_id,
+            event.project_id,
+            event.run_id,
+            event.export_id,
+            event.operation,
+            event.stream,
+            event.line,
+            optional_json(&event.json)?,
+            event.timestamp
+        ],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn enum_to_string<T: Serialize>(value: &T) -> Result<String, String> {
+    serde_json::to_value(value)
+        .map_err(to_error)?
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| "Enum did not serialize to a string.".to_string())
+}
+
+fn enum_from_string<T: DeserializeOwned>(value: &str) -> Result<T, String> {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).map_err(to_error)
+}
+
+fn optional_json<T: Serialize>(value: &Option<T>) -> Result<Option<String>, String> {
+    value
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(to_error)
+}
+
+fn relative_path_string(project_dir: &Path, path: &Path) -> String {
+    path.strip_prefix(project_dir)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn artifact_path(project_dir: &Path, stored_path: &str) -> PathBuf {
+    let path = PathBuf::from(stored_path);
+    if path.is_absolute() {
+        path
+    } else {
+        project_dir.join(path)
+    }
 }
 
 fn summarize_project(project: &ProjectDetail) -> ProjectSummary {
@@ -917,6 +1759,7 @@ fn join_stream_reader(
 
 fn emit_sidecar_line(app: &tauri::AppHandle, context: &SidecarContext, stream: &str, line: &str) {
     let payload = SidecarProgressEvent {
+        job_id: context.job_id.clone(),
         operation: context.operation.clone(),
         stream: stream.to_string(),
         line: line.to_string(),
@@ -926,6 +1769,8 @@ fn emit_sidecar_line(app: &tauri::AppHandle, context: &SidecarContext, stream: &
         export_id: context.export_id.clone(),
         timestamp: now(),
     };
+    let state = app.state::<AppState>();
+    let _ = persist_job_event(&payload, &state);
     let _ = app.emit("sidecar-progress", payload);
 }
 
@@ -977,4 +1822,74 @@ fn lock_error<T>(_: std::sync::PoisonError<T>) -> String {
 
 fn to_error(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sqlite_store_persists_events_and_recovers_running_jobs() {
+        let mut db = Connection::open_in_memory().expect("open in-memory sqlite");
+        configure_database(&mut db).expect("migrate sqlite");
+
+        let root = std::env::temp_dir().join(format!("rttrainer-test-{}", Uuid::new_v4().simple()));
+        fs::create_dir_all(&root).expect("create temp project root");
+        let timestamp = now();
+        let project = ProjectDetail {
+            id: "project_test".to_string(),
+            name: "SQLite test".to_string(),
+            target_kind: TargetKind::Generic,
+            status: ProjectStatus::Draft,
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+            notes: String::new(),
+            project_dir: root.display().to_string(),
+            audio: None,
+            runs: Vec::new(),
+            exports: Vec::new(),
+        };
+        insert_project(&db, &project).expect("insert project");
+
+        let state = AppState {
+            db_path: PathBuf::from(":memory:"),
+            projects_dir: root.clone(),
+            workspace_root: root,
+            db: Mutex::new(db),
+        };
+        let job_id = create_job(
+            &state,
+            "train",
+            Some("project_test"),
+            Some("run_test"),
+            None,
+        )
+        .expect("create job");
+        let event = SidecarProgressEvent {
+            job_id: job_id.clone(),
+            operation: "train".to_string(),
+            stream: "stdout".to_string(),
+            line: r#"{"type":"epoch","epoch":1}"#.to_string(),
+            json: Some(serde_json::json!({"type": "epoch", "epoch": 1})),
+            project_id: Some("project_test".to_string()),
+            run_id: Some("run_test".to_string()),
+            export_id: None,
+            timestamp: now(),
+        };
+        persist_job_event(&event, &state).expect("persist job event");
+
+        let db = state.db.lock().expect("lock sqlite");
+        let events = load_project_events(&db, "project_test", 120).expect("load events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].job_id, job_id);
+        recover_interrupted_jobs(&db).expect("recover interrupted jobs");
+        let status: String = db
+            .query_row(
+                "SELECT status FROM jobs WHERE id = ?1",
+                params![events[0].job_id],
+                |row| row.get(0),
+            )
+            .expect("query recovered job status");
+        assert_eq!(status, "interrupted");
+    }
 }

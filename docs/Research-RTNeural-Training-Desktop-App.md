@@ -427,7 +427,7 @@ Goal: build the product core without UI.
 Tasks:
 
 - `rttrainer prepare input.wav target.wav`
-- `rttrainer train project.json`
+- `rttrainer train train-manifest.json`
 - `rttrainer export run-id`
 - `rtneural-validator model.json test-input.wav`
 

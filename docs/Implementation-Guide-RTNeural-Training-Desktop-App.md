@@ -86,7 +86,6 @@ The app should store structured state in SQLite and large artifacts on disk.
 ```text
 projects/
   <project-id>/
-    project.json
     audio/
       original/
       prepared/

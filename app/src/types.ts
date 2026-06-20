@@ -1,8 +1,15 @@
 export type ProjectStatus = "draft" | "ready" | "training" | "exported";
 export type TargetKind = "amp" | "pedal" | "line" | "generic";
 export type AudioStatus = "missing" | "warning" | "ready";
-export type RunStatus = "running" | "completed" | "failed" | "interrupted";
-export type ExportStatus = "blocked" | "ready";
+export type RunStatus =
+  | "queued"
+  | "preparing"
+  | "running"
+  | "cancelling"
+  | "completed"
+  | "failed"
+  | "interrupted";
+export type ExportStatus = "blocked" | "pending" | "validating" | "failed" | "ready";
 
 export interface AppStatus {
   version: string;
@@ -116,6 +123,7 @@ export interface UpdateNotesRequest {
 }
 
 export interface SidecarProgressEvent {
+  job_id: string;
   operation: string;
   stream: "stdout" | "stderr" | "system" | string;
   line: string;

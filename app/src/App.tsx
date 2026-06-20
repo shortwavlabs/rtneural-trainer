@@ -122,8 +122,12 @@ export default function App() {
   async function loadProject(projectId: string) {
     try {
       setError(null);
-      const nextProject = await api.getProject(projectId);
+      const [nextProject, nextEvents] = await Promise.all([
+        api.getProject(projectId),
+        api.listProjectEvents(projectId),
+      ]);
       setProject(nextProject);
+      setProgressEvents(nextEvents);
     } catch (caught) {
       setError(toMessage(caught));
     }
