@@ -192,6 +192,12 @@ struct RunControlRequest {
 }
 
 #[derive(Deserialize)]
+struct RunPreviewRequest {
+    project_id: String,
+    run_id: String,
+}
+
+#[derive(Deserialize)]
 struct ExportRunRequest {
     project_id: String,
     run_id: String,
@@ -246,6 +252,36 @@ struct SidecarProgressEvent {
     run_id: Option<String>,
     export_id: Option<String>,
     timestamp: String,
+}
+
+#[derive(Serialize)]
+struct RunPreview {
+    project_id: String,
+    run_id: String,
+    run_dir: String,
+    report_path: Option<String>,
+    report: Option<serde_json::Value>,
+    artifacts: Vec<RunPreviewArtifact>,
+}
+
+#[derive(Serialize)]
+struct RunPreviewArtifact {
+    kind: String,
+    label: String,
+    path: String,
+    exists: bool,
+    size_bytes: Option<u64>,
+    sample_rate: Option<u32>,
+    duration_seconds: Option<f64>,
+    peak: Option<f64>,
+    peaks: Vec<f64>,
+}
+
+struct WavPreviewSummary {
+    sample_rate: u32,
+    duration_seconds: f64,
+    peak: f64,
+    peaks: Vec<f64>,
 }
 
 #[derive(Deserialize)]
@@ -313,6 +349,51 @@ fn list_project_events(
 ) -> Result<Vec<SidecarProgressEvent>, String> {
     let db = state.db.lock().map_err(lock_error)?;
     load_project_events(&db, &project_id, 120)
+}
+
+#[tauri::command]
+fn get_run_preview(
+    state: tauri::State<AppState>,
+    payload: RunPreviewRequest,
+) -> Result<RunPreview, String> {
+    let (project_dir, run_dir) = {
+        let db = state.db.lock().map_err(lock_error)?;
+        let project = load_project_detail(&db, &payload.project_id)?;
+        if !project.runs.iter().any(|run| run.id == payload.run_id) {
+            return Err("Run not found".to_string());
+        }
+        let project_dir = PathBuf::from(&project.project_dir);
+        let run_dir = artifact_path(&project_dir, &training_run_dir(&db, &payload.run_id)?);
+        (project_dir, run_dir)
+    };
+
+    ensure_artifact_inside(&project_dir, &run_dir)?;
+    let report_path = run_dir.join("training-report.json");
+    let report = if report_path.exists() {
+        Some(read_json::<serde_json::Value>(&report_path)?)
+    } else {
+        None
+    };
+    let preview_dir = run_dir.join("previews");
+    let artifacts = [
+        ("target", "Target", "target.wav"),
+        ("prediction", "Prediction", "prediction.wav"),
+        ("residual", "Residual", "residual.wav"),
+    ]
+    .iter()
+    .map(|(kind, label, file_name)| run_preview_artifact(kind, label, &preview_dir.join(file_name)))
+    .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(RunPreview {
+        project_id: payload.project_id,
+        run_id: payload.run_id,
+        run_dir: run_dir.display().to_string(),
+        report_path: report_path
+            .exists()
+            .then(|| report_path.display().to_string()),
+        report,
+        artifacts,
+    })
 }
 
 #[tauri::command]
@@ -849,6 +930,7 @@ pub fn run() {
             list_projects,
             get_project,
             list_project_events,
+            get_run_preview,
             create_project,
             update_project_audio,
             start_training,
@@ -1736,6 +1818,155 @@ fn artifact_path(project_dir: &Path, stored_path: &str) -> PathBuf {
     }
 }
 
+fn ensure_artifact_inside(project_dir: &Path, path: &Path) -> Result<(), String> {
+    let root = project_dir.canonicalize().map_err(to_error)?;
+    let target = path.canonicalize().map_err(to_error)?;
+    if target.starts_with(&root) {
+        Ok(())
+    } else {
+        Err("Artifact path is outside the project directory.".to_string())
+    }
+}
+
+fn run_preview_artifact(
+    kind: &str,
+    label: &str,
+    path: &Path,
+) -> Result<RunPreviewArtifact, String> {
+    let metadata = fs::metadata(path).ok();
+    let summary = if metadata.is_some() {
+        Some(read_wav_preview_summary(path, 56)?)
+    } else {
+        None
+    };
+    Ok(RunPreviewArtifact {
+        kind: kind.to_string(),
+        label: label.to_string(),
+        path: path.display().to_string(),
+        exists: metadata.is_some(),
+        size_bytes: metadata.map(|item| item.len()),
+        sample_rate: summary.as_ref().map(|item| item.sample_rate),
+        duration_seconds: summary.as_ref().map(|item| item.duration_seconds),
+        peak: summary.as_ref().map(|item| item.peak),
+        peaks: summary.map(|item| item.peaks).unwrap_or_default(),
+    })
+}
+
+fn read_wav_preview_summary(path: &Path, bins: usize) -> Result<WavPreviewSummary, String> {
+    let bytes = fs::read(path).map_err(to_error)?;
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(format!("{} is not a RIFF/WAVE file.", path.display()));
+    }
+
+    let mut sample_rate = None;
+    let mut channels = None;
+    let mut bits_per_sample = None;
+    let mut data_range = None;
+    let mut offset = 12usize;
+    while offset + 8 <= bytes.len() {
+        let chunk_id = &bytes[offset..offset + 4];
+        let chunk_size =
+            u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().map_err(to_error)?)
+                as usize;
+        let chunk_start = offset + 8;
+        let chunk_end = chunk_start.saturating_add(chunk_size);
+        if chunk_end > bytes.len() {
+            return Err(format!("{} has a truncated WAV chunk.", path.display()));
+        }
+
+        if chunk_id == b"fmt " {
+            if chunk_size < 16 {
+                return Err(format!("{} has an invalid fmt chunk.", path.display()));
+            }
+            let format = u16::from_le_bytes(
+                bytes[chunk_start..chunk_start + 2]
+                    .try_into()
+                    .map_err(to_error)?,
+            );
+            if format != 1 {
+                return Err(format!(
+                    "{} uses unsupported WAV format {format}; expected PCM.",
+                    path.display()
+                ));
+            }
+            channels = Some(u16::from_le_bytes(
+                bytes[chunk_start + 2..chunk_start + 4]
+                    .try_into()
+                    .map_err(to_error)?,
+            ));
+            sample_rate = Some(u32::from_le_bytes(
+                bytes[chunk_start + 4..chunk_start + 8]
+                    .try_into()
+                    .map_err(to_error)?,
+            ));
+            bits_per_sample = Some(u16::from_le_bytes(
+                bytes[chunk_start + 14..chunk_start + 16]
+                    .try_into()
+                    .map_err(to_error)?,
+            ));
+        } else if chunk_id == b"data" {
+            data_range = Some((chunk_start, chunk_end));
+        }
+
+        offset = chunk_end + (chunk_size % 2);
+    }
+
+    let sample_rate =
+        sample_rate.ok_or_else(|| format!("{} is missing sample rate.", path.display()))?;
+    let channels =
+        channels.ok_or_else(|| format!("{} is missing channel count.", path.display()))?;
+    let bits_per_sample =
+        bits_per_sample.ok_or_else(|| format!("{} is missing bit depth.", path.display()))?;
+    if channels == 0 {
+        return Err(format!("{} has zero channels.", path.display()));
+    }
+    if bits_per_sample != 16 {
+        return Err(format!(
+            "{} uses {bits_per_sample}-bit samples; expected 16-bit PCM.",
+            path.display()
+        ));
+    }
+
+    let (data_start, data_end) =
+        data_range.ok_or_else(|| format!("{} is missing audio data.", path.display()))?;
+    let bytes_per_frame = usize::from(channels) * 2;
+    let frame_count = (data_end - data_start) / bytes_per_frame;
+    if frame_count == 0 {
+        return Ok(WavPreviewSummary {
+            sample_rate,
+            duration_seconds: 0.0,
+            peak: 0.0,
+            peaks: vec![0.0; bins],
+        });
+    }
+
+    let mut peaks = vec![0.0_f64; bins.max(1)];
+    let mut peak = 0.0_f64;
+    for frame_index in 0..frame_count {
+        let frame_start = data_start + frame_index * bytes_per_frame;
+        let mut frame_peak = 0.0_f64;
+        for channel in 0..usize::from(channels) {
+            let sample_start = frame_start + channel * 2;
+            let sample = i16::from_le_bytes(
+                bytes[sample_start..sample_start + 2]
+                    .try_into()
+                    .map_err(to_error)?,
+            );
+            frame_peak = frame_peak.max((f64::from(sample) / 32768.0).abs());
+        }
+        peak = peak.max(frame_peak);
+        let bin = ((frame_index * peaks.len()) / frame_count).min(peaks.len() - 1);
+        peaks[bin] = peaks[bin].max(frame_peak);
+    }
+
+    Ok(WavPreviewSummary {
+        sample_rate,
+        duration_seconds: frame_count as f64 / f64::from(sample_rate),
+        peak,
+        peaks,
+    })
+}
+
 fn summarize_project(project: &ProjectDetail) -> ProjectSummary {
     let best_quality = project
         .runs
@@ -2260,6 +2491,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wav_preview_summary_reads_pcm16_peaks() {
+        let root =
+            std::env::temp_dir().join(format!("rttrainer-wav-test-{}", Uuid::new_v4().simple()));
+        fs::create_dir_all(&root).expect("create temp dir");
+        let wav_path = root.join("preview.wav");
+        write_test_wav(&wav_path, &[0, 16_384, -32_768, 8_192], 48_000);
+
+        let summary = read_wav_preview_summary(&wav_path, 4).expect("read preview summary");
+        assert_eq!(summary.sample_rate, 48_000);
+        assert_eq!(summary.peaks.len(), 4);
+        assert!((summary.duration_seconds - (4.0 / 48_000.0)).abs() < f64::EPSILON);
+        assert_eq!(summary.peak, 1.0);
+    }
+
+    #[test]
     fn sqlite_store_persists_events_and_recovers_running_jobs() {
         let mut db = Connection::open_in_memory().expect("open in-memory sqlite");
         configure_database(&mut db).expect("migrate sqlite");
@@ -2388,5 +2634,27 @@ mod tests {
             )
             .expect("query recovered project status");
         assert_eq!(project_status, "ready");
+    }
+
+    fn write_test_wav(path: &Path, samples: &[i16], sample_rate: u32) {
+        let data_size = samples.len() as u32 * 2;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_size.to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        fs::write(path, bytes).expect("write wav");
     }
 }

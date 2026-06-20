@@ -6,6 +6,8 @@ import type {
   ProjectDetail,
   ProjectSummary,
   RunControlRequest,
+  RunPreview,
+  RunPreviewRequest,
   SidecarProgressEvent,
   StartTrainingRequest,
   UpdateAudioRequest,
@@ -28,6 +30,8 @@ export const api = {
   listProjects: () => call<ProjectSummary[]>("list_projects"),
   listProjectEvents: (projectId: string) =>
     call<SidecarProgressEvent[]>("list_project_events", { project_id: projectId }),
+  getRunPreview: (payload: RunPreviewRequest) =>
+    call<RunPreview>("get_run_preview", { payload }),
   createProject: (payload: CreateProjectRequest) =>
     call<ProjectDetail>("create_project", { payload }),
   getProject: (projectId: string) =>

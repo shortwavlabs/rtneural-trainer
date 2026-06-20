@@ -122,6 +122,32 @@ export interface RunControlRequest {
   run_id: string;
 }
 
+export interface RunPreviewRequest {
+  project_id: string;
+  run_id: string;
+}
+
+export interface RunPreviewArtifact {
+  kind: "target" | "prediction" | "residual" | string;
+  label: string;
+  path: string;
+  exists: boolean;
+  size_bytes: number | null;
+  sample_rate: number | null;
+  duration_seconds: number | null;
+  peak: number | null;
+  peaks: number[];
+}
+
+export interface RunPreview {
+  project_id: string;
+  run_id: string;
+  run_dir: string;
+  report_path: string | null;
+  report: Record<string, unknown> | null;
+  artifacts: RunPreviewArtifact[];
+}
+
 export interface UpdateNotesRequest {
   project_id: string;
   notes: string;
