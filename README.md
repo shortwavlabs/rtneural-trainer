@@ -12,9 +12,14 @@ The repo currently contains:
 - `scripts/`: RTNeural support and Keras fixture helper scripts.
 - `docs/`: research notes and implementation plan.
 
-The implementation is still a prototype. The current train/evaluate/export CLI
-uses the PyTorch training extra, while the RTNeural JSON strategy and fixture
-scripts are moving toward TensorFlow/Keras as the canonical exporter path.
+The implementation is still a prototype. The desktop app now calls the real
+Python `prepare`, `train`, and `export` commands, and the export path invokes the
+native RTNeural validator/benchmark sidecar. The commands resolve after the job
+finishes, while stdout/stderr stream to the UI as `sidecar-progress` events for
+live prepare, training, export, validation, and benchmark updates. The current
+train/evaluate/export CLI uses the PyTorch training extra, while the RTNeural
+JSON strategy and fixture scripts are moving toward TensorFlow/Keras as the
+canonical exporter path.
 
 ## Requirements
 

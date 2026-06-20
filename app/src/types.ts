@@ -114,3 +114,14 @@ export interface UpdateNotesRequest {
   project_id: string;
   notes: string;
 }
+
+export interface SidecarProgressEvent {
+  operation: string;
+  stream: "stdout" | "stderr" | "system" | string;
+  line: string;
+  json: Record<string, unknown> | null;
+  project_id: string | null;
+  run_id: string | null;
+  export_id: string | null;
+  timestamp: string;
+}

@@ -2,10 +2,13 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::Mutex,
+    thread::{self, JoinHandle},
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
 #[derive(Clone, Serialize)]
@@ -182,7 +185,58 @@ struct Store {
 struct AppState {
     store_path: PathBuf,
     projects_dir: PathBuf,
+    workspace_root: PathBuf,
     store: Mutex<Store>,
+}
+
+struct SidecarOutput {
+    stdout: String,
+    stderr: String,
+}
+
+#[derive(Clone)]
+struct SidecarContext {
+    operation: String,
+    project_id: Option<String>,
+    run_id: Option<String>,
+    export_id: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+struct SidecarProgressEvent {
+    operation: String,
+    stream: String,
+    line: String,
+    json: Option<serde_json::Value>,
+    project_id: Option<String>,
+    run_id: Option<String>,
+    export_id: Option<String>,
+    timestamp: String,
+}
+
+#[derive(Deserialize)]
+struct PrepareReport {
+    input: AudioFileReport,
+    target: AudioFileReport,
+    latency: LatencyReport,
+    warnings: Vec<String>,
+    status: AudioStatus,
+}
+
+#[derive(Deserialize)]
+struct LatencyReport {
+    estimated_samples: i32,
+    confidence: f64,
+}
+
+#[derive(Deserialize)]
+struct TrainingReport {
+    run_id: String,
+    preset: String,
+    device: String,
+    epochs: u32,
+    metrics: TrainingMetrics,
+    created_at: String,
 }
 
 #[tauri::command]
@@ -262,51 +316,77 @@ fn create_project(
 
 #[tauri::command]
 fn update_project_audio(
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
     payload: UpdateAudioRequest,
 ) -> Result<ProjectDetail, String> {
-    let mut store = state.store.lock().map_err(lock_error)?;
-    let project = find_project_mut(&mut store, &payload.project_id)?;
-    let project_dir = PathBuf::from(&project.project_dir);
+    if payload.input_path.trim().is_empty() {
+        return Err("Input path is required.".to_string());
+    }
+    if payload.target_path.trim().is_empty() {
+        return Err("Target path is required.".to_string());
+    }
+    if payload.input_path == payload.target_path {
+        return Err("Input and target paths should be different files.".to_string());
+    }
+
+    let project_dir = {
+        let store = state.store.lock().map_err(lock_error)?;
+        store
+            .projects
+            .iter()
+            .find(|project| project.id == payload.project_id)
+            .map(|project| PathBuf::from(&project.project_dir))
+            .ok_or_else(|| "Project not found".to_string())?
+    };
+
     let prepared_dir = project_dir.join("audio/prepared");
     fs::create_dir_all(&prepared_dir).map_err(to_error)?;
 
-    let mut warnings = Vec::new();
-    collect_audio_warning(&payload.input_path, "Input", &mut warnings);
-    collect_audio_warning(&payload.target_path, "Target", &mut warnings);
-    if payload.input_path == payload.target_path {
-        warnings.push("Input and target paths should be different files.".to_string());
-    }
+    let manifest_path = project_dir.join("audio/prepare-manifest.json");
+    write_json(
+        &manifest_path,
+        &serde_json::json!({
+            "input_path": payload.input_path,
+            "target_path": payload.target_path,
+            "output_dir": prepared_dir
+        }),
+    )?;
+    run_rttrainer(
+        &app,
+        &state,
+        "prepare",
+        &manifest_path,
+        SidecarContext {
+            operation: "prepare".to_string(),
+            project_id: Some(payload.project_id.clone()),
+            run_id: None,
+            export_id: None,
+        },
+    )?;
 
-    let clipped = payload.target_path.to_lowercase().contains("clip");
-    if clipped {
-        warnings.push("Target path suggests a clipped capture; inspect before training.".to_string());
-    }
-
-    let status = if warnings.is_empty() {
-        AudioStatus::Ready
-    } else {
-        AudioStatus::Warning
-    };
+    let prepare_report_path = prepared_dir.join("preparation-report.json");
+    let prepare_report: PrepareReport = read_json(&prepare_report_path)?;
 
     let report = AudioReport {
-        input: audio_report(&payload.input_path, -1.2, -18.4, false),
-        target: audio_report(&payload.target_path, -0.8, -15.6, clipped),
-        latency_samples: 123,
-        latency_confidence: if warnings.is_empty() { 0.94 } else { 0.42 },
-        warnings,
-        status: status.clone(),
+        input: prepare_report.input,
+        target: prepare_report.target,
+        latency_samples: prepare_report.latency.estimated_samples,
+        latency_confidence: prepare_report.latency.confidence,
+        warnings: prepare_report.warnings,
+        status: prepare_report.status,
     };
 
+    let mut store = state.store.lock().map_err(lock_error)?;
+    let project = find_project_mut(&mut store, &payload.project_id)?;
     project.audio = Some(report.clone());
-    project.status = if matches!(status, AudioStatus::Ready) {
+    project.status = if matches!(report.status, AudioStatus::Ready) {
         ProjectStatus::Ready
     } else {
         ProjectStatus::Draft
     };
     project.updated_at = now();
 
-    write_json(prepared_dir.join("preparation-report.json"), &report)?;
     write_json(project_dir.join("project.json"), &*project)?;
     let cloned = project.clone();
     persist(&state, &store)?;
@@ -315,67 +395,82 @@ fn update_project_audio(
 
 #[tauri::command]
 fn start_training(
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
     payload: StartTrainingRequest,
 ) -> Result<ProjectDetail, String> {
-    let mut store = state.store.lock().map_err(lock_error)?;
-    let project = find_project_mut(&mut store, &payload.project_id)?;
-
-    let audio_ready = project
-        .audio
-        .as_ref()
-        .map(|audio| audio.status == AudioStatus::Ready)
-        .unwrap_or(false);
-    if !audio_ready {
-        return Err("Audio must pass preflight before training.".to_string());
-    }
-
     let run_id = format!("run_{}", Uuid::new_v4().simple());
-    let run_created_at = now();
-    let project_dir = PathBuf::from(&project.project_dir);
-    let run_dir = project_dir.join("runs").join(&run_id);
-    let checkpoint_dir = run_dir.join("checkpoints");
-    let preview_dir = run_dir.join("previews");
-    fs::create_dir_all(&checkpoint_dir).map_err(to_error)?;
-    fs::create_dir_all(&preview_dir).map_err(to_error)?;
+    let project_dir = {
+        let store = state.store.lock().map_err(lock_error)?;
+        let project = store
+            .projects
+            .iter()
+            .find(|project| project.id == payload.project_id)
+            .ok_or_else(|| "Project not found".to_string())?;
+        let audio_ready = project
+            .audio
+            .as_ref()
+            .map(|audio| audio.status == AudioStatus::Ready)
+            .unwrap_or(false);
+        if !audio_ready {
+            return Err("Audio must pass preflight before training.".to_string());
+        }
+        PathBuf::from(&project.project_dir)
+    };
 
-    let metrics = metrics_for_preset(&payload.preset);
-    let log_path = run_dir.join("events.jsonl");
-    let event_log = [
-        json_line("run_started", &run_id, 0, None),
-        json_line("epoch", &run_id, 20, Some(metrics.esr * 1.8)),
-        json_line("epoch", &run_id, 40, Some(metrics.esr * 1.2)),
-        json_line("epoch", &run_id, 60, Some(metrics.esr)),
-        json_line("run_finished", &run_id, 60, Some(metrics.esr)),
-    ]
-    .join("\n");
-    fs::write(&log_path, format!("{event_log}\n")).map_err(to_error)?;
+    let run_dir = project_dir.join("runs").join(&run_id);
+    fs::create_dir_all(&run_dir).map_err(to_error)?;
+    let manifest_path = run_dir.join("train-manifest.json");
     write_json(
-        checkpoint_dir.join("best-checkpoint.json"),
+        &manifest_path,
         &serde_json::json!({
-            "schema_version": 1,
+            "run_id": &run_id,
+            "run_dir": &run_dir,
+            "prepared_dir": project_dir.join("audio/prepared"),
             "preset": &payload.preset,
-            "format": "simulated-state-dict",
-            "ready_for_export": true
+            "epochs": 20,
+            "batch_size": 16,
+            "learning_rate": 0.001,
+            "sequence_length": 1024,
+            "max_windows": 512,
+            "seed": 1337
         }),
     )?;
-    write_json(run_dir.join("metrics.json"), &metrics)?;
-    write_preview_file(preview_dir.join("target-preview.wav"), "target preview")?;
-    write_preview_file(preview_dir.join("prediction-preview.wav"), "prediction preview")?;
-    write_preview_file(preview_dir.join("residual-preview.wav"), "residual preview")?;
+
+    let sidecar = run_rttrainer(
+        &app,
+        &state,
+        "train",
+        &manifest_path,
+        SidecarContext {
+            operation: "train".to_string(),
+            project_id: Some(payload.project_id.clone()),
+            run_id: Some(run_id.clone()),
+            export_id: None,
+        },
+    )?;
+    let log_path = run_dir.join("events.jsonl");
+    fs::write(&log_path, sidecar.stdout).map_err(to_error)?;
+    if !sidecar.stderr.trim().is_empty() {
+        fs::write(run_dir.join("stderr.log"), sidecar.stderr).map_err(to_error)?;
+    }
+
+    let report: TrainingReport = read_json(&run_dir.join("training-report.json"))?;
 
     let run = TrainingRun {
-        id: run_id,
-        preset: payload.preset,
+        id: report.run_id,
+        preset: report.preset,
         status: RunStatus::Completed,
-        device: detected_device(),
-        epochs: 60,
-        created_at: run_created_at.clone(),
-        updated_at: run_created_at,
-        metrics: Some(metrics),
+        device: report.device,
+        epochs: report.epochs,
+        created_at: report.created_at.clone(),
+        updated_at: now(),
+        metrics: Some(report.metrics),
         log_path: log_path.display().to_string(),
     };
 
+    let mut store = state.store.lock().map_err(lock_error)?;
+    let project = find_project_mut(&mut store, &payload.project_id)?;
     project.status = ProjectStatus::Ready;
     project.updated_at = now();
     project.runs.push(run);
@@ -387,28 +482,41 @@ fn start_training(
 
 #[tauri::command]
 fn export_run(
+    app: tauri::AppHandle,
     state: tauri::State<AppState>,
     payload: ExportRunRequest,
 ) -> Result<ProjectDetail, String> {
-    let mut store = state.store.lock().map_err(lock_error)?;
-    let project = find_project_mut(&mut store, &payload.project_id)?;
-    let run = project
-        .runs
-        .iter()
-        .find(|run| run.id == payload.run_id)
-        .cloned()
-        .ok_or_else(|| "Run not found".to_string())?;
-    let metrics = run
-        .metrics
-        .clone()
-        .ok_or_else(|| "Run has no metrics to export.".to_string())?;
-
-    if metrics.realtime_factor < 20.0 {
-        return Err("Benchmark gate failed for realtime export.".to_string());
-    }
-
     let export_id = format!("export_{}", Uuid::new_v4().simple());
-    let project_dir = PathBuf::from(&project.project_dir);
+    let (project_name, project_id, project_dir, run, sample_rate, latency_samples) = {
+        let store = state.store.lock().map_err(lock_error)?;
+        let project = store
+            .projects
+            .iter()
+            .find(|project| project.id == payload.project_id)
+            .ok_or_else(|| "Project not found".to_string())?;
+        let run = project
+            .runs
+            .iter()
+            .find(|run| run.id == payload.run_id)
+            .cloned()
+            .ok_or_else(|| "Run not found".to_string())?;
+        if run.metrics.is_none() {
+            return Err("Run has no metrics to export.".to_string());
+        }
+        let audio = project
+            .audio
+            .as_ref()
+            .ok_or_else(|| "Audio must be prepared before export.".to_string())?;
+        (
+            project.name.clone(),
+            project.id.clone(),
+            PathBuf::from(&project.project_dir),
+            run,
+            audio.input.sample_rate,
+            audio.latency_samples,
+        )
+    };
+
     let export_dir = project_dir.join("exports").join(&export_id);
     fs::create_dir_all(&export_dir).map_err(to_error)?;
 
@@ -416,77 +524,83 @@ fn export_run(
     let package_path = export_dir.join("package.json");
     let validation_path = export_dir.join("validation-report.json");
     let benchmark_path = export_dir.join("benchmark-report.json");
+    let manifest_path = export_dir.join("export-manifest.json");
+    let run_dir = project_dir.join("runs").join(&run.id);
+    let prediction_path = run_dir.join("previews/prediction.wav");
+    let test_input_path = run_dir.join("test-input.wav");
 
     write_json(
-        &model_path,
+        &manifest_path,
         &serde_json::json!({
-            "in_shape": [null, null, 1],
-            "layers": [
-                {
-                    "type": "lstm",
-                    "activation": "",
-                    "shape": [null, null, 16],
-                    "weights": []
-                },
-                {
-                    "type": "dense",
-                    "activation": "",
-                    "shape": [null, null, 1],
-                    "weights": []
-                }
-            ],
-            "metadata": {
-                "schema_version": 1,
-                "sample_rate": 48000,
-                "latency_samples": project.audio.as_ref().map(|audio| audio.latency_samples).unwrap_or(0),
-                "architecture": &run.preset,
-                "loss": &metrics,
-                "rtneural_commit": "1fb1f075a5d66e85bfc8f488c3f3626840cb3a1d"
-            }
+            "name": project_name,
+            "run_dir": run_dir,
+            "export_dir": export_dir,
+            "sample_rate": sample_rate,
+            "latency_samples": latency_samples,
+            "parity_tolerance": 0.0001
         }),
     )?;
-    write_json(
-        &validation_path,
-        &serde_json::json!({
-            "schema_version": 1,
-            "status": "pass",
-            "max_abs_error": 0.000001,
-            "rmse": 0.0000003,
-            "validator": "built-in-simulated"
-        }),
+
+    let sidecar = run_rttrainer(
+        &app,
+        &state,
+        "export",
+        &manifest_path,
+        SidecarContext {
+            operation: "export".to_string(),
+            project_id: Some(project_id.clone()),
+            run_id: Some(run.id.clone()),
+            export_id: Some(export_id.clone()),
+        },
     )?;
-    write_json(
-        &benchmark_path,
-        &serde_json::json!({
-            "schema_version": 1,
-            "status": "pass",
-            "backend": "simulated-eigen",
-            "sample_rate": 48000,
-            "realtime_factor": metrics.realtime_factor
-        }),
+    fs::write(export_dir.join("export-events.jsonl"), sidecar.stdout).map_err(to_error)?;
+    if !sidecar.stderr.trim().is_empty() {
+        fs::write(export_dir.join("stderr.log"), sidecar.stderr).map_err(to_error)?;
+    }
+
+    run_validator(
+        &app,
+        &state,
+        vec![
+            "validate".to_string(),
+            "--model".to_string(),
+            model_path.display().to_string(),
+            "--input".to_string(),
+            test_input_path.display().to_string(),
+            "--reference".to_string(),
+            prediction_path.display().to_string(),
+            "--report".to_string(),
+            validation_path.display().to_string(),
+            "--tolerance".to_string(),
+            "0.0001".to_string(),
+        ],
+        SidecarContext {
+            operation: "native_validate".to_string(),
+            project_id: Some(project_id.clone()),
+            run_id: Some(run.id.clone()),
+            export_id: Some(export_id.clone()),
+        },
     )?;
-    write_json(
-        &package_path,
-        &serde_json::json!({
-            "schema_version": 1,
-            "name": &project.name,
-            "project_id": &project.id,
-            "run_id": &run.id,
-            "preset": &run.preset,
-            "sample_rate": 48000,
-            "quality": {
-                "esr": metrics.esr,
-                "rmse": metrics.rmse
-            },
-            "runtime": {
-                "realtime_factor": metrics.realtime_factor,
-                "backend": "simulated-eigen"
-            },
-            "compatibility": {
-                "rtneural_commit": "1fb1f075a5d66e85bfc8f488c3f3626840cb3a1d",
-                "dynamic_json": true
-            }
-        }),
+    run_validator(
+        &app,
+        &state,
+        vec![
+            "benchmark".to_string(),
+            "--model".to_string(),
+            model_path.display().to_string(),
+            "--sample-rate".to_string(),
+            sample_rate.to_string(),
+            "--seconds".to_string(),
+            "10".to_string(),
+            "--report".to_string(),
+            benchmark_path.display().to_string(),
+        ],
+        SidecarContext {
+            operation: "native_benchmark".to_string(),
+            project_id: Some(project_id.clone()),
+            run_id: Some(run.id.clone()),
+            export_id: Some(export_id.clone()),
+        },
     )?;
 
     let package = ExportPackage {
@@ -500,6 +614,8 @@ fn export_run(
         benchmark_path: benchmark_path.display().to_string(),
     };
 
+    let mut store = state.store.lock().map_err(lock_error)?;
+    let project = find_project_mut(&mut store, &project_id)?;
     project.status = ProjectStatus::Exported;
     project.updated_at = now();
     project.exports.push(package);
@@ -518,7 +634,10 @@ fn update_notes(
     let project = find_project_mut(&mut store, &payload.project_id)?;
     project.notes = payload.notes;
     project.updated_at = now();
-    write_json(PathBuf::from(&project.project_dir).join("project.json"), &*project)?;
+    write_json(
+        PathBuf::from(&project.project_dir).join("project.json"),
+        &*project,
+    )?;
     let cloned = project.clone();
     persist(&state, &store)?;
     Ok(cloned)
@@ -540,6 +659,7 @@ pub fn run() {
             app.manage(AppState {
                 store_path,
                 projects_dir,
+                workspace_root: workspace_root(),
                 store: Mutex::new(store),
             });
             Ok(())
@@ -567,6 +687,11 @@ fn load_store(path: &Path) -> Store {
 
 fn persist(state: &AppState, store: &Store) -> Result<(), String> {
     write_json(&state.store_path, store)
+}
+
+fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
+    let raw = fs::read_to_string(path).map_err(to_error)?;
+    serde_json::from_str(&raw).map_err(to_error)
 }
 
 fn find_project_mut<'a>(
@@ -604,80 +729,237 @@ fn summarize_project(project: &ProjectDetail) -> ProjectSummary {
     }
 }
 
-fn audio_report(path: &str, peak_dbfs: f64, rms_dbfs: f64, clipped: bool) -> AudioFileReport {
-    AudioFileReport {
-        sample_rate: 48_000,
-        channels: 1,
-        duration_seconds: 95.4,
-        peak_dbfs,
-        rms_dbfs,
-        clipped_samples: if clipped { 42 } else { 0 },
-        dc_offset: 0.0002,
-        path: path.to_string(),
-    }
-}
-
-fn collect_audio_warning(path: &str, label: &str, warnings: &mut Vec<String>) {
-    if path.trim().is_empty() {
-        warnings.push(format!("{label} path is empty."));
-    } else if !path.to_lowercase().ends_with(".wav") {
-        warnings.push(format!("{label} should be a WAV file for v1."));
-    }
-}
-
-fn metrics_for_preset(preset: &str) -> TrainingMetrics {
-    let esr = match preset {
-        "heavy_recurrent" => 0.028,
-        "lstm_standard" => 0.044,
-        "dense_memoryless" => 0.061,
-        _ => 0.072,
-    };
-
-    TrainingMetrics {
-        esr,
-        mae: esr / 2.8,
-        rmse: esr / 1.8,
-        peak_residual: esr * 2.6,
-        rms_residual: esr / 2.1,
-        realtime_factor: if preset == "heavy_recurrent" { 24.0 } else { 118.0 },
-    }
-}
-
-fn detected_device() -> String {
-    #[cfg(target_os = "macos")]
-    {
-        "mps-ready".to_string()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        "cpu".to_string()
-    }
-}
-
 fn binary_exists(dir: &Path, stem: &str) -> bool {
     let direct = dir.join(stem);
     let exe = dir.join(format!("{stem}.exe"));
     direct.exists() || exe.exists()
 }
 
-fn json_line(kind: &str, run_id: &str, epoch: u32, esr: Option<f64>) -> String {
-    serde_json::json!({
-        "type": kind,
-        "run_id": run_id,
-        "epoch": epoch,
-        "val_esr": esr,
-        "timestamp": now()
-    })
-    .to_string()
-}
-
-fn write_preview_file(path: PathBuf, label: &str) -> Result<(), String> {
-    fs::write(path, format!("Simulated {label}; replace with rendered WAV bytes.\n")).map_err(to_error)
-}
-
 fn write_json<P: AsRef<Path>, T: Serialize>(path: P, value: &T) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(value).map_err(to_error)?;
     fs::write(path, format!("{raw}\n")).map_err(to_error)
+}
+
+fn run_rttrainer(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    command: &str,
+    manifest_path: &Path,
+    context: SidecarContext,
+) -> Result<SidecarOutput, String> {
+    let trainer_dir = state.workspace_root.join("trainer");
+    let cache_dir = state.workspace_root.join(".uv-cache");
+    let mut process = Command::new("uv");
+    process
+        .current_dir(&trainer_dir)
+        .env("UV_CACHE_DIR", &cache_dir)
+        .arg("run")
+        .arg("python")
+        .arg("-m")
+        .arg("rttrainer")
+        .arg(command)
+        .arg("--manifest")
+        .arg(manifest_path);
+
+    emit_sidecar_line(
+        app,
+        &context,
+        "system",
+        &format!("rttrainer {command} started"),
+    );
+    let output = run_streaming_process(app, &context, process)?;
+    if output.status.success() {
+        emit_sidecar_line(
+            app,
+            &context,
+            "system",
+            &format!("rttrainer {command} finished"),
+        );
+        return Ok(SidecarOutput {
+            stdout: output.stdout,
+            stderr: output.stderr,
+        });
+    }
+
+    emit_sidecar_line(
+        app,
+        &context,
+        "system",
+        &format!("rttrainer {command} failed"),
+    );
+    Err(format!(
+        "rttrainer {command} failed with status {}.\nstdout:\n{}\nstderr:\n{}",
+        output.status, output.stdout, output.stderr
+    ))
+}
+
+fn run_validator(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    args: Vec<String>,
+    context: SidecarContext,
+) -> Result<SidecarOutput, String> {
+    let validator = validator_binary_path(state)?;
+    let action = args.first().cloned().unwrap_or_else(|| "run".to_string());
+    let mut process = Command::new(&validator);
+    process.args(args);
+
+    emit_sidecar_line(
+        app,
+        &context,
+        "system",
+        &format!("rtneural-validator {action} started"),
+    );
+    let output = run_streaming_process(app, &context, process)?;
+    if output.status.success() {
+        emit_sidecar_line(
+            app,
+            &context,
+            "system",
+            &format!("rtneural-validator {action} finished"),
+        );
+        return Ok(SidecarOutput {
+            stdout: output.stdout,
+            stderr: output.stderr,
+        });
+    }
+
+    emit_sidecar_line(
+        app,
+        &context,
+        "system",
+        &format!("rtneural-validator {action} failed"),
+    );
+    Err(format!(
+        "{} failed with status {}.\nstdout:\n{}\nstderr:\n{}",
+        validator.display(),
+        output.status,
+        output.stdout,
+        output.stderr
+    ))
+}
+
+struct StreamingProcessOutput {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+fn run_streaming_process(
+    app: &tauri::AppHandle,
+    context: &SidecarContext,
+    mut process: Command,
+) -> Result<StreamingProcessOutput, String> {
+    let mut child = process
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(to_error)?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Failed to capture sidecar stdout.".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Failed to capture sidecar stderr.".to_string())?;
+
+    let stdout_reader = spawn_stream_reader(app.clone(), context.clone(), "stdout", stdout);
+    let stderr_reader = spawn_stream_reader(app.clone(), context.clone(), "stderr", stderr);
+    let status = child.wait().map_err(to_error)?;
+    let stdout = join_stream_reader(stdout_reader, "stdout")?;
+    let stderr = join_stream_reader(stderr_reader, "stderr")?;
+
+    Ok(StreamingProcessOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn spawn_stream_reader<R>(
+    app: tauri::AppHandle,
+    context: SidecarContext,
+    stream: &'static str,
+    reader: R,
+) -> JoinHandle<Result<String, String>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut collected = String::new();
+        for line in BufReader::new(reader).lines() {
+            let line = line.map_err(to_error)?;
+            collected.push_str(&line);
+            collected.push('\n');
+            if !line.trim().is_empty() {
+                emit_sidecar_line(&app, &context, stream, &line);
+            }
+        }
+        Ok(collected)
+    })
+}
+
+fn join_stream_reader(
+    handle: JoinHandle<Result<String, String>>,
+    stream: &str,
+) -> Result<String, String> {
+    handle
+        .join()
+        .map_err(|_| format!("Sidecar {stream} reader panicked."))?
+}
+
+fn emit_sidecar_line(app: &tauri::AppHandle, context: &SidecarContext, stream: &str, line: &str) {
+    let payload = SidecarProgressEvent {
+        operation: context.operation.clone(),
+        stream: stream.to_string(),
+        line: line.to_string(),
+        json: serde_json::from_str::<serde_json::Value>(line).ok(),
+        project_id: context.project_id.clone(),
+        run_id: context.run_id.clone(),
+        export_id: context.export_id.clone(),
+        timestamp: now(),
+    };
+    let _ = app.emit("sidecar-progress", payload);
+}
+
+fn validator_binary_path(state: &AppState) -> Result<PathBuf, String> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if let Some(path) = existing_binary(dir, "rtneural-validator") {
+                return Ok(path);
+            }
+        }
+    }
+
+    let dev_dir = state.workspace_root.join("native/rtneural-validator/build");
+    if let Some(path) = existing_binary(&dev_dir, "rtneural-validator") {
+        return Ok(path);
+    }
+
+    Err("rtneural-validator binary not found. Build it with: cmake --build native/rtneural-validator/build".to_string())
+}
+
+fn existing_binary(dir: &Path, stem: &str) -> Option<PathBuf> {
+    let direct = dir.join(stem);
+    if direct.exists() {
+        return Some(direct);
+    }
+    let exe = dir.join(format!("{stem}.exe"));
+    if exe.exists() {
+        return Some(exe);
+    }
+    None
+}
+
+fn workspace_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .unwrap_or(manifest_dir)
 }
 
 fn now() -> String {

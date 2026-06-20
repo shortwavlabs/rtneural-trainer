@@ -16,6 +16,7 @@ import {
   SlidersHorizontal,
   type LucideIcon,
 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./lib/api";
 import type {
@@ -23,6 +24,7 @@ import type {
   ExportPackage,
   ProjectDetail,
   ProjectSummary,
+  SidecarProgressEvent,
   TargetKind,
   TrainingRun,
 } from "./types";
@@ -48,26 +50,14 @@ const presets = [
   {
     id: "lstm_light",
     label: "Light",
-    detail: "1x LSTM, hidden 8-12",
+    detail: "1x LSTM, hidden 12",
     cpu: "Low CPU",
   },
   {
     id: "lstm_standard",
     label: "Standard",
-    detail: "1x LSTM, hidden 16-20",
+    detail: "1x LSTM, hidden 16",
     cpu: "Default",
-  },
-  {
-    id: "heavy_recurrent",
-    label: "Heavy",
-    detail: "1-2 recurrent layers",
-    cpu: "Benchmark gated",
-  },
-  {
-    id: "dense_memoryless",
-    label: "Dense",
-    detail: "Memoryless stack",
-    cpu: "Very low latency",
   },
 ];
 
@@ -79,12 +69,34 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabId>("capture");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [progressEvents, setProgressEvents] = useState<SidecarProgressEvent[]>([]);
+  const sidecarBusy = busy === "audio" || busy === "train" || busy === "export";
 
   useEffect(() => {
     void boot();
   }, []);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    let mounted = true;
+    const unlisten = listen<SidecarProgressEvent>("sidecar-progress", (event) => {
+      if (!mounted) return;
+      setProgressEvents((current) => [...current, event.payload].slice(-120));
+    });
+
+    unlisten.catch((caught) => {
+      if (mounted) setError(toMessage(caught));
+    });
+
+    return () => {
+      mounted = false;
+      void unlisten.then((dispose) => dispose());
+    };
+  }, []);
+
+  useEffect(() => {
+    setProgressEvents([]);
     if (!selectedId) {
       setProject(null);
       return;
@@ -184,6 +196,7 @@ export default function App() {
                   project={project}
                   busy={busy === "audio"}
                   onAnalyze={async (input_path, target_path) => {
+                    setProgressEvents([]);
                     setBusy("audio");
                     try {
                       const nextProject = await api.updateAudio({
@@ -208,6 +221,7 @@ export default function App() {
                   project={project}
                   busy={busy === "train"}
                   onTrain={async (preset) => {
+                    setProgressEvents([]);
                     setBusy("train");
                     try {
                       const nextProject = await api.startTraining({
@@ -231,6 +245,7 @@ export default function App() {
                   project={project}
                   busy={busy === "export"}
                   onExport={async (runId) => {
+                    setProgressEvents([]);
                     setBusy("export");
                     try {
                       const nextProject = await api.exportRun({
@@ -247,6 +262,8 @@ export default function App() {
                 />
               ) : null}
             </section>
+
+            <ProgressLog events={progressEvents} active={sidecarBusy} />
 
             <NotesPanel
               project={project}
@@ -910,6 +927,52 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
+function ProgressLog({
+  events,
+  active,
+}: {
+  events: SidecarProgressEvent[];
+  active: boolean;
+}) {
+  if (!active && events.length === 0) return null;
+
+  const latest = events[events.length - 1] ?? null;
+  const recent = events.slice(-10).reverse();
+
+  return (
+    <section className={active ? "progress-panel active" : "progress-panel"}>
+      <div className="progress-header">
+        <div>
+          <p className="section-label">Progress</p>
+          <h3>{latest ? progressTitle(latest) : "Launching sidecar"}</h3>
+        </div>
+        <span className={active ? "live-pill active" : "live-pill"}>
+          {active ? "Live" : "Done"}
+        </span>
+      </div>
+
+      {recent.length === 0 ? (
+        <p className="muted">Waiting for the first event.</p>
+      ) : (
+        <ol className="progress-list">
+          {recent.map((event, index) => (
+            <li
+              className={event.stream === "stderr" ? "warning" : ""}
+              key={`${event.timestamp}-${index}-${event.operation}-${event.stream}`}
+            >
+              <span className="progress-time">{formatEventTime(event.timestamp)}</span>
+              <span>
+                <strong>{progressTitle(event)}</strong>
+                <small>{progressDetail(event)}</small>
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 function EmptyState() {
   return (
     <div className="empty-state">
@@ -918,6 +981,110 @@ function EmptyState() {
       <p>Start with paired dry and processed WAV files, then train and validate a model package.</p>
     </div>
   );
+}
+
+function progressTitle(event: SidecarProgressEvent) {
+  const type = eventType(event);
+  if (type === "run_started") {
+    return `Training ${getString(event.json, "preset") ?? event.run_id ?? ""}`.trim();
+  }
+  if (type === "epoch") {
+    const epoch = getNumber(event.json, "epoch");
+    const total = getNumber(event.json, "total_epochs");
+    return epoch && total ? `Epoch ${epoch}/${total}` : "Epoch";
+  }
+  if (type === "checkpoint") return "Checkpoint saved";
+  if (type === "run_finished" || type === "train_command_finished") {
+    return "Training completed";
+  }
+  if (type === "prepare_finished") return "Audio prepared";
+  if (type === "export_finished") return "RTNeural export written";
+  if (type === "error") return "Sidecar error";
+  if (event.stream === "system") return event.line;
+  if (event.stream === "stderr") return "Sidecar stderr";
+  return operationLabel(event.operation);
+}
+
+function progressDetail(event: SidecarProgressEvent) {
+  const type = eventType(event);
+  if (type === "run_started") {
+    const epochs = getNumber(event.json, "epochs");
+    const device = getString(event.json, "device");
+    return [epochs ? `${epochs} epochs` : null, device].filter(Boolean).join(" · ");
+  }
+  if (type === "epoch") {
+    const trainLoss = getNumber(event.json, "train_loss");
+    const valEsr = getNumber(event.json, "val_esr");
+    const isBest = getBoolean(event.json, "is_best");
+    return [
+      trainLoss !== null ? `loss ${formatMetric(trainLoss)}` : null,
+      valEsr !== null ? `val ESR ${formatMetric(valEsr)}` : null,
+      isBest ? "best" : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (type === "prepare_finished") {
+    const status = getString(event.json, "status");
+    const warnings = getArray(event.json, "warnings").length;
+    return [status, warnings ? `${warnings} warnings` : "no warnings"].filter(Boolean).join(" · ");
+  }
+  if (type === "export_finished") {
+    return getString(event.json, "model_path") ?? getString(event.json, "export_dir") ?? event.line;
+  }
+  if (type === "error") {
+    return getString(event.json, "message") ?? event.line;
+  }
+  if (event.stream === "system") return operationLabel(event.operation);
+  return event.line;
+}
+
+function eventType(event: SidecarProgressEvent) {
+  return getString(event.json, "type");
+}
+
+function getString(value: Record<string, unknown> | null, key: string) {
+  const item = value?.[key];
+  return typeof item === "string" ? item : null;
+}
+
+function getNumber(value: Record<string, unknown> | null, key: string) {
+  const item = value?.[key];
+  return typeof item === "number" ? item : null;
+}
+
+function getBoolean(value: Record<string, unknown> | null, key: string) {
+  const item = value?.[key];
+  return typeof item === "boolean" ? item : false;
+}
+
+function getArray(value: Record<string, unknown> | null, key: string) {
+  const item = value?.[key];
+  return Array.isArray(item) ? item : [];
+}
+
+function operationLabel(operation: string) {
+  return operation
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatMetric(value: number) {
+  return value < 0.01 ? value.toExponential(2) : value.toFixed(4);
+}
+
+function formatEventTime(timestamp: string) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function isTauriRuntime() {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 function toMessage(caught: unknown) {

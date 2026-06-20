@@ -364,6 +364,7 @@ dd,
 
 .work-surface,
 .notes-panel,
+.progress-panel,
 .panel {
   background: #171a1b;
   border: 1px solid #2a302e;
@@ -688,6 +689,103 @@ dd,
   padding: 16px;
 }
 
+.progress-panel {
+  display: grid;
+  gap: 12px;
+  min-height: 116px;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.progress-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.progress-header h3 {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 10px;
+  color: #9da9a1;
+  font-size: 0.75rem;
+  font-weight: 800;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 999px;
+}
+
+.live-pill.active {
+  color: #0e1710;
+  background: #8ee690;
+  border-color: #8ee690;
+}
+
+.live-pill.active::before {
+  display: block;
+  width: 7px;
+  height: 7px;
+  content: "";
+  background: #0e1710;
+  border-radius: 999px;
+  animation: pulse 1100ms ease-in-out infinite;
+}
+
+.progress-list {
+  display: grid;
+  gap: 0;
+  max-height: 260px;
+  padding: 0;
+  margin: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.progress-list li {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 12px;
+  min-height: 48px;
+  padding: 9px 0;
+  border-top: 1px solid #2a302e;
+}
+
+.progress-list li:first-child {
+  border-top: 0;
+}
+
+.progress-time,
+.progress-list small {
+  color: #9da9a1;
+  font-size: 0.76rem;
+}
+
+.progress-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-list strong,
+.progress-list small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.progress-list small {
+  margin-top: 4px;
+}
+
+.progress-list .warning strong {
+  color: #f5e0b8;
+}
+
 .muted {
   margin: 0;
   color: #9da9a1;
@@ -718,6 +816,13 @@ dd,
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+    transform: scale(0.72);
   }
 }
 
@@ -772,5 +877,10 @@ dd,
   .table-head span:nth-child(n + 3),
   .table-row span:nth-child(n + 3) {
     display: none;
+  }
+
+  .progress-list li {
+    grid-template-columns: 1fr;
+    gap: 4px;
   }
 }
