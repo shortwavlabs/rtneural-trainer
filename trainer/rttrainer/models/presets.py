@@ -44,6 +44,9 @@ def get_preset(preset_id: str) -> PresetConfig:
 def build_model(config: PresetConfig):
     import torch
 
+    if config.architecture != "lstm":
+        raise ValueError(f"Unsupported PyTorch preset architecture: {config.architecture}")
+
     class LstmAudioModel(torch.nn.Module):
         def __init__(self) -> None:
             super().__init__()
@@ -60,3 +63,21 @@ def build_model(config: PresetConfig):
             return self.dense(output)
 
     return LstmAudioModel()
+
+
+def build_keras_model(config: PresetConfig, keras):
+    if config.architecture != "lstm":
+        raise ValueError(f"Unsupported Keras preset architecture: {config.architecture}")
+
+    return keras.Sequential(
+        [
+            keras.Input(shape=(None, config.input_size), name="audio_input"),
+            keras.layers.LSTM(
+                config.hidden_size,
+                return_sequences=True,
+                name="lstm",
+            ),
+            keras.layers.Dense(config.output_size, name="dense"),
+        ],
+        name=config.preset_id,
+    )

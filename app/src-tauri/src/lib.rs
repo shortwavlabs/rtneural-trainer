@@ -428,6 +428,7 @@ fn start_training(
             "run_dir": &run_dir,
             "prepared_dir": project_dir.join("audio/prepared"),
             "preset": &payload.preset,
+            "backend": "keras",
             "epochs": 20,
             "batch_size": 16,
             "learning_rate": 0.001,
@@ -753,7 +754,11 @@ fn run_rttrainer(
     process
         .current_dir(&trainer_dir)
         .env("UV_CACHE_DIR", &cache_dir)
-        .arg("run")
+        .arg("run");
+    if matches!(command, "train" | "evaluate" | "export") {
+        process.arg("--extra").arg("tensorflow");
+    }
+    process
         .arg("python")
         .arg("-m")
         .arg("rttrainer")

@@ -12,12 +12,30 @@ def inspect_device() -> dict[str, Any]:
         "trainer_version": __version__,
         "platform": platform.platform(),
         "python": platform.python_version(),
+        "tensorflow_status": "not_installed",
         "torch_status": "not_installed",
         "cuda_available": False,
         "mps_available": False,
         "mps_built": False,
         "selected_device": "cpu",
     }
+
+    try:
+        import tensorflow as tf
+    except Exception:
+        pass
+    else:
+        tf_gpus = tf.config.list_physical_devices("GPU")
+        payload.update(
+            {
+                "tensorflow_status": "available",
+                "tensorflow_version": tf.__version__,
+                "tensorflow_gpus": [device.name for device in tf_gpus],
+                "selected_device": f"tensorflow-gpu:{tf_gpus[0].name}"
+                if tf_gpus
+                else "tensorflow-cpu",
+            }
+        )
 
     try:
         import torch
@@ -33,6 +51,11 @@ def inspect_device() -> dict[str, Any]:
         selected = "mps"
     else:
         selected = "cpu"
+    selected_device = (
+        payload["selected_device"]
+        if payload.get("tensorflow_status") == "available"
+        else selected
+    )
 
     payload.update(
         {
@@ -41,7 +64,8 @@ def inspect_device() -> dict[str, Any]:
             "cuda_available": cuda_available,
             "mps_available": mps_available,
             "mps_built": mps_built,
-            "selected_device": selected,
+            "torch_selected_device": selected,
+            "selected_device": selected_device,
         }
     )
     return payload

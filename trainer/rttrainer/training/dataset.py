@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 
 from rttrainer.data.audio_io import read_wav_mono
@@ -22,8 +23,8 @@ def build_windowed_dataset(
     sequence_length: int,
     max_windows: int,
     seed: int,
+    backend: str = "torch",
 ) -> WindowedDataset:
-    torch = __import__("torch")
     input_audio = read_wav_mono(input_path)
     target_audio = read_wav_mono(target_path)
     if input_audio.sample_rate != target_audio.sample_rate:
@@ -49,8 +50,8 @@ def build_windowed_dataset(
     if len(windows_x) < 4:
         raise ValueError("Not enough training windows after slicing.")
 
-    generator = torch.Generator().manual_seed(seed)
-    permutation = torch.randperm(len(windows_x), generator=generator).tolist()
+    permutation = list(range(len(windows_x)))
+    random.Random(seed).shuffle(permutation)
     windows_x = [windows_x[index] for index in permutation]
     windows_y = [windows_y[index] for index in permutation]
 
@@ -60,10 +61,10 @@ def build_windowed_dataset(
         train_count = len(windows_x) - 2
         val_count = 1
 
-    train_x = make_tensor(torch, windows_x[:train_count])
-    train_y = make_tensor(torch, windows_y[:train_count])
-    val_x = make_tensor(torch, windows_x[train_count : train_count + val_count])
-    val_y = make_tensor(torch, windows_y[train_count : train_count + val_count])
+    train_x = make_backend_array(backend, windows_x[:train_count])
+    train_y = make_backend_array(backend, windows_y[:train_count])
+    val_x = make_backend_array(backend, windows_x[train_count : train_count + val_count])
+    val_y = make_backend_array(backend, windows_y[train_count : train_count + val_count])
     test_start = (train_count + val_count) * stride
     test_end = min(length, test_start + sequence_length * 4)
     if test_end - test_start < sequence_length:
@@ -79,6 +80,18 @@ def build_windowed_dataset(
         test_target=target_samples[test_start:test_end],
         sample_rate=input_audio.sample_rate,
     )
+
+
+def make_backend_array(backend: str, windows: list[list[float]]):
+    if backend == "numpy":
+        numpy = __import__("numpy")
+        return numpy.asarray(windows, dtype="float32")[..., None]
+    if backend == "torch":
+        torch = __import__("torch")
+        return make_tensor(torch, windows)
+    if backend == "list":
+        return [[[sample] for sample in window] for window in windows]
+    raise ValueError(f"Unknown dataset backend: {backend}")
 
 
 def make_tensor(torch, windows: list[list[float]]):  # type: ignore[no-untyped-def]

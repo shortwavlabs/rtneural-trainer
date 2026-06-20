@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 from rttrainer.data.audio_io import read_wav_mono
-from rttrainer.training.device import choose_device, require_torch
-from rttrainer.training.runner import load_checkpoint, predict_sequence
+from rttrainer.training.runner import load_checkpoint, predict_loaded_sequence
 from rttrainer.utils import now
 
 
@@ -17,25 +17,21 @@ def validate_export_parity(
     input_path: Path,
     tolerance: float,
 ) -> dict[str, Any]:
-    torch = require_torch()
-    device = choose_device(None)
     model, checkpoint = load_checkpoint(checkpoint_path)
-    model = model.to(device)
     input_audio = read_wav_mono(input_path)
-    pytorch_output = predict_sequence(torch, model, input_audio.samples, device)
-    json_output = run_exported_json(torch, model_json_path, input_audio.samples)
+    backend_output = predict_loaded_sequence(model, checkpoint, input_audio.samples)
+    json_output = run_exported_json(model_json_path, input_audio.samples)
     errors = [
-        abs(pytorch_output[index] - json_output[index])
-        for index in range(min(len(pytorch_output), len(json_output)))
+        abs(backend_output[index] - json_output[index])
+        for index in range(min(len(backend_output), len(json_output)))
     ]
     max_abs_error = max(errors, default=0.0)
-    rmse = (
-        sum(error * error for error in errors) / max(1, len(errors))
-    ) ** 0.5
+    rmse = (sum(error * error for error in errors) / max(1, len(errors))) ** 0.5
 
     return {
         "schema_version": 1,
         "status": "pass" if max_abs_error <= tolerance else "fail",
+        "backend": checkpoint.get("backend", "unknown"),
         "preset": checkpoint["preset"],
         "input_path": str(input_path),
         "model_json_path": str(model_json_path),
@@ -47,48 +43,90 @@ def validate_export_parity(
     }
 
 
-def run_exported_json(torch, model_json_path: Path, samples: list[float]) -> list[float]:  # type: ignore[no-untyped-def]
+def run_exported_json(model_json_path: Path, samples: list[float]) -> list[float]:
     with model_json_path.open("r", encoding="utf-8") as handle:
         model_json = json.load(handle)
-    lstm_layer = model_json["layers"][0]
-    dense_layer = model_json["layers"][1]
-    weights = lstm_layer["weights"]
-    dense = dense_layer["weights"]
 
-    if isinstance(weights, dict):
-        weight_ih = torch.tensor(weights["weight_ih"], dtype=torch.float32)
-        weight_hh = torch.tensor(weights["weight_hh"], dtype=torch.float32)
-        bias = torch.tensor(weights["bias_ih"], dtype=torch.float32) + torch.tensor(
-            weights["bias_hh"], dtype=torch.float32
-        )
-    else:
-        weight_ih = torch.tensor(weights[0], dtype=torch.float32).transpose(0, 1)
-        weight_hh = torch.tensor(weights[1], dtype=torch.float32).transpose(0, 1)
-        bias = torch.tensor(weights[2], dtype=torch.float32)
+    lstm_layer = next(
+        (layer for layer in model_json["layers"] if layer.get("type") == "lstm"),
+        None,
+    )
+    dense_layer = next(
+        (layer for layer in model_json["layers"] if layer.get("type") == "dense"),
+        None,
+    )
+    if lstm_layer is None or dense_layer is None:
+        raise ValueError("Parity simulator currently supports LSTM + Dense exports only.")
 
-    if isinstance(dense, dict):
-        dense_weight = torch.tensor(dense["weight"], dtype=torch.float32)
-        dense_bias = torch.tensor(dense["bias"], dtype=torch.float32)
-    else:
-        dense_weight = torch.tensor(dense[0], dtype=torch.float32).transpose(0, 1)
-        dense_bias = torch.tensor(dense[1], dtype=torch.float32)
-
-    hidden_size = int(lstm_layer.get("hidden_size", weight_hh.shape[1]))
-    h = torch.zeros(hidden_size, dtype=torch.float32)
-    c = torch.zeros(hidden_size, dtype=torch.float32)
+    kernel, recurrent_kernel, bias = normalize_lstm_weights(lstm_layer["weights"])
+    dense_kernel, dense_bias = normalize_dense_weights(dense_layer["weights"])
+    hidden_size = int(lstm_layer.get("hidden_size", len(recurrent_kernel)))
+    h = [0.0 for _ in range(hidden_size)]
+    c = [0.0 for _ in range(hidden_size)]
     outputs: list[float] = []
 
     for sample in samples:
-        x = torch.tensor([sample], dtype=torch.float32)
-        gates = weight_ih @ x + weight_hh @ h + bias
-        i_gate, f_gate, g_gate, o_gate = gates.chunk(4)
-        i_gate = torch.sigmoid(i_gate)
-        f_gate = torch.sigmoid(f_gate)
-        g_gate = torch.tanh(g_gate)
-        o_gate = torch.sigmoid(o_gate)
-        c = f_gate * c + i_gate * g_gate
-        h = o_gate * torch.tanh(c)
-        y = dense_weight @ h + dense_bias
-        outputs.append(float(y.squeeze().item()))
+        gates = [
+            float(bias[index])
+            + sum(input_value * kernel[input_index][index] for input_index, input_value in enumerate([sample]))
+            + sum(hidden_value * recurrent_kernel[hidden_index][index] for hidden_index, hidden_value in enumerate(h))
+            for index in range(hidden_size * 4)
+        ]
+        i_gate = [sigmoid(value) for value in gates[0:hidden_size]]
+        f_gate = [sigmoid(value) for value in gates[hidden_size : hidden_size * 2]]
+        g_gate = [math.tanh(value) for value in gates[hidden_size * 2 : hidden_size * 3]]
+        o_gate = [sigmoid(value) for value in gates[hidden_size * 3 : hidden_size * 4]]
+        c = [
+            f_gate[index] * c[index] + i_gate[index] * g_gate[index]
+            for index in range(hidden_size)
+        ]
+        h = [o_gate[index] * math.tanh(c[index]) for index in range(hidden_size)]
+        dense = [
+            float(dense_bias[output_index])
+            + sum(h[index] * dense_kernel[index][output_index] for index in range(hidden_size))
+            for output_index in range(len(dense_bias))
+        ]
+        outputs.append(float(dense[0]))
 
     return outputs
+
+
+def normalize_lstm_weights(weights: Any) -> tuple[list[list[float]], list[list[float]], list[float]]:
+    if isinstance(weights, dict):
+        kernel = transpose(weights["weight_ih"])
+        recurrent_kernel = transpose(weights["weight_hh"])
+        bias = [
+            float(weights["bias_ih"][index]) + float(weights["bias_hh"][index])
+            for index in range(len(weights["bias_ih"]))
+        ]
+        return kernel, recurrent_kernel, bias
+    return to_float_matrix(weights[0]), to_float_matrix(weights[1]), to_float_list(weights[2])
+
+
+def normalize_dense_weights(weights: Any) -> tuple[list[list[float]], list[float]]:
+    if isinstance(weights, dict):
+        return transpose(weights["weight"]), to_float_list(weights["bias"])
+    return to_float_matrix(weights[0]), to_float_list(weights[1])
+
+
+def transpose(matrix: Any) -> list[list[float]]:
+    rows = to_float_matrix(matrix)
+    if not rows:
+        return []
+    return [[row[index] for row in rows] for index in range(len(rows[0]))]
+
+
+def to_float_matrix(values: Any) -> list[list[float]]:
+    return [[float(item) for item in row] for row in values]
+
+
+def to_float_list(values: Any) -> list[float]:
+    return [float(item) for item in values]
+
+
+def sigmoid(value: float) -> float:
+    if value >= 0:
+        z = math.exp(-value)
+        return 1.0 / (1.0 + z)
+    z = math.exp(value)
+    return z / (1.0 + z)

@@ -17,9 +17,9 @@ Python `prepare`, `train`, and `export` commands, and the export path invokes th
 native RTNeural validator/benchmark sidecar. The commands resolve after the job
 finishes, while stdout/stderr stream to the UI as `sidecar-progress` events for
 live prepare, training, export, validation, and benchmark updates. The current
-train/evaluate/export CLI uses the PyTorch training extra, while the RTNeural
-JSON strategy and fixture scripts are moving toward TensorFlow/Keras as the
-canonical exporter path.
+train/evaluate/export CLI uses TensorFlow/Keras as the canonical RTNeural JSON
+path, with PyTorch retained as an optional compatibility backend for curated
+presets.
 
 ## Requirements
 
@@ -50,13 +50,13 @@ UV_CACHE_DIR=../.uv-cache uv sync
 Install Python extras as needed:
 
 ```bash
-# Current PyTorch-based training CLI
-cd trainer
-UV_CACHE_DIR=../.uv-cache uv sync --extra training
-
-# Keras/TensorFlow RTNeural fixture generation
+# Canonical Keras/TensorFlow training and RTNeural export path
 cd trainer
 UV_CACHE_DIR=../.uv-cache uv sync --extra tensorflow
+
+# Optional PyTorch compatibility backend
+cd trainer
+UV_CACHE_DIR=../.uv-cache uv sync --extra training
 ```
 
 ## Run The Desktop App
@@ -152,11 +152,11 @@ This writes aligned `input.wav`, `target.wav`, and
 
 ### 2. Train
 
-Install the training extra first:
+Install the TensorFlow extra first:
 
 ```bash
 cd trainer
-UV_CACHE_DIR=../.uv-cache uv sync --extra training
+UV_CACHE_DIR=../.uv-cache uv sync --extra tensorflow
 ```
 
 Create `projects/demo/train.json`:
@@ -167,6 +167,7 @@ Create `projects/demo/train.json`:
   "run_dir": "projects/demo/runs/run_001",
   "prepared_dir": "projects/demo/audio/prepared",
   "preset": "lstm_light",
+  "backend": "keras",
   "epochs": 20,
   "batch_size": 16,
   "learning_rate": 0.001,
@@ -180,11 +181,14 @@ Run:
 
 ```bash
 cd trainer
-UV_CACHE_DIR=../.uv-cache uv run python -m rttrainer train \
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m rttrainer train \
   --manifest ../projects/demo/train.json
 ```
 
 The run folder receives checkpoints, metrics, preview WAVs, and test fixtures.
+Keras runs save `checkpoints/best-model.keras` plus checkpoint metadata. To use
+the optional PyTorch path, set `"backend": "pytorch"` and install the
+`training` extra.
 
 ### 3. Evaluate
 
@@ -201,7 +205,7 @@ Run:
 
 ```bash
 cd trainer
-UV_CACHE_DIR=../.uv-cache uv run python -m rttrainer evaluate \
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m rttrainer evaluate \
   --manifest ../projects/demo/evaluate.json
 ```
 
@@ -224,7 +228,7 @@ Run:
 
 ```bash
 cd trainer
-UV_CACHE_DIR=../.uv-cache uv run python -m rttrainer export \
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m rttrainer export \
   --manifest ../projects/demo/export.json
 ```
 
@@ -314,6 +318,14 @@ Native validator:
 ```bash
 cmake --build native/rtneural-validator/build
 python3 scripts/smoke_rtneural_validator.py
+```
+
+Keras training/export through native RTNeural:
+
+```bash
+cd trainer
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
+  ../scripts/smoke_keras_training_export.py
 ```
 
 ## Useful Docs
