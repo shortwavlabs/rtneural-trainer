@@ -3,13 +3,13 @@ We’re past the “prove the core path” stage. The app now has real prepare/t
 What’s left is mostly productization:
 
 1. **Release automation**
-   GitHub Actions now runs Python tests, golden fixture checks, native validator build/smoke, frontend build, Rust tests, Tauri workflow smoke, and packaged-app smoke. Remaining release work is cross-platform bundle smoke, signing/notarization where needed, and artifact publishing.
+   GitHub Actions now runs Python tests, golden fixture checks, native validator build/smoke, frontend build, Rust tests, Tauri workflow smoke, packaged-app smoke, and a separate cross-platform release packaging workflow that builds real sidecars, smokes Tauri bundles, and uploads artifacts. Remaining release work is signing/notarization credentials, release publishing policy, and any installer-specific polish.
 
 2. **Preset tuning**
    The app now exposes Dense-only, GRU, LSTM, Conv1D, Conv1D BatchNorm/PReLU, and Conv+GRU hybrid presets, each covered by golden JSON plus Python/native RTNeural parity. Remaining work is real-world capture tuning, default recommendation logic, and PyTorch parity only where it is worth supporting.
 
 3. **Production packaging**
-   The debug packaged-app smoke passes, but real release packaging still needs cross-platform release sidecars, PyInstaller validation, Tauri bundle smoke, signing/notarization where needed, and release artifacts.
+   Real release packaging now has PyInstaller sidecar validation, native validator staging, Tauri bundle smoke, and artifact manifests/uploads. Remaining work is signed/notarized production distribution, installer metadata polish, and validating the artifact set against the final release channel.
 
 4. **Training quality controls**
    Add stronger real-world training UX: validation curves, early stopping controls, better preset recommendations, manual alignment override, longer capture handling, normalization/gain guidance, and clearer “this model is good/bad” report language.
@@ -23,4 +23,4 @@ What’s left is mostly productization:
 7. **Polish pass**
    Error copy, edge-case UI states, onboarding/sample project, accessibility pass, and maybe waveform visualization for target/prediction/residual.
 
-My recommended next move: expand the preset catalog now that CI covers the core export and smoke paths.
+My recommended next move: decide the signing/notarization and release-publishing path, then do a UI/report polish pass against a real capture project.

@@ -124,6 +124,10 @@ def install_sidecar(source: Path, stem: str, target_triple: str) -> Path:
     if not source.is_file():
         raise FileNotFoundError(f"{stem} sidecar source not found: {source}")
     destination = sidecar_path(stem, target_triple)
+    if source.resolve() == destination.resolve():
+        make_executable(destination)
+        print(f"using staged {stem} sidecar: {destination.relative_to(ROOT)}")
+        return destination
     shutil.copy2(source, destination)
     make_executable(destination)
     print(f"installed {stem} sidecar: {destination.relative_to(ROOT)}")

@@ -139,6 +139,25 @@ pnpm --filter rtneural-trainer-app package:sidecars
 `tauri build` runs `pnpm build:tauri-assets`, which stages these sidecars before
 building the frontend and app bundle.
 
+To exercise the real release path locally, build production sidecars, validate
+the PyInstaller and native binaries, run a CI-mode Tauri release bundle build,
+and collect a release artifact manifest:
+
+```bash
+# macOS
+pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles app,dmg
+
+# Linux
+pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles deb
+
+# Windows
+pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles nsis
+```
+
+The release smoke uses `tauri build --ci --no-sign`, so it proves bundle shape
+and sidecar execution but does not replace macOS signing/notarization or Windows
+code-signing checks.
+
 ## Build The Native Validator
 
 If the local RTNeural clones exist under `/Users/shortwavlabs/Workspace/rt-neural`,
@@ -441,6 +460,17 @@ pnpm --filter rtneural-trainer-app smoke:packaged-app
 The packaged-app smoke defaults to a debug, no-bundle Tauri build and reuses
 prebuilt sidecar binaries so it can run quickly in CI. Pass `-- --bundle` to the
 script if you need to exercise platform bundle creation too.
+
+Release package smoke:
+
+```bash
+pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles app,dmg
+```
+
+GitHub Actions has a separate `Release Packaging` workflow for the slow path. It
+runs the release package smoke on Linux, macOS, and Windows, then uploads the
+Tauri bundle outputs, staged sidecars, and
+`app/src-tauri/target/release/release-artifacts-manifest.json`.
 
 ## Useful Docs
 

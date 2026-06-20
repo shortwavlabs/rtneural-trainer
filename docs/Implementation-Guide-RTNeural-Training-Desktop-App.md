@@ -1135,12 +1135,26 @@ Packaging tasks:
 9. Verify code signing and notarization requirements on macOS.
 10. Verify Windows signing and antivirus false-positive risk.
 
+Current release smoke command:
+
+```bash
+pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles app,dmg
+```
+
+Use `--bundles deb` on Linux and `--bundles nsis` on Windows. The release smoke
+builds real sidecars, runs `rttrainer --version`, runs
+`rttrainer inspect-device --json`, checks the native validator CLI, builds the
+Tauri release bundle with `--ci --no-sign`, validates the copied sidecars beside
+the release binary, and writes
+`app/src-tauri/target/release/release-artifacts-manifest.json`.
+
 Acceptance criteria:
 
 - Packaged app can inspect hardware, prepare audio, train a tiny model, validate,
   and export.
 - Packaged sidecars report their versions.
 - The app can surface a clear error when a sidecar is missing or incompatible.
+- Release bundles produce uploadable artifacts and a manifest on every target OS.
 
 ## 11. CI And Release Gates
 
@@ -1158,6 +1172,7 @@ Suggested jobs:
 8. Frontend test/build.
 9. Tauri development build smoke test.
 10. Packaged app smoke test on release branches.
+11. Cross-platform release package smoke and artifact upload.
 
 Release gate checklist:
 
@@ -1167,6 +1182,8 @@ Release gate checklist:
 - Known-good preset matrix is current.
 - Licenses are reviewed.
 - Packaged sidecars run on each target OS.
+- Tauri release bundles are produced on Linux, macOS, and Windows.
+- Release artifacts include the platform bundle, sidecars, and artifact manifest.
 - Project migration test passes from the previous app version.
 
 ## 12. Known-Good Preset Matrix

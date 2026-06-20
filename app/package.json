@@ -13,6 +13,7 @@
     "package:sidecars:dev": "python3 ../scripts/package_tauri_sidecars.py --dev-shims",
     "preview": "vite preview --host 127.0.0.1",
     "smoke:packaged-app": "python3 ../scripts/smoke_packaged_app.py",
+    "smoke:release-package": "python3 ../scripts/smoke_release_package.py",
     "smoke:tauri-workflow": "python3 ../scripts/smoke_tauri_workflow.py",
     "tauri": "tauri"
   },

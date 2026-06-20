@@ -1,0 +1,114 @@
+name: Release Packaging
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-packaging-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CI: "true"
+  UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+  RTTRAINER_UV_EXTRAS: tensorflow
+
+jobs:
+  package:
+    name: Package ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux deb
+            os: ubuntu-22.04
+            bundles: deb
+            artifact-suffix: linux-deb
+          - name: macOS app+dmg
+            os: macos-latest
+            bundles: app,dmg
+            artifact-suffix: macos-app-dmg
+          - name: Windows NSIS
+            os: windows-latest
+            bundles: nsis
+            artifact-suffix: windows-nsis
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Tauri Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.5.2
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+          working-directory: trainer
+
+      - name: Sync trainer dependencies
+        working-directory: trainer
+        run: uv sync --frozen --extra tensorflow
+
+      - name: Add python3 shim on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $shim = Join-Path $env:RUNNER_TEMP 'python3.cmd'
+          '@echo off' | Set-Content $shim
+          'python %*' | Add-Content $shim
+          $env:RUNNER_TEMP | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Build and smoke release bundle
+        run: pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles "${{ matrix.bundles }}"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: rtneural-trainer-${{ matrix.artifact-suffix }}
+          path: |
+            app/src-tauri/target/release/bundle/**
+            app/src-tauri/target/release/release-artifacts-manifest.json
+            app/src-tauri/binaries/rttrainer-*
+            app/src-tauri/binaries/rtneural-validator-*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

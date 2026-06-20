@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -21,7 +22,7 @@ def main() -> int:
     )
     parser.add_argument("--bundle", action="store_true", help="Generate platform bundles too.")
     parser.add_argument("--release", action="store_true", help="Use a release Tauri build.")
-    args = parser.parse_args()
+    args = parser.parse_args(strip_pnpm_separator(sys.argv[1:]))
 
     ensure_prebuilt_sidecars()
     rttrainer = target_binary("rttrainer")
@@ -67,6 +68,12 @@ def target_binary(stem: str, *, release: bool = False) -> Path:
     suffix = ".exe" if os.name == "nt" else ""
     profile = "release" if release else "debug"
     return TAURI / "target" / profile / f"{stem}{suffix}"
+
+
+def strip_pnpm_separator(argv: list[str]) -> list[str]:
+    if argv and argv[0] == "--":
+        return argv[1:]
+    return argv
 
 
 def smoke_sidecar(path: Path, args: list[str], *, expected_status: int) -> None:
