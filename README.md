@@ -319,6 +319,16 @@ python3 scripts/generate_rtneural_keras_fixtures.py \
   --size 8
 ```
 
+Golden RTNeural JSON fixtures for exported presets live in
+`fixtures/rtneural-json/golden/`. Regenerate them when preset architecture or
+export serialization changes:
+
+```bash
+cd trainer
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
+  ../scripts/generate_golden_rtneural_fixtures.py
+```
+
 ## Downstream Plugin Reference
 
 [RTNeural-example](https://github.com/jatinchowdhury18/RTNeural-example) is a
@@ -350,7 +360,18 @@ Python:
 ```bash
 cd trainer
 UV_CACHE_DIR=../.uv-cache uv run python -m unittest discover -s tests -v
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m unittest discover -s tests -v
 python3 -m compileall rttrainer tests
+```
+
+Golden RTNeural preset fixtures and parity:
+
+```bash
+cd trainer
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
+  ../scripts/generate_golden_rtneural_fixtures.py --check
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
+  -m unittest tests.test_rtneural_golden_fixtures -v
 ```
 
 Frontend:
@@ -392,6 +413,22 @@ UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
 That smoke covers Dense-only, GRU, causal Conv1D, supported activations
 (`tanh`, `relu`, `sigmoid`, `softmax`, `elu`), and the safe 1D
 BatchNorm/PReLU path.
+
+Tauri sidecar workflow smoke:
+
+```bash
+pnpm --filter rtneural-trainer-app smoke:tauri-workflow
+```
+
+Packaged-app smoke:
+
+```bash
+pnpm --filter rtneural-trainer-app smoke:packaged-app
+```
+
+The packaged-app smoke defaults to a debug, no-bundle Tauri build and reuses
+prebuilt sidecar binaries so it can run quickly in CI. Pass `-- --bundle` to the
+script if you need to exercise platform bundle creation too.
 
 ## Useful Docs
 
