@@ -39,12 +39,16 @@ Implemented:
 7. Native file pickers, capture validation, optional resampling, stereo policy,
    manual alignment override, sampled-window handling for long captures,
    gain/headroom guidance, validation curves, early stopping controls, preset
-   recommendations, and good/usable/needs-work report language.
-8. Offline preview playback for target, prediction, and residual WAVs.
+   recommendations, good/usable/needs-work report language, and focused error
+   recovery copy.
+8. Offline preview playback for target, prediction, and residual WAVs, plus
+   peak-envelope waveform comparison.
 9. Rich export package metadata, validation/benchmark report display, and
    open-export-folder support.
 10. Development sidecar shims, production sidecar packaging, release sidecar
     smoke tests, Tauri bundle smoke tests, and release artifact manifests.
+11. First-run generated sample project, setup/empty states, visible focus
+    styling, and reduced-motion support.
 
 Deferred or still productization work:
 
@@ -52,10 +56,11 @@ Deferred or still productization work:
 2. Installer metadata polish for macOS, Windows, and Linux release channels.
 3. Real-world capture threshold tuning for preset recommendations, gain
    guidance, and good/usable/needs-work quality language.
-4. More visual waveform/spectrum inspection for target/prediction/residual.
+4. Deeper waveform/spectrum inspection for target/prediction/residual.
 5. `.aidax` envelope pending format/license review.
 6. Generated JUCE/player integration and compile-time RTNeural model generation.
-7. Accessibility, onboarding/sample project, error copy, and broader UI polish.
+7. Full accessibility audit, UI smoke automation, and broader product polish
+   after real-world use.
 
 ## 1. Non-Negotiable Product Decisions
 
@@ -1452,8 +1457,9 @@ Current next implementation order:
    packaged app, not only bundle shape and sidecar execution.
 4. Decide macOS signing/notarization, Windows signing, artifact retention, and
    release-publishing policy.
-5. Add visual waveform/spectrum inspection for target, prediction, and residual.
-6. Add onboarding/sample project, accessibility pass, and error copy polish.
+5. Add deeper waveform/spectrum inspection for target, prediction, and residual.
+6. Complete a full accessibility audit and tune error/report copy from
+   real-world captures.
 7. Revisit `.aidax`, generated JUCE/player, and compile-time RTNeural only after
    release distribution is boring.
 
