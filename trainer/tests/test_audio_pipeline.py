@@ -149,7 +149,8 @@ class AudioPipelineTests(unittest.TestCase):
             )
 
         self.assertEqual(dataset.summary["selected_windows"], 8)
-        self.assertGreater(dataset.summary["available_windows"], 8)
+        available_windows = int(dataset.summary["available_windows"])
+        self.assertGreater(available_windows, 8)
         self.assertEqual(dataset.summary["selection"], "sampled_across_capture")
 
 

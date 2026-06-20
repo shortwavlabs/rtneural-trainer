@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.metrics.audio_metrics import compute_metrics
@@ -250,11 +250,18 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     resume_checkpoint_path = resolve_resume_checkpoint_path(manifest, best_checkpoint_path)
     resumed_checkpoint: dict[str, Any] | None = None
     if resume_checkpoint_path is not None:
-        resumed_checkpoint = torch.load(resume_checkpoint_path, map_location="cpu", weights_only=False)
-        model.load_state_dict(resumed_checkpoint["model_state_dict"])
-        optimizer.load_state_dict(resumed_checkpoint["optimizer_state_dict"])
+        loaded_checkpoint = cast(
+            dict[str, Any],
+            torch.load(resume_checkpoint_path, map_location="cpu", weights_only=False),
+        )
+        model.load_state_dict(loaded_checkpoint["model_state_dict"])
+        optimizer.load_state_dict(loaded_checkpoint["optimizer_state_dict"])
+        resumed_checkpoint = loaded_checkpoint
+    train_x = cast(Any, dataset.train_x)
+    train_y = cast(Any, dataset.train_y)
+    val_y = cast(Any, dataset.val_y)
     train_loader = torch.utils.data.DataLoader(
-        torch.utils.data.TensorDataset(dataset.train_x, dataset.train_y),
+        torch.utils.data.TensorDataset(train_x, train_y),
         batch_size=batch_size,
         shuffle=True,
     )
@@ -297,7 +304,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             losses.append(float(loss.detach().cpu().item()))
 
         val_prediction = predict_torch_tensor(torch, model, dataset.val_x, device)
-        flat_target = flatten_array(dataset.val_y.squeeze(-1).detach().cpu().tolist())
+        flat_target = flatten_array(val_y.squeeze(-1).detach().cpu().tolist())
         flat_pred = flatten_array(val_prediction.squeeze(-1).detach().cpu().tolist())
         last_metrics = compute_metrics(flat_target, flat_pred)
         train_loss = sum(losses) / max(1, len(losses))

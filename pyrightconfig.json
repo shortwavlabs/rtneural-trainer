@@ -1,0 +1,13 @@
+{
+  "include": [
+    "scripts",
+    "trainer/rttrainer",
+    "trainer/tests"
+  ],
+  "extraPaths": [
+    "trainer"
+  ],
+  "venvPath": "trainer",
+  "venv": ".venv",
+  "pythonVersion": "3.12"
+}

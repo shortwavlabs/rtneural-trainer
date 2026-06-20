@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypedDict
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,35 @@ class ActivationSpec:
     benchmarked: bool
     priority: str
     notes: str
+
+
+class LayerSpecPayload(TypedDict):
+    key: str
+    rtneural_type: str
+    status: str
+    keras: str
+    pytorch: str
+    benchmarked: bool
+    priority: str
+    notes: str
+
+
+class ActivationSpecPayload(TypedDict):
+    key: str
+    rtneural_name: str
+    status: str
+    keras: str
+    pytorch: str
+    benchmarked: bool
+    priority: str
+    notes: str
+
+
+class SupportMatrix(TypedDict):
+    benchmark_sizes: list[int]
+    benchmark_engines: list[str]
+    layers: list[LayerSpecPayload]
+    activations: list[ActivationSpecPayload]
 
 
 BENCHMARK_SIZES = [4, 8, 16, 32, 64]
@@ -193,10 +223,39 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
 }
 
 
-def support_matrix() -> dict[str, object]:
+def support_matrix() -> SupportMatrix:
     return {
         "benchmark_sizes": BENCHMARK_SIZES,
         "benchmark_engines": BENCHMARK_ENGINES,
-        "layers": [spec.__dict__ for spec in LAYER_SPECS.values()],
-        "activations": [spec.__dict__ for spec in ACTIVATION_SPECS.values()],
+        "layers": [layer_spec_payload(spec) for spec in LAYER_SPECS.values()],
+        "activations": [
+            activation_spec_payload(spec)
+            for spec in ACTIVATION_SPECS.values()
+        ],
+    }
+
+
+def layer_spec_payload(spec: LayerSpec) -> LayerSpecPayload:
+    return {
+        "key": spec.key,
+        "rtneural_type": spec.rtneural_type,
+        "status": spec.status,
+        "keras": spec.keras,
+        "pytorch": spec.pytorch,
+        "benchmarked": spec.benchmarked,
+        "priority": spec.priority,
+        "notes": spec.notes,
+    }
+
+
+def activation_spec_payload(spec: ActivationSpec) -> ActivationSpecPayload:
+    return {
+        "key": spec.key,
+        "rtneural_name": spec.rtneural_name,
+        "status": spec.status,
+        "keras": spec.keras,
+        "pytorch": spec.pytorch,
+        "benchmarked": spec.benchmarked,
+        "priority": spec.priority,
+        "notes": spec.notes,
     }

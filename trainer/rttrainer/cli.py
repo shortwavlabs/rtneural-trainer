@@ -89,7 +89,17 @@ def run_prepare_command(manifest: dict) -> int:
 def optional_int(value: object) -> int | None:
     if value is None or value == "":
         return None
-    return int(value)
+    if isinstance(value, bool):
+        raise ValueError("Expected an integer value, got boolean.")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"Expected an integer value, got {value!r}.")
+        return int(value)
+    if isinstance(value, str):
+        return int(value)
+    raise ValueError(f"Expected an integer value, got {type(value).__name__}.")
 
 
 if __name__ == "__main__":

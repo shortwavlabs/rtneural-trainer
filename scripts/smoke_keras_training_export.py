@@ -3,16 +3,19 @@ from __future__ import annotations
 import argparse
 import math
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
-from rttrainer.data.audio_io import write_wav_mono
-from rttrainer.export_rtneural.json_exporter import export_checkpoint
-from rttrainer.training.runner import run_training
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TRAINER = PROJECT_ROOT / "trainer"
 DEFAULT_VALIDATOR = PROJECT_ROOT / "native/rtneural-validator/build/rtneural-validator"
+sys.path.insert(0, str(TRAINER))
+
+from rttrainer.data.audio_io import write_wav_mono  # noqa: E402
+from rttrainer.export_rtneural.json_exporter import export_checkpoint  # noqa: E402
+from rttrainer.training.runner import run_training  # noqa: E402
 
 
 def main() -> int:

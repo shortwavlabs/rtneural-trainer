@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -7,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, Protocol, cast
 
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.models.presets import PRESETS
@@ -14,25 +16,62 @@ from rttrainer.validation.parity import run_exported_json
 
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "scripts"))
 VALIDATOR = ROOT / "native/rtneural-validator/build" / (
     "rtneural-validator.exe" if os.name == "nt" else "rtneural-validator"
 )
 
-try:
-    import generate_golden_rtneural_fixtures as golden
 
+class GoldenFixture(Protocol):
+    payload: dict[str, Any]
+    model: Any
+
+
+class GoldenFixtureModule(Protocol):
+    def require_tensorflow(self) -> Any: ...
+
+    def build_all_fixtures(self) -> dict[str, dict[str, Any]]: ...
+
+    def build_fixture_models(self) -> dict[str, GoldenFixture]: ...
+
+    def canonical_json(self, payload: dict[str, Any]) -> str: ...
+
+
+def load_golden_fixture_module() -> GoldenFixtureModule:
+    module_path = ROOT / "scripts" / "generate_golden_rtneural_fixtures.py"
+    spec = importlib.util.spec_from_file_location(
+        "generate_golden_rtneural_fixtures",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load golden fixture script: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return cast(GoldenFixtureModule, module)
+
+
+try:
+    golden: GoldenFixtureModule | None = load_golden_fixture_module()
     GOLDEN_IMPORT_ERROR: Exception | None = None
 except Exception as exc:  # pragma: no cover - reported through skip reason
-    golden = None  # type: ignore[assignment]
+    golden = None
     GOLDEN_IMPORT_ERROR = exc
+
+
+def require_golden_fixture_module() -> GoldenFixtureModule:
+    if golden is None:
+        raise unittest.SkipTest(
+            f"Golden RTNeural fixture script could not be loaded: {GOLDEN_IMPORT_ERROR}"
+        )
+    return golden
 
 
 def tensorflow_available() -> bool:
     if GOLDEN_IMPORT_ERROR is not None:
         return False
+    golden_module = require_golden_fixture_module()
     try:
-        golden.require_tensorflow()  # type: ignore[union-attr]
+        golden_module.require_tensorflow()
     except Exception:
         return False
     return True
@@ -57,19 +96,21 @@ class RTNeuralGoldenFixtureTests(unittest.TestCase):
         self.assertEqual(set(PRESETS), fixture_names)
 
     def test_golden_fixtures_are_current(self) -> None:
+        golden_module = require_golden_fixture_module()
         fixture_dir = ROOT / "fixtures/rtneural-json/golden"
-        generated = golden.build_all_fixtures()  # type: ignore[union-attr]
+        generated = golden_module.build_all_fixtures()
 
         for preset_id, payload in generated.items():
             with self.subTest(preset=preset_id):
                 fixture_path = fixture_dir / f"{preset_id}.rtneural.json"
                 self.assertEqual(
                     fixture_path.read_text(encoding="utf-8"),
-                    golden.canonical_json(payload),  # type: ignore[union-attr]
+                    golden_module.canonical_json(payload),
                 )
 
     def test_every_exported_preset_matches_keras_backend(self) -> None:
-        fixtures = golden.build_fixture_models()  # type: ignore[union-attr]
+        golden_module = require_golden_fixture_module()
+        fixtures = golden_module.build_fixture_models()
         input_samples = [
             0.23,
             -0.11,
@@ -104,7 +145,8 @@ class RTNeuralGoldenFixtureTests(unittest.TestCase):
         "Native RTNeural validator is required for golden fixture validation.",
     )
     def test_every_golden_fixture_validates_in_native_rtneural(self) -> None:
-        fixtures = golden.build_fixture_models()  # type: ignore[union-attr]
+        golden_module = require_golden_fixture_module()
+        fixtures = golden_module.build_fixture_models()
         fixture_dir = ROOT / "fixtures/rtneural-json/golden"
         input_samples = [
             0.19,

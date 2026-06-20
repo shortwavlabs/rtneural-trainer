@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TRAINER = ROOT / "trainer"
 sys.path.insert(0, str(TRAINER))
 
-from rttrainer.export_rtneural.registry import support_matrix  # noqa: E402
+from rttrainer.export_rtneural.registry import SupportMatrix, support_matrix  # noqa: E402
 
 
 def main() -> int:
@@ -25,13 +25,13 @@ def main() -> int:
     return 0
 
 
-def print_markdown(matrix: dict[str, object]) -> None:
+def print_markdown(matrix: SupportMatrix) -> None:
     print("# RTNeural Layer Support Matrix\n")
     print("Benchmark sizes from RTNeural-compare:", ", ".join(map(str, matrix["benchmark_sizes"])))
     print("\n## Layers\n")
     print("| Key | RTNeural type | Status | Keras | PyTorch | Benchmarked | Priority |")
     print("| --- | --- | --- | --- | --- | --- | --- |")
-    for layer in matrix["layers"]:  # type: ignore[index]
+    for layer in matrix["layers"]:
         print(
             f"| `{layer['key']}` | `{layer['rtneural_type']}` | {layer['status']} | "
             f"`{layer['keras']}` | `{layer['pytorch']}` | {yes_no(layer['benchmarked'])} | {layer['priority']} |"
@@ -39,7 +39,7 @@ def print_markdown(matrix: dict[str, object]) -> None:
     print("\n## Activations\n")
     print("| Key | RTNeural name | Status | Keras | PyTorch | Benchmarked | Priority |")
     print("| --- | --- | --- | --- | --- | --- | --- |")
-    for activation in matrix["activations"]:  # type: ignore[index]
+    for activation in matrix["activations"]:
         print(
             f"| `{activation['key']}` | `{activation['rtneural_name']}` | {activation['status']} | "
             f"`{activation['keras']}` | `{activation['pytorch']}` | {yes_no(activation['benchmarked'])} | {activation['priority']} |"
