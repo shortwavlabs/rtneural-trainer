@@ -12,8 +12,10 @@ import {
   LoaderCircle,
   PackageCheck,
   Play,
+  RotateCcw,
   Save,
   SlidersHorizontal,
+  Square,
   type LucideIcon,
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
@@ -83,6 +85,9 @@ export default function App() {
     const unlisten = listen<SidecarProgressEvent>("sidecar-progress", (event) => {
       if (!mounted) return;
       setProgressEvents((current) => [...current, event.payload].slice(-120));
+      if (selectedId && shouldRefreshProject(event.payload)) {
+        void loadProject(selectedId);
+      }
     });
 
     unlisten.catch((caught) => {
@@ -93,7 +98,7 @@ export default function App() {
       mounted = false;
       void unlisten.then((dispose) => dispose());
     };
-  }, []);
+  }, [selectedId]);
 
   useEffect(() => {
     setProgressEvents([]);
@@ -144,6 +149,16 @@ export default function App() {
     await refreshProjects();
     if (nextTab) setActiveTab(nextTab);
   }
+
+  const hasActiveRun = Boolean(
+    project?.runs.some((run) =>
+      ["queued", "preparing", "running", "cancelling"].includes(run.status),
+    ),
+  );
+  const hasActiveExport = Boolean(
+    project?.exports.some((item) => ["pending", "validating"].includes(item.status)),
+  );
+  const progressActive = sidecarBusy || hasActiveRun || hasActiveExport;
 
   return (
     <div className="app-shell">
@@ -232,7 +247,35 @@ export default function App() {
                         project_id: project.id,
                         preset,
                       });
-                      await commitProject(nextProject, "evaluate");
+                      await commitProject(nextProject, "train");
+                    } catch (caught) {
+                      setError(toMessage(caught));
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                  onCancel={async (runId) => {
+                    setBusy("cancel");
+                    try {
+                      const nextProject = await api.cancelTrainingRun({
+                        project_id: project.id,
+                        run_id: runId,
+                      });
+                      await commitProject(nextProject, "train");
+                    } catch (caught) {
+                      setError(toMessage(caught));
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                  onResume={async (runId) => {
+                    setBusy("resume");
+                    try {
+                      const nextProject = await api.resumeTrainingRun({
+                        project_id: project.id,
+                        run_id: runId,
+                      });
+                      await commitProject(nextProject, "train");
                     } catch (caught) {
                       setError(toMessage(caught));
                     } finally {
@@ -267,7 +310,7 @@ export default function App() {
               ) : null}
             </section>
 
-            <ProgressLog events={progressEvents} active={sidecarBusy} />
+            <ProgressLog events={progressEvents} active={progressActive} />
 
             <NotesPanel
               project={project}
@@ -573,13 +616,23 @@ function TrainView({
   project,
   busy,
   onTrain,
+  onCancel,
+  onResume,
 }: {
   project: ProjectDetail;
   busy: boolean;
   onTrain: (preset: string) => Promise<void>;
+  onCancel: (runId: string) => Promise<void>;
+  onResume: (runId: string) => Promise<void>;
 }) {
   const [preset, setPreset] = useState("lstm_standard");
   const canTrain = project.audio?.status === "ready";
+  const activeRun = [...project.runs]
+    .reverse()
+    .find((run) => ["queued", "preparing", "running", "cancelling"].includes(run.status));
+  const resumableRun = [...project.runs]
+    .reverse()
+    .find((run) => run.status === "failed" || run.status === "interrupted");
 
   return (
     <div className="screen-grid">
@@ -608,12 +661,33 @@ function TrainView({
         <button
           className="primary-button wide"
           type="button"
-          disabled={!canTrain || busy}
+          disabled={!canTrain || busy || Boolean(activeRun)}
           onClick={() => void onTrain(preset)}
         >
           {busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
           Train
         </button>
+        {activeRun ? (
+          <button
+            className="danger-button wide"
+            type="button"
+            disabled={activeRun.status === "cancelling"}
+            onClick={() => void onCancel(activeRun.id)}
+          >
+            <Square size={16} />
+            {activeRun.status === "cancelling" ? "Cancelling" : "Cancel run"}
+          </button>
+        ) : null}
+        {!activeRun && resumableRun ? (
+          <button
+            className="secondary-button wide"
+            type="button"
+            onClick={() => void onResume(resumableRun.id)}
+          >
+            <RotateCcw size={16} />
+            Resume checkpoint
+          </button>
+        ) : null}
         {!canTrain ? (
           <div className="notice notice-warning">
             <AlertTriangle size={18} />
@@ -769,6 +843,7 @@ function RunTable({ runs }: { runs: TrainingRun[] }) {
     <div className="table">
       <div className="table-head">
         <span>Preset</span>
+        <span>Status</span>
         <span>Device</span>
         <span>ESR</span>
         <span>RTF</span>
@@ -776,6 +851,7 @@ function RunTable({ runs }: { runs: TrainingRun[] }) {
       {runs.map((run) => (
         <div className="table-row" key={run.id}>
           <span>{run.preset}</span>
+          <span>{run.status}</span>
           <span>{run.device}</span>
           <span>{run.metrics ? run.metrics.esr.toFixed(3) : run.status}</span>
           <span>{run.metrics ? `${run.metrics.realtime_factor.toFixed(0)}x` : "none"}</span>
@@ -1085,6 +1161,28 @@ function formatEventTime(timestamp: string) {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function shouldRefreshProject(event: SidecarProgressEvent) {
+  const type = eventType(event);
+  if (
+    [
+      "run_finished",
+      "train_command_finished",
+      "export_finished",
+      "prepare_finished",
+      "error",
+    ].includes(type ?? "")
+  ) {
+    return true;
+  }
+  return (
+    event.stream === "system" &&
+    (event.line.includes("completed") ||
+      event.line.includes("failed") ||
+      event.line.includes("finished") ||
+      event.line.includes("interrupted"))
+  );
 }
 
 function isTauriRuntime() {

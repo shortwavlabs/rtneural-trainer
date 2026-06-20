@@ -3,6 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     fs,
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
@@ -185,6 +186,12 @@ struct StartTrainingRequest {
 }
 
 #[derive(Deserialize)]
+struct RunControlRequest {
+    project_id: String,
+    run_id: String,
+}
+
+#[derive(Deserialize)]
 struct ExportRunRequest {
     project_id: String,
     run_id: String,
@@ -206,11 +213,17 @@ struct AppState {
     projects_dir: PathBuf,
     workspace_root: PathBuf,
     db: Mutex<Connection>,
+    active_jobs: Mutex<HashMap<String, ActiveProcess>>,
 }
 
 struct SidecarOutput {
     stdout: String,
     stderr: String,
+}
+
+#[derive(Clone)]
+struct ActiveProcess {
+    pid: u32,
 }
 
 #[derive(Clone)]
@@ -356,6 +369,7 @@ fn update_project_audio(
 
     let project_dir = {
         let db = state.db.lock().map_err(lock_error)?;
+        ensure_no_active_project_job(&db, &payload.project_id)?;
         PathBuf::from(load_project_detail(&db, &payload.project_id)?.project_dir)
     };
 
@@ -433,6 +447,7 @@ fn start_training(
         if !audio_ready {
             return Err("Audio must pass preflight before training.".to_string());
         }
+        ensure_no_active_project_job(&db, &payload.project_id)?;
         PathBuf::from(&project.project_dir)
     };
 
@@ -487,52 +502,113 @@ fn start_training(
         Some(&run_id),
         None,
     )?;
-    let sidecar_result = run_rttrainer(
-        &app,
-        &state,
-        "train",
-        &manifest_path,
-        SidecarContext {
-            job_id: job_id.clone(),
-            operation: "train".to_string(),
-            project_id: Some(payload.project_id.clone()),
-            run_id: Some(run_id.clone()),
-            export_id: None,
-        },
+    spawn_training_worker(
+        app.clone(),
+        payload.project_id.clone(),
+        run_id.clone(),
+        job_id,
+        manifest_path,
+        project_dir.clone(),
+        run_dir,
+        log_path,
     );
-    let sidecar = match sidecar_result {
-        Ok(output) => output,
-        Err(error) => {
-            mark_job_failed(&state, &job_id, &error)?;
-            let db = state.db.lock().map_err(lock_error)?;
-            update_training_run_failure(&db, &run_id, &error)?;
-            update_project_status(&db, &payload.project_id, &ProjectStatus::Ready, &now())?;
-            return Err(error);
-        }
-    };
-    mark_job_completed(&state, &job_id)?;
-    fs::write(&log_path, sidecar.stdout).map_err(to_error)?;
-    if !sidecar.stderr.trim().is_empty() {
-        fs::write(run_dir.join("stderr.log"), sidecar.stderr).map_err(to_error)?;
-    }
-
-    let report: TrainingReport = read_json(&run_dir.join("training-report.json"))?;
-
-    let completed_run = TrainingRun {
-        id: report.run_id,
-        preset: report.preset,
-        status: RunStatus::Completed,
-        device: report.device,
-        epochs: report.epochs,
-        created_at: report.created_at.clone(),
-        updated_at: now(),
-        metrics: Some(report.metrics),
-        log_path: relative_path_string(&project_dir, &log_path),
-    };
 
     let db = state.db.lock().map_err(lock_error)?;
-    update_training_run_success(&db, &completed_run)?;
-    update_project_status(&db, &payload.project_id, &ProjectStatus::Ready, &now())?;
+    load_project_detail(&db, &payload.project_id)
+}
+
+#[tauri::command]
+fn cancel_training_run(
+    state: tauri::State<AppState>,
+    payload: RunControlRequest,
+) -> Result<ProjectDetail, String> {
+    let (job_id, project_id) = {
+        let db = state.db.lock().map_err(lock_error)?;
+        let project = load_project_detail(&db, &payload.project_id)?;
+        let run = project
+            .runs
+            .iter()
+            .find(|run| run.id == payload.run_id)
+            .ok_or_else(|| "Run not found".to_string())?;
+        if !matches!(
+            run.status,
+            RunStatus::Queued | RunStatus::Preparing | RunStatus::Running | RunStatus::Cancelling
+        ) {
+            return Err("Only active training runs can be cancelled.".to_string());
+        }
+        let job_id = active_training_job_for_run(&db, &payload.run_id)?
+            .ok_or_else(|| "No active process is registered for this run.".to_string())?;
+        update_training_run_status(
+            &db,
+            &payload.run_id,
+            &RunStatus::Cancelling,
+            Some("Cancellation requested."),
+        )?;
+        update_job_status_in_db(&db, &job_id, &JobStatus::Cancelling, None)?;
+        (job_id, project.id)
+    };
+
+    let _ = terminate_active_process(&state, &job_id)?;
+    let db = state.db.lock().map_err(lock_error)?;
+    load_project_detail(&db, &project_id)
+}
+
+#[tauri::command]
+fn resume_training_run(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    payload: RunControlRequest,
+) -> Result<ProjectDetail, String> {
+    let (project_dir, run_dir, manifest_path, log_path) = {
+        let db = state.db.lock().map_err(lock_error)?;
+        let project = load_project_detail(&db, &payload.project_id)?;
+        ensure_no_active_project_job(&db, &payload.project_id)?;
+        let run = project
+            .runs
+            .iter()
+            .find(|run| run.id == payload.run_id)
+            .ok_or_else(|| "Run not found".to_string())?;
+        if !matches!(run.status, RunStatus::Failed | RunStatus::Interrupted) {
+            return Err("Only failed or interrupted runs can be resumed.".to_string());
+        }
+        let project_dir = PathBuf::from(&project.project_dir);
+        let run_dir = artifact_path(&project_dir, &training_run_dir(&db, &payload.run_id)?);
+        let manifest_path = run_dir.join("train-manifest.json");
+        if !manifest_path.exists() {
+            return Err("Run manifest is missing; this run cannot be resumed.".to_string());
+        }
+        let checkpoint_path = best_checkpoint_path(&run_dir)
+            .ok_or_else(|| "No checkpoint exists for this run yet.".to_string())?;
+        let mut manifest: serde_json::Value = read_json(&manifest_path)?;
+        manifest["resume_from_checkpoint"] = serde_json::Value::Bool(true);
+        manifest["checkpoint_path"] =
+            serde_json::Value::String(checkpoint_path.display().to_string());
+        write_json(&manifest_path, &manifest)?;
+        let log_path = run_dir.join("events.jsonl");
+        update_training_run_status(&db, &payload.run_id, &RunStatus::Running, None)?;
+        update_project_status(&db, &payload.project_id, &ProjectStatus::Training, &now())?;
+        (project_dir, run_dir, manifest_path, log_path)
+    };
+
+    let job_id = create_job(
+        &state,
+        "train",
+        Some(&payload.project_id),
+        Some(&payload.run_id),
+        None,
+    )?;
+    spawn_training_worker(
+        app.clone(),
+        payload.project_id.clone(),
+        payload.run_id.clone(),
+        job_id,
+        manifest_path,
+        project_dir,
+        run_dir,
+        log_path,
+    );
+
+    let db = state.db.lock().map_err(lock_error)?;
     load_project_detail(&db, &payload.project_id)
 }
 
@@ -546,6 +622,7 @@ fn export_run(
     let (project_name, project_id, project_dir, run, sample_rate, latency_samples) = {
         let db = state.db.lock().map_err(lock_error)?;
         let project = load_project_detail(&db, &payload.project_id)?;
+        ensure_no_active_project_job(&db, &payload.project_id)?;
         let run = project
             .runs
             .iter()
@@ -763,6 +840,7 @@ pub fn run() {
                 projects_dir,
                 workspace_root: workspace_root(),
                 db: Mutex::new(db),
+                active_jobs: Mutex::new(HashMap::new()),
             });
             Ok(())
         })
@@ -774,6 +852,8 @@ pub fn run() {
             create_project,
             update_project_audio,
             start_training,
+            cancel_training_run,
+            resume_training_run,
             export_run,
             update_notes
         ])
@@ -1366,6 +1446,91 @@ fn update_training_run_failure(db: &Connection, run_id: &str, error: &str) -> Re
     Ok(())
 }
 
+fn update_training_run_status(
+    db: &Connection,
+    run_id: &str,
+    status: &RunStatus,
+    error: Option<&str>,
+) -> Result<(), String> {
+    db.execute(
+        "UPDATE training_runs
+         SET status = ?1, updated_at = ?2, error = ?3
+         WHERE id = ?4",
+        params![enum_to_string(status)?, now(), error, run_id],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn active_training_job_for_run(db: &Connection, run_id: &str) -> Result<Option<String>, String> {
+    db.query_row(
+        "SELECT id
+         FROM jobs
+         WHERE run_id = ?1
+           AND operation = 'train'
+           AND status IN ('queued', 'running', 'cancelling')
+         ORDER BY created_at DESC
+         LIMIT 1",
+        params![run_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(to_error)
+}
+
+fn job_status(db: &Connection, job_id: &str) -> Result<Option<String>, String> {
+    db.query_row(
+        "SELECT status FROM jobs WHERE id = ?1",
+        params![job_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(to_error)
+}
+
+fn ensure_no_active_project_job(db: &Connection, project_id: &str) -> Result<(), String> {
+    let active_job = db
+        .query_row(
+            "SELECT operation
+             FROM jobs
+             WHERE project_id = ?1
+               AND status IN ('queued', 'running', 'cancelling')
+             ORDER BY created_at DESC
+             LIMIT 1",
+            params![project_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(to_error)?;
+    if let Some(operation) = active_job {
+        return Err(format!(
+            "Project already has an active {operation} job. Wait, cancel, or resume before starting another job."
+        ));
+    }
+    Ok(())
+}
+
+fn training_run_dir(db: &Connection, run_id: &str) -> Result<String, String> {
+    db.query_row(
+        "SELECT run_dir FROM training_runs WHERE id = ?1",
+        params![run_id],
+        |row| row.get(0),
+    )
+    .map_err(to_error)
+}
+
+fn best_checkpoint_path(run_dir: &Path) -> Option<PathBuf> {
+    let keras = run_dir.join("checkpoints/best-model.keras");
+    if keras.exists() {
+        return Some(keras);
+    }
+    let torch = run_dir.join("checkpoints/best-checkpoint.pt");
+    if torch.exists() {
+        return Some(torch);
+    }
+    None
+}
+
 fn insert_export_package(
     db: &Connection,
     project_id: &str,
@@ -1478,13 +1643,36 @@ fn update_job_status(
     status: &JobStatus,
     error: Option<&str>,
 ) -> Result<(), String> {
-    let timestamp = now();
     let db = state.db.lock().map_err(lock_error)?;
+    update_job_status_in_db(&db, job_id, status, error)
+}
+
+fn update_job_status_in_db(
+    db: &Connection,
+    job_id: &str,
+    status: &JobStatus,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let timestamp = now();
+    let finished_at = if matches!(
+        status,
+        JobStatus::Completed | JobStatus::Failed | JobStatus::Interrupted
+    ) {
+        Some(timestamp.as_str())
+    } else {
+        None
+    };
     db.execute(
         "UPDATE jobs
-         SET status = ?1, updated_at = ?2, finished_at = ?2, error = ?3
-         WHERE id = ?4",
-        params![enum_to_string(status)?, timestamp, error, job_id],
+         SET status = ?1, updated_at = ?2, finished_at = ?3, error = ?4
+         WHERE id = ?5",
+        params![
+            enum_to_string(status)?,
+            timestamp,
+            finished_at,
+            error,
+            job_id
+        ],
     )
     .map_err(to_error)?;
     Ok(())
@@ -1581,6 +1769,174 @@ fn binary_exists(dir: &Path, stem: &str) -> bool {
 fn write_json<P: AsRef<Path>, T: Serialize>(path: P, value: &T) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(value).map_err(to_error)?;
     fs::write(path, format!("{raw}\n")).map_err(to_error)
+}
+
+fn spawn_training_worker(
+    app: tauri::AppHandle,
+    project_id: String,
+    run_id: String,
+    job_id: String,
+    manifest_path: PathBuf,
+    project_dir: PathBuf,
+    run_dir: PathBuf,
+    log_path: PathBuf,
+) {
+    thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let context = SidecarContext {
+            job_id: job_id.clone(),
+            operation: "train".to_string(),
+            project_id: Some(project_id.clone()),
+            run_id: Some(run_id.clone()),
+            export_id: None,
+        };
+        let cancelled_before_start = {
+            let db = match state.db.lock().map_err(lock_error) {
+                Ok(db) => db,
+                Err(error) => {
+                    finish_training_failure(&app, &state, &project_id, &run_id, &job_id, &error);
+                    return;
+                }
+            };
+            matches!(job_status(&db, &job_id), Ok(Some(status)) if status == "cancelling")
+        };
+        if cancelled_before_start {
+            finish_training_failure(
+                &app,
+                &state,
+                &project_id,
+                &run_id,
+                &job_id,
+                "Training was cancelled before the process started.",
+            );
+            return;
+        }
+        let result = run_rttrainer(&app, &state, "train", &manifest_path, context);
+        match result {
+            Ok(sidecar) => {
+                if let Err(error) = fs::write(&log_path, sidecar.stdout).map_err(to_error) {
+                    finish_training_failure(&app, &state, &project_id, &run_id, &job_id, &error);
+                    return;
+                }
+                if !sidecar.stderr.trim().is_empty() {
+                    let _ = fs::write(run_dir.join("stderr.log"), sidecar.stderr);
+                }
+                match read_json::<TrainingReport>(&run_dir.join("training-report.json")) {
+                    Ok(report) => {
+                        let completed_run = TrainingRun {
+                            id: report.run_id,
+                            preset: report.preset,
+                            status: RunStatus::Completed,
+                            device: report.device,
+                            epochs: report.epochs,
+                            created_at: report.created_at.clone(),
+                            updated_at: now(),
+                            metrics: Some(report.metrics),
+                            log_path: relative_path_string(&project_dir, &log_path),
+                        };
+                        let update_result = (|| -> Result<(), String> {
+                            let db = state.db.lock().map_err(lock_error)?;
+                            update_training_run_success(&db, &completed_run)?;
+                            update_project_status(&db, &project_id, &ProjectStatus::Ready, &now())?;
+                            Ok(())
+                        })();
+                        if let Err(error) = update_result {
+                            finish_training_failure(
+                                &app,
+                                &state,
+                                &project_id,
+                                &run_id,
+                                &job_id,
+                                &error,
+                            );
+                            return;
+                        }
+                        if let Err(error) = mark_job_completed(&state, &job_id) {
+                            emit_sidecar_line(
+                                &app,
+                                &job_context(&job_id, &project_id, &run_id),
+                                "system",
+                                &error,
+                            );
+                        } else {
+                            emit_sidecar_line(
+                                &app,
+                                &job_context(&job_id, &project_id, &run_id),
+                                "system",
+                                "training completed",
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        finish_training_failure(
+                            &app,
+                            &state,
+                            &project_id,
+                            &run_id,
+                            &job_id,
+                            &error,
+                        );
+                    }
+                }
+            }
+            Err(error) => {
+                finish_training_failure(&app, &state, &project_id, &run_id, &job_id, &error);
+            }
+        }
+    });
+}
+
+fn finish_training_failure(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    project_id: &str,
+    run_id: &str,
+    job_id: &str,
+    error: &str,
+) {
+    let context = job_context(job_id, project_id, run_id);
+    let mut final_line = "training failed";
+    let update_result = (|| -> Result<(), String> {
+        let db = state.db.lock().map_err(lock_error)?;
+        let cancelling = job_status(&db, job_id)?
+            .map(|status| status == "cancelling")
+            .unwrap_or(false);
+        if cancelling {
+            final_line = "training interrupted";
+            update_training_run_status(
+                &db,
+                run_id,
+                &RunStatus::Interrupted,
+                Some("Training was cancelled."),
+            )?;
+            update_job_status_in_db(
+                &db,
+                job_id,
+                &JobStatus::Interrupted,
+                Some("Training was cancelled."),
+            )?;
+        } else {
+            update_training_run_failure(&db, run_id, error)?;
+            update_job_status_in_db(&db, job_id, &JobStatus::Failed, Some(error))?;
+        }
+        update_project_status(&db, project_id, &ProjectStatus::Ready, &now())?;
+        Ok(())
+    })();
+    if let Err(update_error) = update_result {
+        emit_sidecar_line(app, &context, "system", &update_error);
+    } else {
+        emit_sidecar_line(app, &context, "system", final_line);
+    }
+}
+
+fn job_context(job_id: &str, project_id: &str, run_id: &str) -> SidecarContext {
+    SidecarContext {
+        job_id: job_id.to_string(),
+        operation: "train".to_string(),
+        project_id: Some(project_id.to_string()),
+        run_id: Some(run_id.to_string()),
+        export_id: None,
+    }
 }
 
 fn run_rttrainer(
@@ -1702,6 +2058,12 @@ fn run_streaming_process(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(to_error)?;
+    register_active_process(app, context, child.id())?;
+    if context.operation == "train" && job_is_cancelling(app, &context.job_id)? {
+        if let Err(error) = terminate_pid(child.id()) {
+            emit_sidecar_line(app, context, "system", &error);
+        }
+    }
 
     let stdout = child
         .stdout
@@ -1715,6 +2077,7 @@ fn run_streaming_process(
     let stdout_reader = spawn_stream_reader(app.clone(), context.clone(), "stdout", stdout);
     let stderr_reader = spawn_stream_reader(app.clone(), context.clone(), "stderr", stderr);
     let status = child.wait().map_err(to_error)?;
+    unregister_active_process(app, &context.job_id);
     let stdout = join_stream_reader(stdout_reader, "stdout")?;
     let stderr = join_stream_reader(stderr_reader, "stderr")?;
 
@@ -1755,6 +2118,74 @@ fn join_stream_reader(
     handle
         .join()
         .map_err(|_| format!("Sidecar {stream} reader panicked."))?
+}
+
+fn register_active_process(
+    app: &tauri::AppHandle,
+    context: &SidecarContext,
+    pid: u32,
+) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut active_jobs = state.active_jobs.lock().map_err(lock_error)?;
+    active_jobs.insert(context.job_id.clone(), ActiveProcess { pid });
+    Ok(())
+}
+
+fn unregister_active_process(app: &tauri::AppHandle, job_id: &str) {
+    let state = app.state::<AppState>();
+    if let Ok(mut active_jobs) = state.active_jobs.lock() {
+        active_jobs.remove(job_id);
+    };
+}
+
+fn terminate_active_process(state: &AppState, job_id: &str) -> Result<bool, String> {
+    let process = {
+        let active_jobs = state.active_jobs.lock().map_err(lock_error)?;
+        active_jobs.get(job_id).cloned()
+    };
+    let Some(process) = process else {
+        return Ok(false);
+    };
+    terminate_pid(process.pid)?;
+    Ok(true)
+}
+
+fn job_is_cancelling(app: &tauri::AppHandle, job_id: &str) -> Result<bool, String> {
+    let state = app.state::<AppState>();
+    let db = state.db.lock().map_err(lock_error)?;
+    Ok(job_status(&db, job_id)?
+        .map(|status| status == "cancelling")
+        .unwrap_or(false))
+}
+
+#[cfg(unix)]
+fn terminate_pid(pid: u32) -> Result<(), String> {
+    let status = Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status()
+        .map_err(to_error)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Failed to terminate process {pid}: {status}"))
+    }
+}
+
+#[cfg(windows)]
+fn terminate_pid(pid: u32) -> Result<(), String> {
+    let status = Command::new("taskkill")
+        .arg("/PID")
+        .arg(pid.to_string())
+        .arg("/T")
+        .arg("/F")
+        .status()
+        .map_err(to_error)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Failed to terminate process {pid}: {status}"))
+    }
 }
 
 fn emit_sidecar_line(app: &tauri::AppHandle, context: &SidecarContext, stream: &str, line: &str) {
@@ -1850,12 +2281,62 @@ mod tests {
             exports: Vec::new(),
         };
         insert_project(&db, &project).expect("insert project");
+        let audio = AudioReport {
+            input: AudioFileReport {
+                sample_rate: 48_000,
+                channels: 1,
+                duration_seconds: 1.0,
+                peak_dbfs: -3.0,
+                rms_dbfs: -18.0,
+                clipped_samples: 0,
+                dc_offset: 0.0,
+                path: "input.wav".to_string(),
+            },
+            target: AudioFileReport {
+                sample_rate: 48_000,
+                channels: 1,
+                duration_seconds: 1.0,
+                peak_dbfs: -3.0,
+                rms_dbfs: -18.0,
+                clipped_samples: 0,
+                dc_offset: 0.0,
+                path: "target.wav".to_string(),
+            },
+            latency_samples: 0,
+            latency_confidence: 1.0,
+            warnings: Vec::new(),
+            status: AudioStatus::Ready,
+        };
+        upsert_audio_report(&db, &project.id, &audio).expect("insert audio report");
+        update_project_status(&db, &project.id, &ProjectStatus::Training, &now())
+            .expect("mark project training");
+        let run = TrainingRun {
+            id: "run_test".to_string(),
+            preset: "lstm_standard".to_string(),
+            status: RunStatus::Running,
+            device: "pending".to_string(),
+            epochs: 0,
+            created_at: now(),
+            updated_at: now(),
+            metrics: None,
+            log_path: "runs/run_test/events.jsonl".to_string(),
+        };
+        let run_dir = root.join("runs/run_test");
+        insert_training_run(
+            &db,
+            &project.id,
+            &run,
+            Path::new(&project.project_dir),
+            &run_dir,
+        )
+        .expect("insert running training run");
 
         let state = AppState {
             db_path: PathBuf::from(":memory:"),
             projects_dir: root.clone(),
             workspace_root: root,
             db: Mutex::new(db),
+            active_jobs: Mutex::new(HashMap::new()),
         };
         let job_id = create_job(
             &state,
@@ -1891,5 +2372,21 @@ mod tests {
             )
             .expect("query recovered job status");
         assert_eq!(status, "interrupted");
+        let run_status: String = db
+            .query_row(
+                "SELECT status FROM training_runs WHERE id = 'run_test'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query recovered run status");
+        assert_eq!(run_status, "interrupted");
+        let project_status: String = db
+            .query_row(
+                "SELECT status FROM projects WHERE id = 'project_test'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query recovered project status");
+        assert_eq!(project_status, "ready");
     }
 }

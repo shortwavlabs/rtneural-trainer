@@ -5,6 +5,7 @@ import type {
   ExportRunRequest,
   ProjectDetail,
   ProjectSummary,
+  RunControlRequest,
   SidecarProgressEvent,
   StartTrainingRequest,
   UpdateAudioRequest,
@@ -35,6 +36,10 @@ export const api = {
     call<ProjectDetail>("update_project_audio", { payload }),
   startTraining: (payload: StartTrainingRequest) =>
     call<ProjectDetail>("start_training", { payload }),
+  cancelTrainingRun: (payload: RunControlRequest) =>
+    call<ProjectDetail>("cancel_training_run", { payload }),
+  resumeTrainingRun: (payload: RunControlRequest) =>
+    call<ProjectDetail>("resume_training_run", { payload }),
   exportRun: (payload: ExportRunRequest) =>
     call<ProjectDetail>("export_run", { payload }),
   updateNotes: (payload: UpdateNotesRequest) =>

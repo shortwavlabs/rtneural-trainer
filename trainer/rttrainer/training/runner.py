@@ -48,12 +48,18 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
         seed,
         backend="numpy",
     )
-    model = build_keras_model(preset, tf.keras)
-    model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-        loss="mse",
-    )
+    best_model_path = checkpoint_dir / "best-model.keras"
+    checkpoint_metadata_path = checkpoint_dir / "best-checkpoint.json"
+    resume_checkpoint_path = resolve_resume_checkpoint_path(manifest, best_model_path)
+    resumed_checkpoint: dict[str, Any] | None = None
+    if resume_checkpoint_path is not None:
+        model, resumed_checkpoint = load_keras_checkpoint(resume_checkpoint_path)
+    else:
+        model = build_keras_model(preset, tf.keras)
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate), loss="mse")
     device_label = tensorflow_device_label(tf)
+    start_epoch = int((resumed_checkpoint or {}).get("epoch", 0)) + 1
+    start_epoch = max(1, min(start_epoch, epochs + 1))
 
     emit(
         {
@@ -63,16 +69,17 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "backend": "keras",
             "device": device_label,
             "epochs": epochs,
+            "start_epoch": start_epoch,
+            "resumed_from_checkpoint": str(resume_checkpoint_path) if resume_checkpoint_path else None,
         }
     )
 
-    best_esr = float("inf")
-    best_model_path = checkpoint_dir / "best-model.keras"
-    checkpoint_metadata_path = checkpoint_dir / "best-checkpoint.json"
-    last_metrics: dict[str, float] | None = None
-    best_epoch = 0
+    resumed_metrics = (resumed_checkpoint or {}).get("metrics", {})
+    best_esr = float(resumed_metrics.get("esr", float("inf")))
+    last_metrics: dict[str, float] | None = dict(resumed_metrics) if resumed_metrics else None
+    best_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         history = model.fit(
             dataset.train_x,
             dataset.train_y,
@@ -191,11 +198,20 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     model = build_model(preset).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = torch.nn.MSELoss()
+    best_checkpoint_path = checkpoint_dir / "best-checkpoint.pt"
+    resume_checkpoint_path = resolve_resume_checkpoint_path(manifest, best_checkpoint_path)
+    resumed_checkpoint: dict[str, Any] | None = None
+    if resume_checkpoint_path is not None:
+        resumed_checkpoint = torch.load(resume_checkpoint_path, map_location="cpu", weights_only=False)
+        model.load_state_dict(resumed_checkpoint["model_state_dict"])
+        optimizer.load_state_dict(resumed_checkpoint["optimizer_state_dict"])
     train_loader = torch.utils.data.DataLoader(
         torch.utils.data.TensorDataset(dataset.train_x, dataset.train_y),
         batch_size=batch_size,
         shuffle=True,
     )
+    start_epoch = int((resumed_checkpoint or {}).get("epoch", 0)) + 1
+    start_epoch = max(1, min(start_epoch, epochs + 1))
 
     emit(
         {
@@ -205,13 +221,15 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "backend": "pytorch",
             "device": str(device),
             "epochs": epochs,
+            "start_epoch": start_epoch,
+            "resumed_from_checkpoint": str(resume_checkpoint_path) if resume_checkpoint_path else None,
         }
     )
-    best_esr = float("inf")
-    best_checkpoint_path = checkpoint_dir / "best-checkpoint.pt"
-    last_metrics: dict[str, float] | None = None
+    resumed_metrics = (resumed_checkpoint or {}).get("metrics", {})
+    best_esr = float(resumed_metrics.get("esr", float("inf")))
+    last_metrics: dict[str, float] | None = dict(resumed_metrics) if resumed_metrics else None
 
-    for epoch in range(1, epochs + 1):
+    for epoch in range(start_epoch, epochs + 1):
         model.train()
         losses = []
         for batch_x, batch_y in train_loader:
@@ -444,6 +462,15 @@ def resolve_checkpoint_path(manifest: dict[str, Any]) -> Path:
             return torch_path
         return keras_path
     raise ValueError("checkpoint_path or run_dir is required")
+
+
+def resolve_resume_checkpoint_path(manifest: dict[str, Any], default_path: Path) -> Path | None:
+    if not bool(manifest.get("resume_from_checkpoint", False)):
+        return None
+    checkpoint_path = Path(str(manifest.get("checkpoint_path", default_path))).expanduser()
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Resume checkpoint not found: {checkpoint_path}")
+    return checkpoint_path
 
 
 def resolve_audio_paths(

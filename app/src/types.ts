@@ -117,6 +117,11 @@ export interface ExportRunRequest {
   run_id: string;
 }
 
+export interface RunControlRequest {
+  project_id: string;
+  run_id: string;
+}
+
 export interface UpdateNotesRequest {
   project_id: string;
   notes: string;
