@@ -43,6 +43,7 @@ export const api = {
     call<RunPreview>("get_run_preview", { payload }),
   createProject: (payload: CreateProjectRequest) =>
     call<ProjectDetail>("create_project", { payload }),
+  createSampleProject: () => call<ProjectDetail>("create_sample_project"),
   getProject: (projectId: string) =>
     call<ProjectDetail>("get_project", { project_id: projectId }),
   updateAudio: (payload: UpdateAudioRequest) =>

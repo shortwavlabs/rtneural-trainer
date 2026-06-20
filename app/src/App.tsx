@@ -27,6 +27,7 @@ import { api } from "./lib/api";
 import type {
   AppStatus,
   AudioReport,
+  AudioStatus,
   AudioWarning,
   CaptureChannelPolicy,
   DeviceInspection,
@@ -168,7 +169,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [progressEvents, setProgressEvents] = useState<SidecarProgressEvent[]>([]);
-  const sidecarBusy = busy === "audio" || busy === "train" || busy === "export";
+  const sidecarBusy =
+    busy === "audio" || busy === "sample" || busy === "train" || busy === "export";
 
   useEffect(() => {
     void boot();
@@ -187,7 +189,7 @@ export default function App() {
     });
 
     unlisten.catch((caught) => {
-      if (mounted) setError(toMessage(caught));
+      if (mounted) setError(toFriendlyMessage(caught));
     });
 
     return () => {
@@ -219,7 +221,7 @@ export default function App() {
       setSelectedId((current) => current ?? nextProjects[0]?.id ?? null);
       void refreshDeviceInspection();
     } catch (caught) {
-      setError(toMessage(caught));
+      setError(toFriendlyMessage(caught));
     }
   }
 
@@ -230,7 +232,7 @@ export default function App() {
       const nextInspection = await api.inspectDevice();
       setDeviceInspection(nextInspection);
     } catch (caught) {
-      setRuntimeError(toMessage(caught));
+      setRuntimeError(toFriendlyMessage(caught));
       setDeviceInspection(null);
     } finally {
       setRuntimeBusy(null);
@@ -245,7 +247,7 @@ export default function App() {
       setRuntimeSettings(saved);
       await refreshDeviceInspection();
     } catch (caught) {
-      setRuntimeError(toMessage(caught));
+      setRuntimeError(toFriendlyMessage(caught));
     } finally {
       setRuntimeBusy(null);
     }
@@ -261,7 +263,7 @@ export default function App() {
       setProject(nextProject);
       setProgressEvents(nextEvents);
     } catch (caught) {
-      setError(toMessage(caught));
+      setError(toFriendlyMessage(caught));
     }
   }
 
@@ -289,6 +291,9 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#workspace">
+        Skip to workspace
+      </a>
       <aside className="sidebar">
         <div className="brand-block">
           <div className="brand-mark">
@@ -308,7 +313,7 @@ export default function App() {
               const nextProject = await api.createProject({ name, target_kind });
               await commitProject(nextProject, "capture");
             } catch (caught) {
-              setError(toMessage(caught));
+              setError(toFriendlyMessage(caught));
             } finally {
               setBusy(null);
             }
@@ -332,12 +337,9 @@ export default function App() {
         />
       </aside>
 
-      <main className="workspace">
+      <main className="workspace" id="workspace" tabIndex={-1}>
         {error ? (
-          <div className="notice notice-error">
-            <AlertTriangle size={18} />
-            <span>{error}</span>
-          </div>
+          <ErrorNotice message={error} onDismiss={() => setError(null)} />
         ) : null}
 
         {project ? (
@@ -363,7 +365,7 @@ export default function App() {
                       });
                       await commitProject(nextProject, "align");
                     } catch (caught) {
-                      setError(toMessage(caught));
+                      setError(toFriendlyMessage(caught));
                     } finally {
                       setBusy(null);
                     }
@@ -385,7 +387,7 @@ export default function App() {
                       });
                       await commitProject(nextProject, "align");
                     } catch (caught) {
-                      setError(toMessage(caught));
+                      setError(toFriendlyMessage(caught));
                     } finally {
                       setBusy(null);
                     }
@@ -413,7 +415,7 @@ export default function App() {
                       });
                       await commitProject(nextProject, "train");
                     } catch (caught) {
-                      setError(toMessage(caught));
+                      setError(toFriendlyMessage(caught));
                     } finally {
                       setBusy(null);
                     }
@@ -427,7 +429,7 @@ export default function App() {
                       });
                       await commitProject(nextProject, "train");
                     } catch (caught) {
-                      setError(toMessage(caught));
+                      setError(toFriendlyMessage(caught));
                     } finally {
                       setBusy(null);
                     }
@@ -441,7 +443,7 @@ export default function App() {
                       });
                       await commitProject(nextProject, "train");
                     } catch (caught) {
-                      setError(toMessage(caught));
+                      setError(toFriendlyMessage(caught));
                     } finally {
                       setBusy(null);
                     }
@@ -465,7 +467,7 @@ export default function App() {
                       });
                       await commitProject(nextProject, "export");
                     } catch (caught) {
-                      setError(toMessage(caught));
+                      setError(toFriendlyMessage(caught));
                     } finally {
                       setBusy(null);
                     }
@@ -478,7 +480,7 @@ export default function App() {
                         export_id: exportId,
                       });
                     } catch (caught) {
-                      setError(toMessage(caught));
+                      setError(toFriendlyMessage(caught));
                     } finally {
                       setBusy(null);
                     }
@@ -500,7 +502,7 @@ export default function App() {
                   });
                   await commitProject(nextProject);
                 } catch (caught) {
-                  setError(toMessage(caught));
+                  setError(toFriendlyMessage(caught));
                 } finally {
                   setBusy(null);
                 }
@@ -508,7 +510,22 @@ export default function App() {
             />
           </>
         ) : (
-          <EmptyState />
+          <EmptyState
+            busy={busy === "sample"}
+            onCreateSample={async () => {
+              setBusy("sample");
+              setError(null);
+              setProgressEvents([]);
+              try {
+                const nextProject = await api.createSampleProject();
+                await commitProject(nextProject, "train");
+              } catch (caught) {
+                setError(toFriendlyMessage(caught));
+              } finally {
+                setBusy(null);
+              }
+            }}
+          />
         )}
       </main>
     </div>
@@ -541,9 +558,10 @@ function NewProjectForm({
           placeholder="Deluxe pedal capture"
         />
       </label>
-      <div className="segmented compact">
+      <div className="segmented compact" role="group" aria-label="Project target">
         {(Object.keys(targetLabels) as TargetKind[]).map((target) => (
           <button
+            aria-pressed={targetKind === target}
             className={targetKind === target ? "active" : ""}
             key={target}
             type="button"
@@ -578,16 +596,17 @@ function ProjectList({
       ) : (
         projects.map((project) => (
           <button
+            aria-current={project.id === selectedId ? "true" : undefined}
             className={`project-row ${project.id === selectedId ? "active" : ""}`}
             key={project.id}
             type="button"
             onClick={() => onSelect(project.id)}
           >
-            <span className={`status-dot ${project.audio_status}`} />
+            <span className={`status-dot ${project.audio_status}`} aria-hidden="true" />
             <span>
               <strong>{project.name}</strong>
               <small>
-                {targetLabels[project.target_kind]} ·{" "}
+                {targetLabels[project.target_kind]} · {audioStatusLabel(project.audio_status)} ·{" "}
                 {project.best_quality === null
                   ? "No run"
                   : `ESR ${project.best_quality.toFixed(3)}`}
@@ -739,15 +758,48 @@ function RuntimeStatus({
       {error ? (
         <div className="runtime-error">
           <AlertTriangle size={15} />
-          <span>{error}</span>
+          <span>
+            <strong>{friendlyError(error).title}</strong>
+            <small>{friendlyError(error).action}</small>
+          </span>
         </div>
       ) : null}
     </div>
   );
 }
 
+function ErrorNotice({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss: () => void;
+}) {
+  const friendly = friendlyError(message);
+  return (
+    <div className="notice notice-error app-error" role="alert">
+      <AlertTriangle size={18} />
+      <span>
+        <strong>{friendly.title}</strong>
+        <small>{friendly.detail}</small>
+        <small>{friendly.action}</small>
+      </span>
+      <button className="secondary-button" type="button" onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
 function RuntimeChip({ label, active }: { label: string; active: boolean }) {
-  return <span className={active ? "runtime-chip active" : "runtime-chip"}>{label}</span>;
+  return (
+    <span
+      className={active ? "runtime-chip active" : "runtime-chip"}
+      aria-label={`${label} ${active ? "available" : "unavailable"}`}
+    >
+      {label}
+    </span>
+  );
 }
 
 function PackageVersion({
@@ -797,13 +849,15 @@ function StepTabs({
   onChange: (tabId: TabId) => void;
 }) {
   return (
-    <nav className="step-tabs" aria-label="Workflow">
+    <nav className="step-tabs" aria-label="Workflow" role="tablist">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         return (
           <button
+            aria-selected={activeTab === tab.id}
             className={activeTab === tab.id ? "active" : ""}
             key={tab.id}
+            role="tab"
             type="button"
             onClick={() => onChange(tab.id)}
           >
@@ -1030,6 +1084,16 @@ function AlignView({
   useEffect(() => {
     setNudge(project.audio?.manual_latency_adjustment_samples ?? 0);
   }, [project.audio?.manual_latency_adjustment_samples, project.id]);
+
+  if (!project.audio) {
+    return (
+      <SetupRequired
+        icon={Crosshair}
+        title="Prepare audio before alignment"
+        detail="Alignment uses the preparation report. Add paired WAV files in Capture, then run preflight."
+      />
+    );
+  }
 
   return (
     <div className="screen-grid">
@@ -1302,7 +1366,10 @@ function TrainView({
         {!canTrain ? (
           <div className="notice notice-warning">
             <AlertTriangle size={18} />
-            <span>Audio must pass preflight before training starts.</span>
+            <span>
+              <strong>Training is blocked.</strong>
+              <small>Run Capture preflight and resolve blocking audio warnings first.</small>
+            </span>
           </div>
         ) : null}
       </div>
@@ -1543,7 +1610,7 @@ function EvaluateView({ project }: { project: ProjectDetail }) {
         if (mounted) setPreview(nextPreview);
       })
       .catch((caught) => {
-        if (mounted) setPreviewError(toMessage(caught));
+        if (mounted) setPreviewError(toFriendlyMessage(caught));
       })
       .finally(() => {
         if (mounted) setPreviewBusy(false);
@@ -1578,7 +1645,15 @@ function EvaluateView({ project }: { project: ProjectDetail }) {
             </select>
           </label>
         ) : null}
-        {selectedRun ? <QualityView run={selectedRun} /> : <p className="muted">No run yet.</p>}
+        {selectedRun ? (
+          <QualityView run={selectedRun} />
+        ) : (
+          <SetupRequired
+            icon={Activity}
+            title="No completed run yet"
+            detail="Train a preset first. Evaluation will show quality metrics, the training report, and preview audio."
+          />
+        )}
         {previewError ? (
           <div className="notice notice-error">
             <AlertTriangle size={18} />
@@ -1622,6 +1697,15 @@ function ExportView({
           detail="RTNeural JSON is only ready after validation and benchmark reports."
         />
         <GateList project={project} selectedRun={selectedRun} />
+        {!selectedRun ? (
+          <div className="notice notice-warning">
+            <AlertTriangle size={18} />
+            <span>
+              <strong>Export is blocked.</strong>
+              <small>Complete a training run before writing an RTNeural package.</small>
+            </span>
+          </div>
+        ) : null}
         <button
           className="primary-button wide"
           type="button"
@@ -1744,7 +1828,13 @@ function GainGuidance({ audio }: { audio: AudioReport }) {
 
 function RunTable({ runs }: { runs: TrainingRun[] }) {
   if (runs.length === 0) {
-    return <p className="muted">No training runs yet.</p>;
+    return (
+      <SetupRequired
+        icon={Cpu}
+        title="No training runs yet"
+        detail="Choose a preset and start training. Checkpoints, ESR, runtime cost, and recovery state will appear here."
+      />
+    );
   }
 
   return (
@@ -1871,7 +1961,13 @@ function PreviewPlayer({
   }
 
   if (!preview) {
-    return <p className="muted">No preview artifacts yet.</p>;
+    return (
+      <SetupRequired
+        icon={AudioLines}
+        title="No preview audio yet"
+        detail="Complete a training run to render target, prediction, and residual WAV previews."
+      />
+    );
   }
 
   return (
@@ -1889,6 +1985,7 @@ function PreviewPlayer({
           aria-label={activeArtifact ? `${activeArtifact.label} preview` : "Preview audio"}
         />
       </div>
+      <WaveformComparison artifacts={artifacts} />
       <div className="preview-list">
         {artifacts.map((artifact) => (
           <div
@@ -1903,6 +2000,7 @@ function PreviewPlayer({
           >
             <button
               type="button"
+              aria-pressed={activeArtifact?.kind === artifact.kind}
               disabled={!artifact.exists}
               onClick={() => {
                 setActiveKind(artifact.kind);
@@ -1934,6 +2032,32 @@ function PeakWave({ peaks }: { peaks: number[] }) {
           key={`${index}-${peak}`}
           style={{ height: `${Math.max(3, Math.round(Math.min(1, peak) * 28))}px` }}
         />
+      ))}
+    </div>
+  );
+}
+
+function WaveformComparison({ artifacts }: { artifacts: RunPreviewArtifact[] }) {
+  const ordered = ["target", "prediction", "residual"]
+    .map((kind) => artifacts.find((artifact) => artifact.kind === kind))
+    .filter((artifact): artifact is RunPreviewArtifact => Boolean(artifact));
+
+  if (ordered.length === 0) return null;
+
+  return (
+    <div className="waveform-comparison" role="img" aria-label="Target, prediction, and residual waveform peak comparison">
+      <div className="waveform-comparison-head">
+        <span>Waveform comparison</span>
+        <small>Peak envelope, normalized per file</small>
+      </div>
+      {ordered.map((artifact) => (
+        <div className={`waveform-track ${artifact.kind}`} key={artifact.kind}>
+          <div>
+            <strong>{artifact.label}</strong>
+            <small>{previewArtifactDetail(artifact)}</small>
+          </div>
+          <PeakWave peaks={artifact.peaks} />
+        </div>
       ))}
     </div>
   );
@@ -1977,7 +2101,13 @@ function ExportList({
   onOpenExport: (exportId: string) => Promise<void>;
 }) {
   if (exports.length === 0) {
-    return <p className="muted">No export package yet.</p>;
+    return (
+      <SetupRequired
+        icon={PackageCheck}
+        title="No export package yet"
+        detail="Once a completed run passes the gate, export creates model JSON, metadata, validation, and benchmark reports."
+      />
+    );
   }
 
   return (
@@ -2152,12 +2282,58 @@ function ProgressLog({
   );
 }
 
-function EmptyState() {
+function SetupRequired({
+  icon: Icon,
+  title,
+  detail,
+}: {
+  icon: LucideIcon;
+  title: string;
+  detail: string;
+}) {
+  return (
+    <div className="setup-required">
+      <Icon size={20} />
+      <span>
+        <strong>{title}</strong>
+        <small>{detail}</small>
+      </span>
+    </div>
+  );
+}
+
+function EmptyState({
+  busy,
+  onCreateSample,
+}: {
+  busy: boolean;
+  onCreateSample: () => Promise<void>;
+}) {
   return (
     <div className="empty-state">
       <Activity size={42} />
       <h2>Create a capture project</h2>
-      <p>Start with paired dry and processed WAV files, then train and validate a model package.</p>
+      <p>
+        Start with paired dry and processed WAV files, or generate a local sample
+        capture to exercise the full workflow.
+      </p>
+      <div className="empty-actions">
+        <button
+          className="primary-button"
+          type="button"
+          disabled={busy}
+          onClick={() => void onCreateSample()}
+        >
+          {busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
+          Create sample project
+        </button>
+      </div>
+      <ol className="onboarding-steps" aria-label="Workflow overview">
+        <li>Capture: import or generate paired WAV files.</li>
+        <li>Train: choose a curated RTNeural-safe preset.</li>
+        <li>Evaluate: compare target, prediction, and residual audio.</li>
+        <li>Export: write JSON after parity, validation, and benchmark checks.</li>
+      </ol>
     </div>
   );
 }
@@ -2483,6 +2659,12 @@ function backendLabel(backend: RuntimeBackend) {
   return backend === "pytorch" ? "PyTorch" : "TensorFlow/Keras";
 }
 
+function audioStatusLabel(status: AudioStatus) {
+  if (status === "ready") return "Audio ready";
+  if (status === "warning") return "Audio warnings";
+  return "Audio missing";
+}
+
 function formatMetric(value: number) {
   return value < 0.01 ? value.toExponential(2) : value.toFixed(4);
 }
@@ -2612,6 +2794,50 @@ function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function toMessage(caught: unknown) {
+function toFriendlyMessage(caught: unknown) {
   return caught instanceof Error ? caught.message : String(caught);
+}
+
+function friendlyError(message: string) {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("must run inside the tauri app runtime")) {
+    return {
+      title: "Desktop runtime required.",
+      detail: "This action uses local files and sidecars, so it only works in the Tauri app.",
+      action: "Open the desktop shell with `pnpm --filter rtneural-trainer-app tauri dev`.",
+    };
+  }
+  if (normalized.includes("external python environment not found")) {
+    return {
+      title: "External Python was not found.",
+      detail: message,
+      action: "Choose a Python executable or venv folder in Runtime, then save and refresh.",
+    };
+  }
+  if (normalized.includes("tensorflow") && normalized.includes("required")) {
+    return {
+      title: "TensorFlow is missing for this path.",
+      detail: message,
+      action: "Install the TensorFlow extra with `uv sync --extra tensorflow` or use a configured external environment.",
+    };
+  }
+  if (normalized.includes("does not exist") || normalized.includes("not a file")) {
+    return {
+      title: "A source file could not be opened.",
+      detail: message,
+      action: "Use Choose to pick the WAV again, then rerun preflight.",
+    };
+  }
+  if (normalized.includes("sidecar") || normalized.includes("rttrainer")) {
+    return {
+      title: "A sidecar command failed.",
+      detail: message,
+      action: "Check the progress log and Runtime panel. Regenerate dev sidecars if the binary is missing.",
+    };
+  }
+  return {
+    title: "The operation could not finish.",
+    detail: message,
+    action: "Review the visible state, adjust the input, and try again.",
+  };
 }

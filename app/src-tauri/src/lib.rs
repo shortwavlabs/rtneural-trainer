@@ -556,6 +556,42 @@ fn create_project(
     state: tauri::State<AppState>,
     payload: CreateProjectRequest,
 ) -> Result<ProjectDetail, String> {
+    create_project_record(state.inner(), payload.name.trim(), payload.target_kind, "")
+}
+
+#[tauri::command]
+fn create_sample_project(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<ProjectDetail, String> {
+    let notes = "Generated sample project. The dry input is a short composite tone and the target adds gain, soft saturation, and filtering so the full prepare/train/export workflow can be tested without external audio.";
+    let project =
+        create_project_record(state.inner(), "Sample amp capture", TargetKind::Amp, notes)?;
+    let project_dir = PathBuf::from(&project.project_dir);
+    let original_dir = project_dir.join("audio/original");
+    let input_path = original_dir.join("sample-input.wav");
+    let target_path = original_dir.join("sample-target.wav");
+    let (input, target) = generated_sample_capture(48_000, 4.0);
+    write_pcm16_wav(&input_path, &input, 48_000)?;
+    write_pcm16_wav(&target_path, &target, 48_000)?;
+
+    let payload = UpdateAudioRequest {
+        project_id: project.id.clone(),
+        input_path: input_path.display().to_string(),
+        target_path: target_path.display().to_string(),
+        target_sample_rate: 48_000,
+        resample: false,
+        channel_policy: "mixdown".to_string(),
+    };
+    prepare_project_audio(&app, state.inner(), &payload)
+}
+
+fn create_project_record(
+    state: &AppState,
+    name: &str,
+    target_kind: TargetKind,
+    notes: &str,
+) -> Result<ProjectDetail, String> {
     let id = format!("project_{}", Uuid::new_v4().simple());
     let run_created_at = now();
     let project_dir = state.projects_dir.join(&id);
@@ -566,16 +602,16 @@ fn create_project(
 
     let project = ProjectDetail {
         id,
-        name: if payload.name.trim().is_empty() {
+        name: if name.trim().is_empty() {
             "Untitled capture".to_string()
         } else {
-            payload.name.trim().to_string()
+            name.trim().to_string()
         },
-        target_kind: payload.target_kind,
+        target_kind,
         status: ProjectStatus::Draft,
         created_at: run_created_at.clone(),
         updated_at: run_created_at,
-        notes: String::new(),
+        notes: notes.to_string(),
         project_dir: project_dir.display().to_string(),
         audio: None,
         runs: Vec::new(),
@@ -592,6 +628,14 @@ fn update_project_audio(
     app: tauri::AppHandle,
     state: tauri::State<AppState>,
     payload: UpdateAudioRequest,
+) -> Result<ProjectDetail, String> {
+    prepare_project_audio(&app, state.inner(), &payload)
+}
+
+fn prepare_project_audio(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    payload: &UpdateAudioRequest,
 ) -> Result<ProjectDetail, String> {
     let input_path = validate_capture_wav_path(&payload.input_path, "Dry input")?;
     let target_path = validate_capture_wav_path(&payload.target_path, "Processed target")?;
@@ -623,8 +667,8 @@ fn update_project_audio(
     )?;
     let job_id = create_job(&state, "prepare", Some(&payload.project_id), None, None)?;
     let prepare_result = run_rttrainer(
-        &app,
-        &state,
+        app,
+        state,
         "prepare",
         &manifest_path,
         SidecarContext {
@@ -681,7 +725,9 @@ fn update_project_alignment(
     state: tauri::State<AppState>,
     payload: UpdateAlignmentRequest,
 ) -> Result<ProjectDetail, String> {
-    let manual_adjustment = payload.manual_latency_adjustment_samples.clamp(-48_000, 48_000);
+    let manual_adjustment = payload
+        .manual_latency_adjustment_samples
+        .clamp(-48_000, 48_000);
     let (project_dir, input_path, target_path, target_sample_rate, resample, channel_policy) = {
         let db = state.db.lock().map_err(lock_error)?;
         ensure_no_active_project_job(&db, &payload.project_id)?;
@@ -689,7 +735,10 @@ fn update_project_alignment(
         let audio = project
             .audio
             .ok_or_else(|| "Prepare audio before applying alignment.".to_string())?;
-        let options = audio.options.clone().unwrap_or_else(|| serde_json::json!({}));
+        let options = audio
+            .options
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({}));
         let target_sample_rate = options
             .get("target_sample_rate")
             .and_then(|value| value.as_u64())
@@ -1282,6 +1331,7 @@ pub fn run() {
             list_project_events,
             get_run_preview,
             create_project,
+            create_sample_project,
             update_project_audio,
             update_project_alignment,
             start_training,
@@ -1495,6 +1545,65 @@ fn ensure_distinct_capture_paths(input_path: &Path, target_path: &Path) -> Resul
         return Err("Dry input and processed target must be different WAV files.".to_string());
     }
     Ok(())
+}
+
+fn generated_sample_capture(sample_rate: u32, seconds: f32) -> (Vec<f32>, Vec<f32>) {
+    let sample_count = (sample_rate as f32 * seconds).round().max(1.0) as usize;
+    let mut input = Vec::with_capacity(sample_count);
+    let mut target = Vec::with_capacity(sample_count);
+    let mut filter_state = 0.0_f32;
+
+    for index in 0..sample_count {
+        let t = index as f32 / sample_rate as f32;
+        let envelope = if t < 0.08 {
+            t / 0.08
+        } else if t > seconds - 0.12 {
+            ((seconds - t) / 0.12).max(0.0)
+        } else {
+            1.0
+        };
+        let sweep = 110.0 + 330.0 * (t / seconds).min(1.0);
+        let dry = envelope
+            * (0.34 * (std::f32::consts::TAU * sweep * t).sin()
+                + 0.18 * (std::f32::consts::TAU * 220.0 * t).sin()
+                + 0.08 * (std::f32::consts::TAU * 880.0 * t).sin());
+        filter_state = 0.86 * filter_state + 0.14 * (dry * 2.4).tanh();
+        let wet = (0.82 * filter_state + 0.12 * dry).clamp(-0.92, 0.92);
+        input.push(dry.clamp(-0.95, 0.95));
+        target.push(wet);
+    }
+
+    (input, target)
+}
+
+fn write_pcm16_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(to_error)?;
+    }
+    let data_size = samples
+        .len()
+        .checked_mul(2)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| "Sample WAV is too large to write.".to_string())?;
+    let mut bytes = Vec::with_capacity(44 + data_size as usize);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
+    bytes.extend_from_slice(b"WAVE");
+    bytes.extend_from_slice(b"fmt ");
+    bytes.extend_from_slice(&16_u32.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&sample_rate.to_le_bytes());
+    bytes.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&16_u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_size.to_le_bytes());
+    for sample in samples {
+        let quantized = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+        bytes.extend_from_slice(&quantized.to_le_bytes());
+    }
+    fs::write(path, bytes).map_err(to_error)
 }
 
 fn normalize_capture_sample_rate(value: u32) -> Result<u32, String> {
@@ -3427,6 +3536,39 @@ mod tests {
         assert_eq!(summary.peaks.len(), 4);
         assert!((summary.duration_seconds - (4.0 / 48_000.0)).abs() < f64::EPSILON);
         assert_eq!(summary.peak, 1.0);
+    }
+
+    #[test]
+    fn generated_sample_capture_writes_valid_preview_wavs() {
+        let root = std::env::temp_dir().join(format!(
+            "rttrainer-sample-wav-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).expect("create temp dir");
+        let input_path = root.join("sample-input.wav");
+        let target_path = root.join("sample-target.wav");
+        let (input, target) = generated_sample_capture(48_000, 0.25);
+
+        assert_eq!(input.len(), target.len());
+        assert!(input.iter().any(|sample| sample.abs() > 0.01));
+        assert!(target.iter().any(|sample| sample.abs() > 0.01));
+
+        write_pcm16_wav(&input_path, &input, 48_000).expect("write input wav");
+        write_pcm16_wav(&target_path, &target, 48_000).expect("write target wav");
+
+        let input_summary =
+            read_wav_preview_summary(&input_path, 16).expect("read input preview summary");
+        let target_summary =
+            read_wav_preview_summary(&target_path, 16).expect("read target preview summary");
+
+        assert_eq!(input_summary.sample_rate, 48_000);
+        assert_eq!(target_summary.sample_rate, 48_000);
+        assert_eq!(input_summary.peaks.len(), 16);
+        assert_eq!(target_summary.peaks.len(), 16);
+        assert!(input_summary.peak > 0.01);
+        assert!(target_summary.peak > 0.01);
+
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

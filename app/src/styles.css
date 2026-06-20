@@ -20,6 +20,11 @@ body {
   background: #111314;
 }
 
+:focus-visible {
+  outline: 2px solid #8ee690;
+  outline-offset: 3px;
+}
+
 button,
 input,
 select,
@@ -29,6 +34,25 @@ textarea {
 
 button {
   border: 0;
+}
+
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  padding: 10px 12px;
+  color: #0e1710;
+  font-weight: 800;
+  text-decoration: none;
+  background: #8ee690;
+  border-radius: 7px;
+  transform: translateY(-160%);
+  transition: transform 160ms ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
 }
 
 .app-shell {
@@ -86,8 +110,8 @@ h1 {
 
 h2 {
   margin-bottom: 8px;
-  font-size: clamp(2rem, 5vw, 4.5rem);
-  line-height: 0.98;
+  font-size: 2.45rem;
+  line-height: 1.02;
   letter-spacing: 0;
 }
 
@@ -519,6 +543,16 @@ dd,
   overflow-wrap: anywhere;
 }
 
+.runtime-error strong,
+.runtime-error small {
+  display: block;
+}
+
+.runtime-error small {
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
 .workspace {
   display: grid;
   align-content: start;
@@ -636,6 +670,27 @@ dd,
   min-height: 42px;
   padding: 10px 12px;
   border-radius: 8px;
+}
+
+.notice strong,
+.notice small {
+  display: block;
+}
+
+.notice small {
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.app-error {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.app-error .secondary-button {
+  min-height: 34px;
+  padding: 0 10px;
 }
 
 .notice-error {
@@ -1100,6 +1155,62 @@ dd,
   height: 8px;
 }
 
+.waveform-comparison {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 8px;
+}
+
+.waveform-comparison-head,
+.waveform-track {
+  display: grid;
+  gap: 10px;
+}
+
+.waveform-comparison-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+}
+
+.waveform-comparison-head span {
+  color: #eef2ec;
+  font-weight: 800;
+}
+
+.waveform-comparison-head small,
+.waveform-track small {
+  color: #9da9a1;
+  font-size: 0.76rem;
+}
+
+.waveform-track {
+  grid-template-columns: minmax(92px, 0.34fr) minmax(0, 1fr);
+  align-items: center;
+  min-height: 48px;
+  padding-top: 10px;
+  border-top: 1px solid #2a302e;
+}
+
+.waveform-track strong,
+.waveform-track small {
+  display: block;
+}
+
+.waveform-track.target .mini-wave i {
+  background: #87b7ff;
+}
+
+.waveform-track.prediction .mini-wave i {
+  background: #8ee690;
+}
+
+.waveform-track.residual .mini-wave i {
+  background: #f2bf5e;
+}
+
 .gate {
   grid-template-columns: auto minmax(0, 1fr);
   color: #f5e0b8;
@@ -1319,6 +1430,36 @@ dd,
   color: #9da9a1;
 }
 
+.setup-required {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 14px;
+  color: #aeb8b1;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 8px;
+}
+
+.setup-required svg {
+  color: #8ee690;
+}
+
+.setup-required strong,
+.setup-required small {
+  display: block;
+}
+
+.setup-required strong {
+  color: #eef2ec;
+}
+
+.setup-required small {
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
 .empty-state {
   display: grid;
   place-items: center;
@@ -1335,6 +1476,30 @@ dd,
 
 .empty-state p {
   max-width: 420px;
+}
+
+.empty-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.onboarding-steps {
+  display: grid;
+  gap: 8px;
+  width: min(460px, 100%);
+  padding: 14px 18px 14px 38px;
+  margin: 12px 0 0;
+  color: #aeb8b1;
+  text-align: left;
+  background: #171a1b;
+  border: 1px solid #2a302e;
+  border-radius: 8px;
+}
+
+.onboarding-steps li::marker {
+  color: #8ee690;
+  font-weight: 800;
 }
 
 .spin {
@@ -1423,5 +1588,26 @@ dd,
   .progress-list li {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  h2 {
+    font-size: 2rem;
+  }
+
+  .app-error,
+  .waveform-comparison-head,
+  .waveform-track {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
