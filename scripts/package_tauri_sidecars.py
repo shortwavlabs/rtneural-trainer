@@ -192,7 +192,12 @@ set -euo pipefail
 ROOT={shell_quote(str(ROOT))}
 cd "$ROOT/trainer"
 export UV_CACHE_DIR="${{UV_CACHE_DIR:-$ROOT/.uv-cache}}"
-exec uv run --extra tensorflow --extra training python -m rttrainer "$@"
+extras="${{RTTRAINER_UV_EXTRAS:-tensorflow training}}"
+uv_args=()
+for extra in $extras; do
+  uv_args+=(--extra "$extra")
+done
+exec uv run "${{uv_args[@]}}" python -m rttrainer "$@"
 """
     write_executable_text(destination, script)
     print(f"installed development rttrainer shim: {destination.relative_to(ROOT)}")

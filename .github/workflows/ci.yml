@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CI: "true"
+  UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+  RTTRAINER_UV_EXTRAS: tensorflow
+
+jobs:
+  desktop:
+    name: Desktop CI
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.5.2
+          cache: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+          python-version: "3.12"
+          working-directory: trainer
+
+      - name: Sync trainer dependencies
+        working-directory: trainer
+        run: uv sync --frozen --extra tensorflow
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Build native RTNeural validator
+        run: |
+          cmake -S native/rtneural-validator -B native/rtneural-validator/build
+          cmake --build native/rtneural-validator/build
+
+      - name: Smoke native RTNeural validator
+        run: python3 scripts/smoke_rtneural_validator.py
+
+      - name: Run Python tests
+        working-directory: trainer
+        run: uv run --extra tensorflow python -m unittest discover -s tests -v
+
+      - name: Check golden RTNeural JSON fixtures
+        working-directory: trainer
+        run: uv run --extra tensorflow python ../scripts/generate_golden_rtneural_fixtures.py --check
+
+      - name: Build frontend
+        run: pnpm --filter rtneural-trainer-app build
+
+      - name: Run Rust tests
+        working-directory: app/src-tauri
+        run: cargo test
+
+      - name: Run Tauri workflow smoke
+        run: pnpm --filter rtneural-trainer-app smoke:tauri-workflow
+
+      - name: Run packaged-app smoke
+        run: pnpm --filter rtneural-trainer-app smoke:packaged-app
