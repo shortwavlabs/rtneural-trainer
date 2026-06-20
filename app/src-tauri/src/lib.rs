@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 const RTTRAINER_SIDECAR: &str = "rttrainer";
 const RTNEURAL_VALIDATOR_SIDECAR: &str = "rtneural-validator";
+const RUNTIME_SETTINGS_KEY: &str = "runtime";
 
 #[derive(Clone, Serialize)]
 struct AppStatus {
@@ -230,6 +231,18 @@ struct UpdateNotesRequest {
     notes: String,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct RuntimeSettings {
+    selected_backend: String,
+    external_python_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateRuntimeSettingsRequest {
+    selected_backend: String,
+    external_python_path: Option<String>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct Store {
     projects: Vec<ProjectDetail>,
@@ -357,6 +370,59 @@ fn app_status(state: tauri::State<AppState>) -> AppStatus {
         trainer_sidecar_present: bundled_sidecar_exists(RTTRAINER_SIDECAR),
         validator_sidecar_present: bundled_sidecar_exists(RTNEURAL_VALIDATOR_SIDECAR),
     }
+}
+
+#[tauri::command]
+fn get_runtime_settings(state: tauri::State<AppState>) -> Result<RuntimeSettings, String> {
+    let db = state.db.lock().map_err(lock_error)?;
+    load_runtime_settings(&db)
+}
+
+#[tauri::command]
+fn update_runtime_settings(
+    state: tauri::State<AppState>,
+    payload: UpdateRuntimeSettingsRequest,
+) -> Result<RuntimeSettings, String> {
+    let settings = RuntimeSettings {
+        selected_backend: normalize_backend(&payload.selected_backend)?.to_string(),
+        external_python_path: payload
+            .external_python_path
+            .and_then(|path| non_empty_string(&path)),
+    };
+    let db = state.db.lock().map_err(lock_error)?;
+    save_runtime_settings(&db, &settings)?;
+    Ok(settings)
+}
+
+#[tauri::command]
+fn inspect_device(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<serde_json::Value, String> {
+    let context = SidecarContext {
+        job_id: "runtime_inspection".to_string(),
+        operation: "inspect_device".to_string(),
+        project_id: None,
+        run_id: None,
+        export_id: None,
+    };
+    emit_sidecar_line(&app, &context, "system", "rttrainer inspect-device started");
+    let args = vec!["inspect-device".to_string(), "--json".to_string()];
+    let output = run_rttrainer_args(&app, &state, "inspect-device", &args, context.clone())?;
+    if !output.status.success() {
+        emit_sidecar_line(&app, &context, "system", "rttrainer inspect-device failed");
+        return Err(format!(
+            "rttrainer inspect-device failed with status {}.\nstdout:\n{}\nstderr:\n{}",
+            output.status, output.stdout, output.stderr
+        ));
+    }
+    emit_sidecar_line(
+        &app,
+        &context,
+        "system",
+        "rttrainer inspect-device finished",
+    );
+    parse_json_from_stdout(&output.stdout)
 }
 
 #[tauri::command]
@@ -547,7 +613,7 @@ fn start_training(
     payload: StartTrainingRequest,
 ) -> Result<ProjectDetail, String> {
     let run_id = format!("run_{}", Uuid::new_v4().simple());
-    let project_dir = {
+    let (project_dir, selected_backend) = {
         let db = state.db.lock().map_err(lock_error)?;
         let project = load_project_detail(&db, &payload.project_id)?;
         let audio_ready = project
@@ -559,7 +625,11 @@ fn start_training(
             return Err("Audio must pass preflight before training.".to_string());
         }
         ensure_no_active_project_job(&db, &payload.project_id)?;
-        PathBuf::from(&project.project_dir)
+        let settings = load_runtime_settings(&db)?;
+        (
+            PathBuf::from(&project.project_dir),
+            normalize_backend(&settings.selected_backend)?.to_string(),
+        )
     };
 
     let run_dir = project_dir.join("runs").join(&run_id);
@@ -572,7 +642,7 @@ fn start_training(
             "run_dir": &run_dir,
             "prepared_dir": project_dir.join("audio/prepared"),
             "preset": &payload.preset,
-            "backend": "keras",
+            "backend": selected_backend,
             "epochs": 20,
             "batch_size": 16,
             "learning_rate": 0.001,
@@ -768,6 +838,14 @@ fn export_run(
     let run_dir = project_dir.join("runs").join(&run.id);
     let prediction_path = run_dir.join("previews/prediction.wav");
     let test_input_path = run_dir.join("test-input.wav");
+    let run_backend = read_optional_json_value(&run_dir.join("training-report.json"))
+        .and_then(|report| {
+            report
+                .get("backend")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "keras".to_string());
 
     write_json(
         &manifest_path,
@@ -775,6 +853,7 @@ fn export_run(
             "name": project_name,
             "run_dir": run_dir,
             "export_dir": export_dir,
+            "backend": run_backend,
             "sample_rate": sample_rate,
             "latency_samples": latency_samples,
             "parity_tolerance": 0.0001
@@ -1003,6 +1082,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_status,
+            get_runtime_settings,
+            update_runtime_settings,
+            inspect_device,
             list_projects,
             get_project,
             list_project_events,
@@ -1029,6 +1111,135 @@ fn read_optional_json_value(path: &Path) -> Option<serde_json::Value> {
     fs::read_to_string(path)
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
+}
+
+fn default_runtime_settings() -> RuntimeSettings {
+    RuntimeSettings {
+        selected_backend: "keras".to_string(),
+        external_python_path: None,
+    }
+}
+
+fn load_runtime_settings(db: &Connection) -> Result<RuntimeSettings, String> {
+    let raw = db
+        .query_row(
+            "SELECT value_json FROM app_settings WHERE key = ?1",
+            params![RUNTIME_SETTINGS_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(to_error)?;
+    let Some(raw) = raw else {
+        return Ok(default_runtime_settings());
+    };
+    let mut settings: RuntimeSettings = serde_json::from_str(&raw).map_err(to_error)?;
+    settings.selected_backend = normalize_backend(&settings.selected_backend)?.to_string();
+    settings.external_python_path = settings
+        .external_python_path
+        .and_then(|path| non_empty_string(&path));
+    Ok(settings)
+}
+
+fn save_runtime_settings(db: &Connection, settings: &RuntimeSettings) -> Result<(), String> {
+    let normalized = RuntimeSettings {
+        selected_backend: normalize_backend(&settings.selected_backend)?.to_string(),
+        external_python_path: settings
+            .external_python_path
+            .as_deref()
+            .and_then(non_empty_string),
+    };
+    let raw = serde_json::to_string(&normalized).map_err(to_error)?;
+    db.execute(
+        "INSERT INTO app_settings (key, value_json, updated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET
+            value_json = excluded.value_json,
+            updated_at = excluded.updated_at",
+        params![RUNTIME_SETTINGS_KEY, raw, now()],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn normalize_backend(value: &str) -> Result<&'static str, String> {
+    match value.trim().to_lowercase().as_str() {
+        "" | "keras" | "tensorflow" | "tf" => Ok("keras"),
+        "pytorch" | "torch" => Ok("pytorch"),
+        _ => Err("Backend must be 'keras' or 'pytorch'.".to_string()),
+    }
+}
+
+fn non_empty_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn runtime_settings_from_state(state: &AppState) -> Result<RuntimeSettings, String> {
+    let db = state.db.lock().map_err(lock_error)?;
+    load_runtime_settings(&db)
+}
+
+fn external_python_executable(state: &AppState) -> Result<Option<PathBuf>, String> {
+    let settings = runtime_settings_from_state(state)?;
+    let Some(path) = settings.external_python_path.as_deref() else {
+        return Ok(None);
+    };
+    resolve_python_executable(path).map(Some)
+}
+
+fn resolve_python_executable(value: &str) -> Result<PathBuf, String> {
+    let path = expand_home_path(value);
+    if path.is_file() {
+        return Ok(path);
+    }
+    if path.is_dir() {
+        let candidates = if cfg!(windows) {
+            vec![path.join("Scripts/python.exe"), path.join("python.exe")]
+        } else {
+            vec![path.join("bin/python"), path.join("bin/python3")]
+        };
+        for candidate in candidates {
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(format!(
+        "External Python environment not found: {value}. Provide a Python executable or venv folder."
+    ))
+}
+
+fn expand_home_path(value: &str) -> PathBuf {
+    if value == "~" {
+        if let Some(home) = home_dir() {
+            return home;
+        }
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        if let Some(home) = home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(value)
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+}
+
+fn parse_json_from_stdout(stdout: &str) -> Result<serde_json::Value, String> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
+        return Ok(value);
+    }
+    let start = stdout
+        .find('{')
+        .ok_or_else(|| "rttrainer inspect-device did not return JSON.".to_string())?;
+    let end = stdout
+        .rfind('}')
+        .ok_or_else(|| "rttrainer inspect-device did not return complete JSON.".to_string())?;
+    serde_json::from_str(&stdout[start..=end]).map_err(to_error)
 }
 
 fn configure_database(db: &mut Connection) -> Result<(), String> {
@@ -2409,35 +2620,12 @@ fn run_rttrainer(
         "system",
         &format!("rttrainer {command} started"),
     );
-    let output = if bundled_sidecar_exists(RTTRAINER_SIDECAR) {
-        let process = app
-            .shell()
-            .sidecar(RTTRAINER_SIDECAR)
-            .map_err(to_error)?
-            .arg(command)
-            .arg("--manifest")
-            .arg(manifest_path);
-        run_streaming_shell_command(app, &context, process)?
-    } else {
-        let trainer_dir = state.workspace_root.join("trainer");
-        let cache_dir = state.workspace_root.join(".uv-cache");
-        let mut process = StdCommand::new("uv");
-        process
-            .current_dir(&trainer_dir)
-            .env("UV_CACHE_DIR", &cache_dir)
-            .arg("run");
-        if matches!(command, "train" | "evaluate" | "export") {
-            process.arg("--extra").arg("tensorflow");
-        }
-        process
-            .arg("python")
-            .arg("-m")
-            .arg("rttrainer")
-            .arg(command)
-            .arg("--manifest")
-            .arg(manifest_path);
-        run_streaming_process(app, &context, process)?
-    };
+    let args = vec![
+        command.to_string(),
+        "--manifest".to_string(),
+        manifest_path.display().to_string(),
+    ];
+    let output = run_rttrainer_args(app, state, command, &args, context.clone())?;
     if output.status.success() {
         emit_sidecar_line(
             app,
@@ -2461,6 +2649,83 @@ fn run_rttrainer(
         "rttrainer {command} failed with status {}.\nstdout:\n{}\nstderr:\n{}",
         output.status, output.stdout, output.stderr
     ))
+}
+
+fn run_rttrainer_args(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    action: &str,
+    args: &[String],
+    context: SidecarContext,
+) -> Result<StreamingProcessOutput, String> {
+    if let Some(python) = external_python_executable(state)? {
+        emit_sidecar_line(
+            app,
+            &context,
+            "system",
+            &format!("using external Python {}", python.display()),
+        );
+        let mut process = StdCommand::new(&python);
+        process
+            .current_dir(&state.workspace_root)
+            .arg("-m")
+            .arg("rttrainer")
+            .args(args);
+        return run_streaming_process(app, &context, process);
+    }
+
+    if bundled_sidecar_exists(RTTRAINER_SIDECAR) {
+        let process = app
+            .shell()
+            .sidecar(RTTRAINER_SIDECAR)
+            .map_err(to_error)?
+            .args(args.to_vec());
+        return run_streaming_shell_command(app, &context, process);
+    }
+
+    let trainer_dir = state.workspace_root.join("trainer");
+    let cache_dir = state.workspace_root.join(".uv-cache");
+    let mut process = StdCommand::new("uv");
+    process
+        .current_dir(&trainer_dir)
+        .env("UV_CACHE_DIR", &cache_dir)
+        .arg("run");
+    for extra in uv_extras_for_rttrainer(action, args) {
+        process.arg("--extra").arg(extra);
+    }
+    process.arg("python").arg("-m").arg("rttrainer").args(args);
+    run_streaming_process(app, &context, process)
+}
+
+fn uv_extras_for_rttrainer(action: &str, args: &[String]) -> Vec<&'static str> {
+    if action == "inspect-device" {
+        return vec!["tensorflow", "training"];
+    }
+    if !matches!(action, "train" | "evaluate" | "export") {
+        return Vec::new();
+    }
+    if rttrainer_args_backend(args)
+        .as_deref()
+        .map(|backend| backend == "pytorch")
+        .unwrap_or(false)
+    {
+        vec!["training"]
+    } else {
+        vec!["tensorflow"]
+    }
+}
+
+fn rttrainer_args_backend(args: &[String]) -> Option<String> {
+    let manifest_path = args
+        .windows(2)
+        .find(|items| items[0] == "--manifest")
+        .map(|items| PathBuf::from(&items[1]))?;
+    let manifest = read_optional_json_value(&manifest_path)?;
+    manifest
+        .get("backend")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| normalize_backend(value).ok())
+        .map(str::to_string)
 }
 
 fn run_validator(
@@ -3068,6 +3333,32 @@ mod tests {
             )
             .expect("query recovered project status");
         assert_eq!(project_status, "ready");
+    }
+
+    #[test]
+    fn runtime_settings_round_trip_through_sqlite() {
+        let mut db = Connection::open_in_memory().expect("open in-memory sqlite");
+        configure_database(&mut db).expect("migrate sqlite");
+
+        let defaults = load_runtime_settings(&db).expect("load default settings");
+        assert_eq!(defaults.selected_backend, "keras");
+        assert_eq!(defaults.external_python_path, None);
+
+        save_runtime_settings(
+            &db,
+            &RuntimeSettings {
+                selected_backend: "torch".to_string(),
+                external_python_path: Some("  /tmp/rttrainer-python  ".to_string()),
+            },
+        )
+        .expect("save runtime settings");
+
+        let settings = load_runtime_settings(&db).expect("load saved settings");
+        assert_eq!(settings.selected_backend, "pytorch");
+        assert_eq!(
+            settings.external_python_path,
+            Some("/tmp/rttrainer-python".to_string())
+        );
     }
 
     fn write_test_wav(path: &Path, samples: &[i16], sample_rate: u32) {

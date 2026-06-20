@@ -301,6 +301,13 @@ textarea:focus {
   margin-top: auto;
 }
 
+.runtime-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .runtime dl,
 .metric-stack,
 .quality-grid {
@@ -312,7 +319,7 @@ textarea:focus {
   margin: 10px 0 0;
 }
 
-.runtime div,
+.runtime dl > div,
 .metric {
   display: flex;
   align-items: baseline;
@@ -333,6 +340,118 @@ dd,
   margin: 0;
   color: #eef2ec;
   font-size: 0.9rem;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: #aeb8b1;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 7px;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.icon-button:hover {
+  color: #eef2ec;
+  border-color: #4a5752;
+  transform: translateY(-1px);
+}
+
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
+.runtime-chips {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.runtime-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  color: #9da9a1;
+  font-size: 0.74rem;
+  font-weight: 800;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 999px;
+}
+
+.runtime-chip.active {
+  color: #0e1710;
+  background: #8ee690;
+  border-color: #8ee690;
+}
+
+.package-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #2a302e;
+}
+
+.package-list div {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.package-list span {
+  color: #9da9a1;
+  font-size: 0.74rem;
+}
+
+.package-list strong {
+  overflow: hidden;
+  color: #eef2ec;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.runtime-form .secondary-button {
+  min-height: 36px;
+}
+
+.runtime-error {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  margin-top: 12px;
+  padding: 10px;
+  color: #ffd6d6;
+  font-size: 0.78rem;
+  background: #371d1d;
+  border: 1px solid #723131;
+  border-radius: 8px;
+}
+
+.runtime-error span {
+  overflow-wrap: anywhere;
 }
 
 .workspace {

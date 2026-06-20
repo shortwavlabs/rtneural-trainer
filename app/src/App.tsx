@@ -25,9 +25,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./lib/api";
 import type {
   AppStatus,
+  DeviceInspection,
   ExportPackage,
   ProjectDetail,
   ProjectSummary,
+  RuntimeBackend,
+  RuntimeSettings,
   RunPreview,
   RunPreviewArtifact,
   SidecarProgressEvent,
@@ -69,6 +72,10 @@ const presets = [
 
 export default function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
+  const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
+  const [deviceInspection, setDeviceInspection] = useState<DeviceInspection | null>(null);
+  const [runtimeBusy, setRuntimeBusy] = useState<string | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [project, setProject] = useState<ProjectDetail | null>(null);
@@ -116,15 +123,46 @@ export default function App() {
   async function boot() {
     try {
       setError(null);
-      const [nextStatus, nextProjects] = await Promise.all([
+      const [nextStatus, nextSettings, nextProjects] = await Promise.all([
         api.appStatus(),
+        api.getRuntimeSettings(),
         api.listProjects(),
       ]);
       setStatus(nextStatus);
+      setRuntimeSettings(nextSettings);
       setProjects(nextProjects);
       setSelectedId((current) => current ?? nextProjects[0]?.id ?? null);
+      void refreshDeviceInspection();
     } catch (caught) {
       setError(toMessage(caught));
+    }
+  }
+
+  async function refreshDeviceInspection() {
+    setRuntimeBusy("inspect");
+    setRuntimeError(null);
+    try {
+      const nextInspection = await api.inspectDevice();
+      setDeviceInspection(nextInspection);
+    } catch (caught) {
+      setRuntimeError(toMessage(caught));
+      setDeviceInspection(null);
+    } finally {
+      setRuntimeBusy(null);
+    }
+  }
+
+  async function saveRuntimeSettings(nextSettings: RuntimeSettings) {
+    setRuntimeBusy("settings");
+    setRuntimeError(null);
+    try {
+      const saved = await api.updateRuntimeSettings(nextSettings);
+      setRuntimeSettings(saved);
+      await refreshDeviceInspection();
+    } catch (caught) {
+      setRuntimeError(toMessage(caught));
+    } finally {
+      setRuntimeBusy(null);
     }
   }
 
@@ -198,7 +236,15 @@ export default function App() {
           onSelect={(id) => setSelectedId(id)}
         />
 
-        <RuntimeStatus status={status} />
+        <RuntimeStatus
+          status={status}
+          settings={runtimeSettings}
+          inspection={deviceInspection}
+          busy={runtimeBusy}
+          error={runtimeError}
+          onRefresh={() => void refreshDeviceInspection()}
+          onSave={(nextSettings) => void saveRuntimeSettings(nextSettings)}
+        />
       </aside>
 
       <main className="workspace">
@@ -440,10 +486,63 @@ function ProjectList({
   );
 }
 
-function RuntimeStatus({ status }: { status: AppStatus | null }) {
+function RuntimeStatus({
+  status,
+  settings,
+  inspection,
+  busy,
+  error,
+  onRefresh,
+  onSave,
+}: {
+  status: AppStatus | null;
+  settings: RuntimeSettings | null;
+  inspection: DeviceInspection | null;
+  busy: string | null;
+  error: string | null;
+  onRefresh: () => void;
+  onSave: (settings: RuntimeSettings) => void;
+}) {
+  const [backend, setBackend] = useState<RuntimeBackend>(
+    settings?.selected_backend ?? "keras",
+  );
+  const [externalPythonPath, setExternalPythonPath] = useState(
+    settings?.external_python_path ?? "",
+  );
+
+  useEffect(() => {
+    setBackend(settings?.selected_backend ?? "keras");
+    setExternalPythonPath(settings?.external_python_path ?? "");
+  }, [settings?.external_python_path, settings?.selected_backend]);
+
+  const packageVersions = inspection?.package_versions ?? {};
+  const runtimeSource = settings?.external_python_path
+    ? "External"
+    : status?.trainer_sidecar_present
+      ? "Sidecar"
+      : "uv dev";
+  const hasChanges =
+    backend !== (settings?.selected_backend ?? "keras") ||
+    externalPythonPath.trim() !== (settings?.external_python_path ?? "");
+
   return (
     <div className="runtime">
-      <div className="section-label">Runtime</div>
+      <div className="runtime-heading">
+        <div className="section-label">Runtime</div>
+        <button
+          className="icon-button"
+          type="button"
+          disabled={busy === "inspect"}
+          onClick={onRefresh}
+          title="Refresh runtime"
+        >
+          {busy === "inspect" ? (
+            <LoaderCircle className="spin" size={14} />
+          ) : (
+            <RotateCcw size={14} />
+          )}
+        </button>
+      </div>
       <dl>
         <div>
           <dt>App</dt>
@@ -451,13 +550,103 @@ function RuntimeStatus({ status }: { status: AppStatus | null }) {
         </div>
         <div>
           <dt>Trainer</dt>
-          <dd>{status?.trainer_sidecar_present ? "Bundled" : "Built-in"}</dd>
+          <dd>{runtimeSource}</dd>
         </div>
         <div>
           <dt>Validator</dt>
-          <dd>{status?.validator_sidecar_present ? "Bundled" : "Built-in"}</dd>
+          <dd>{status?.validator_sidecar_present ? "Sidecar" : "CMake dev"}</dd>
+        </div>
+        <div>
+          <dt>Backend</dt>
+          <dd>{backendLabel(settings?.selected_backend ?? "keras")}</dd>
+        </div>
+        <div>
+          <dt>Device</dt>
+          <dd>{inspection?.selected_device ?? "Unknown"}</dd>
         </div>
       </dl>
+
+      <div className="runtime-chips">
+        <RuntimeChip label="CPU" active={Boolean(inspection?.cpu_available ?? true)} />
+        <RuntimeChip label="MPS" active={Boolean(inspection?.mps_available && inspection?.mps_built)} />
+        <RuntimeChip label="CUDA" active={Boolean(inspection?.cuda_available)} />
+      </div>
+
+      <div className="package-list">
+        <PackageVersion label="Python" value={packageVersions.python ?? inspection?.python} />
+        <PackageVersion label="rttrainer" value={packageVersions.rttrainer ?? inspection?.trainer_version} />
+        <PackageVersion label="TensorFlow" value={packageVersions.tensorflow ?? inspection?.tensorflow_version} />
+        <PackageVersion label="Keras" value={packageVersions.keras ?? inspection?.keras_version} />
+        <PackageVersion label="PyTorch" value={packageVersions.torch ?? inspection?.torch_version} />
+      </div>
+
+      <form
+        className="runtime-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave({
+            selected_backend: backend,
+            external_python_path: externalPythonPath.trim() || null,
+          });
+        }}
+      >
+        <label>
+          Backend
+          <select
+            value={backend}
+            onChange={(event) => setBackend(event.target.value as RuntimeBackend)}
+          >
+            <option value="keras">TensorFlow/Keras</option>
+            <option value="pytorch">PyTorch</option>
+          </select>
+        </label>
+        <label>
+          External Python
+          <input
+            value={externalPythonPath}
+            onChange={(event) => setExternalPythonPath(event.target.value)}
+            placeholder="/path/to/python"
+          />
+        </label>
+        <button
+          className="secondary-button wide"
+          type="submit"
+          disabled={busy === "settings" || !hasChanges}
+        >
+          {busy === "settings" ? (
+            <LoaderCircle className="spin" size={16} />
+          ) : (
+            <Save size={16} />
+          )}
+          Save runtime
+        </button>
+      </form>
+
+      {error ? (
+        <div className="runtime-error">
+          <AlertTriangle size={15} />
+          <span>{error}</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RuntimeChip({ label, active }: { label: string; active: boolean }) {
+  return <span className={active ? "runtime-chip active" : "runtime-chip"}>{label}</span>;
+}
+
+function PackageVersion({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | undefined;
+}) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value && value !== "not installed" ? value : "none"}</strong>
     </div>
   );
 }
@@ -1425,6 +1614,10 @@ function operationLabel(operation: string) {
   return operation
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function backendLabel(backend: RuntimeBackend) {
+  return backend === "pytorch" ? "PyTorch" : "TensorFlow/Keras";
 }
 
 function formatMetric(value: number) {

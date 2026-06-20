@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppStatus,
   CreateProjectRequest,
+  DeviceInspection,
   ExportFolderRequest,
   ExportRunRequest,
   ProjectDetail,
@@ -9,10 +10,12 @@ import type {
   RunControlRequest,
   RunPreview,
   RunPreviewRequest,
+  RuntimeSettings,
   SidecarProgressEvent,
   StartTrainingRequest,
   UpdateAudioRequest,
   UpdateNotesRequest,
+  UpdateRuntimeSettingsRequest,
 } from "../types";
 
 const isTauri = () =>
@@ -28,6 +31,10 @@ async function call<T>(command: string, args?: Record<string, unknown>): Promise
 
 export const api = {
   appStatus: () => call<AppStatus>("app_status"),
+  getRuntimeSettings: () => call<RuntimeSettings>("get_runtime_settings"),
+  updateRuntimeSettings: (payload: UpdateRuntimeSettingsRequest) =>
+    call<RuntimeSettings>("update_runtime_settings", { payload }),
+  inspectDevice: () => call<DeviceInspection>("inspect_device"),
   listProjects: () => call<ProjectSummary[]>("list_projects"),
   listProjectEvents: (projectId: string) =>
     call<SidecarProgressEvent[]>("list_project_events", { project_id: projectId }),
