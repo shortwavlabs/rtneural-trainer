@@ -70,11 +70,11 @@ def build_windowed_dataset(
     train_y = make_backend_array(backend, windows_y[:train_count])
     val_x = make_backend_array(backend, windows_x[train_count : train_count + val_count])
     val_y = make_backend_array(backend, windows_y[train_count : train_count + val_count])
-    test_start = (train_count + val_count) * stride
-    test_end = min(length, test_start + sequence_length * 4)
-    if test_end - test_start < sequence_length:
-        test_start = max(0, length - sequence_length * 4)
-        test_end = length
+    test_start, test_end = choose_active_excerpt(
+        target_samples,
+        excerpt_length=sequence_length * 4,
+        stride=stride,
+    )
 
     return WindowedDataset(
         train_x=train_x,
@@ -94,11 +94,55 @@ def build_windowed_dataset(
             "train_windows": train_count,
             "validation_windows": val_count,
             "test_samples": test_end - test_start,
+            "test_start_sample": test_start,
             "selection": "sampled_across_capture"
             if total_windows > len(windows_x)
             else "all_windows",
         },
     )
+
+
+def choose_active_excerpt(
+    target_samples: list[float],
+    *,
+    excerpt_length: int,
+    stride: int,
+) -> tuple[int, int]:
+    length = len(target_samples)
+    excerpt_length = min(max(1, excerpt_length), length)
+    max_start = max(0, length - excerpt_length)
+    step = max(1, stride)
+    best_start = 0
+    best_energy = energy_between(target_samples, 0, excerpt_length)
+    current_start = 0
+    current_energy = best_energy
+
+    for start in range(step, max_start + 1, step):
+        current_energy -= energy_between(target_samples, current_start, start)
+        current_energy += energy_between(
+            target_samples,
+            current_start + excerpt_length,
+            start + excerpt_length,
+        )
+        current_start = start
+        if current_energy > best_energy:
+            best_energy = current_energy
+            best_start = start
+
+    if current_start != max_start:
+        final_energy = energy_between(target_samples, max_start, max_start + excerpt_length)
+        if final_energy > best_energy:
+            best_start = max_start
+
+    return best_start, best_start + excerpt_length
+
+
+def energy_between(samples: list[float], start: int, end: int) -> float:
+    total = 0.0
+    for index in range(start, min(end, len(samples))):
+        sample = samples[index]
+        total += sample * sample
+    return total
 
 
 def make_backend_array(backend: str, windows: list[list[float]]):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 import tempfile
 import unittest
 import wave
@@ -22,6 +23,18 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertEqual(audio.sample_rate, 48_000)
         self.assertEqual(len(audio.samples), len(samples))
         self.assertAlmostEqual(audio.samples[1], samples[1], places=3)
+
+    def test_reads_ieee_float_wav(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "float32.wav"
+            samples = [0.0, 0.25, -0.25, 0.5, -0.5]
+            write_float32_wav(path, samples, 48_000)
+            audio = read_wav_mono(path)
+
+        self.assertEqual(audio.sample_rate, 48_000)
+        self.assertEqual(audio.sample_width, 4)
+        self.assertEqual(len(audio.samples), len(samples))
+        self.assertAlmostEqual(audio.samples[3], samples[3], places=6)
 
     def test_prepare_estimates_and_aligns_latency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -153,6 +166,31 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertGreater(available_windows, 8)
         self.assertEqual(dataset.summary["selection"], "sampled_across_capture")
 
+    def test_dataset_preview_prefers_active_target_excerpt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "input.wav"
+            target_path = root / "target.wav"
+            dry = [0.0] * 16_000
+            target = [0.0] * 16_000
+            for index in range(10_000, 12_000):
+                dry[index] = 0.2
+                target[index] = 0.4 if index % 2 == 0 else -0.4
+            write_wav_mono(input_path, dry, 48_000)
+            write_wav_mono(target_path, target, 48_000)
+
+            dataset = build_windowed_dataset(
+                input_path,
+                target_path,
+                sequence_length=512,
+                max_windows=16,
+                seed=9,
+                backend="list",
+            )
+
+        self.assertGreater(max(abs(sample) for sample in dataset.test_target), 0.3)
+        self.assertGreaterEqual(int(dataset.summary["test_start_sample"]), 8_000)
+
 
 def alternating_signal(length: int) -> list[float]:
     return [0.3 if index % 2 == 0 else -0.3 for index in range(length)]
@@ -170,6 +208,31 @@ def write_stereo_wav(path: Path, frames: list[tuple[float, float]]) -> None:
                 integer = int(round(max(-1.0, min(1.0, sample)) * 32767.0))
                 data.extend(integer.to_bytes(2, "little", signed=True))
         wav.writeframes(bytes(data))
+
+
+def write_float32_wav(path: Path, samples: list[float], sample_rate: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = b"".join(struct.pack("<f", sample) for sample in samples)
+    byte_rate = sample_rate * 4
+    fmt_chunk = struct.pack(
+        "<HHIIHH",
+        3,
+        1,
+        sample_rate,
+        byte_rate,
+        4,
+        32,
+    )
+    with path.open("wb") as handle:
+        handle.write(b"RIFF")
+        handle.write((4 + (8 + len(fmt_chunk)) + (8 + len(payload))).to_bytes(4, "little"))
+        handle.write(b"WAVE")
+        handle.write(b"fmt ")
+        handle.write(len(fmt_chunk).to_bytes(4, "little"))
+        handle.write(fmt_chunk)
+        handle.write(b"data")
+        handle.write(len(payload).to_bytes(4, "little"))
+        handle.write(payload)
 
 
 if __name__ == "__main__":

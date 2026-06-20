@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import math
+import struct
 import wave
 from dataclasses import dataclass
 from pathlib import Path
+
+
+WAVE_FORMAT_PCM = 1
+WAVE_FORMAT_IEEE_FLOAT = 3
 
 
 @dataclass(frozen=True)
@@ -21,11 +26,56 @@ class AudioBuffer:
         return len(self.samples) / self.sample_rate
 
 
+@dataclass(frozen=True)
+class WavPayload:
+    samples: list[float]
+    sample_rate: int
+    channels: int
+    sample_width: int
+
+
 def read_wav_mono(path: Path, channel_policy: str = "mixdown") -> AudioBuffer:
     if not path.exists():
         raise FileNotFoundError(f"WAV file not found: {path}")
     policy = normalize_channel_policy(channel_policy)
 
+    payload = read_wav_payload(path)
+    values = payload.samples
+    if payload.channels > 1:
+        if policy == "reject":
+            raise ValueError(
+                f"{path} has {payload.channels} channels. Choose mono files or enable a mono channel policy."
+            )
+        mono = []
+        for index in range(0, len(values), payload.channels):
+            frame = values[index : index + payload.channels]
+            if len(frame) == payload.channels:
+                if policy == "first":
+                    mono.append(frame[0])
+                else:
+                    mono.append(sum(frame) / payload.channels)
+        values = mono
+
+    return AudioBuffer(
+        samples=values,
+        sample_rate=payload.sample_rate,
+        channels=payload.channels,
+        sample_width=payload.sample_width,
+        path=str(path),
+    )
+
+
+def read_wav_payload(path: Path) -> WavPayload:
+    try:
+        return read_wav_payload_with_wave_module(path)
+    except wave.Error as exc:
+        try:
+            return read_wav_payload_fallback(path)
+        except ValueError:
+            raise ValueError(f"Unsupported WAV encoding in {path}: {exc}") from exc
+
+
+def read_wav_payload_with_wave_module(path: Path) -> WavPayload:
     with wave.open(str(path), "rb") as wav:
         channels = wav.getnchannels()
         sample_width = wav.getsampwidth()
@@ -39,27 +89,58 @@ def read_wav_mono(path: Path, channel_policy: str = "mixdown") -> AudioBuffer:
         raise ValueError("WAV must contain at least one channel")
 
     values = pcm_to_float(raw, sample_width)
-    if channels > 1:
-        if policy == "reject":
-            raise ValueError(
-                f"{path} has {channels} channels. Choose mono files or enable a mono channel policy."
-            )
-        mono = []
-        for index in range(0, len(values), channels):
-            frame = values[index : index + channels]
-            if len(frame) == channels:
-                if policy == "first":
-                    mono.append(frame[0])
-                else:
-                    mono.append(sum(frame) / channels)
-        values = mono
-
-    return AudioBuffer(
+    return WavPayload(
         samples=values,
         sample_rate=sample_rate,
         channels=channels,
         sample_width=sample_width,
-        path=str(path),
+    )
+
+
+def read_wav_payload_fallback(path: Path) -> WavPayload:
+    data = path.read_bytes()
+    if len(data) < 12 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError(f"Not a RIFF/WAVE file: {path}")
+
+    fmt: bytes | None = None
+    raw: bytes | None = None
+    offset = 12
+    while offset + 8 <= len(data):
+        chunk_id = data[offset : offset + 4]
+        chunk_size = int.from_bytes(data[offset + 4 : offset + 8], "little")
+        chunk_start = offset + 8
+        chunk_end = chunk_start + chunk_size
+        if chunk_end > len(data):
+            raise ValueError(f"Malformed WAV chunk in {path}")
+        if chunk_id == b"fmt ":
+            fmt = data[chunk_start:chunk_end]
+        elif chunk_id == b"data":
+            raw = data[chunk_start:chunk_end]
+        offset = chunk_end + (chunk_size % 2)
+
+    if fmt is None or raw is None:
+        raise ValueError(f"WAV file is missing fmt or data chunk: {path}")
+    if len(fmt) < 16:
+        raise ValueError(f"WAV fmt chunk is too short: {path}")
+
+    format_tag, channels, sample_rate, _byte_rate, _block_align, bits_per_sample = (
+        struct.unpack("<HHIIHH", fmt[:16])
+    )
+    sample_width = bits_per_sample // 8
+    if channels <= 0:
+        raise ValueError("WAV must contain at least one channel")
+    if format_tag == WAVE_FORMAT_PCM:
+        samples = pcm_to_float(raw, sample_width)
+    elif format_tag == WAVE_FORMAT_IEEE_FLOAT:
+        samples = ieee_float_to_float(raw, sample_width)
+    else:
+        raise ValueError(f"Unsupported WAV format tag: {format_tag}")
+
+    return WavPayload(
+        samples=samples,
+        sample_rate=sample_rate,
+        channels=channels,
+        sample_width=sample_width,
     )
 
 
@@ -99,6 +180,23 @@ def pcm_to_float(raw: bytes, sample_width: int) -> list[float]:
         else:
             integer = int.from_bytes(chunk, "little", signed=True)
         values.append(clamp(integer / max_int, -1.0, 1.0))
+    return values
+
+
+def ieee_float_to_float(raw: bytes, sample_width: int) -> list[float]:
+    if sample_width not in (4, 8):
+        raise ValueError(f"Unsupported float WAV sample width: {sample_width} bytes")
+    values: list[float] = []
+    format_char = "f" if sample_width == 4 else "d"
+    for offset in range(0, len(raw), sample_width):
+        chunk = raw[offset : offset + sample_width]
+        if len(chunk) != sample_width:
+            continue
+        value = float(struct.unpack(f"<{format_char}", chunk)[0])
+        if math.isfinite(value):
+            values.append(clamp(value, -1.0, 1.0))
+        else:
+            values.append(0.0)
     return values
 
 
