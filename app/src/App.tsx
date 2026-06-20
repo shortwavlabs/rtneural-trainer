@@ -21,10 +21,13 @@ import {
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./lib/api";
 import type {
   AppStatus,
+  AudioWarning,
+  CaptureChannelPolicy,
   DeviceInspection,
   ExportPackage,
   ProjectDetail,
@@ -39,6 +42,14 @@ import type {
 } from "./types";
 
 type TabId = "capture" | "align" | "train" | "evaluate" | "export";
+
+type CaptureAnalyzePayload = {
+  inputPath: string;
+  targetPath: string;
+  targetSampleRate: number;
+  resample: boolean;
+  channelPolicy: CaptureChannelPolicy;
+};
 
 const tabs: Array<{ id: TabId; label: string; icon: LucideIcon }> = [
   { id: "capture", label: "Capture", icon: AudioLines },
@@ -264,14 +275,17 @@ export default function App() {
                 <CaptureView
                   project={project}
                   busy={busy === "audio"}
-                  onAnalyze={async (input_path, target_path) => {
+                  onAnalyze={async (capture) => {
                     setProgressEvents([]);
                     setBusy("audio");
                     try {
                       const nextProject = await api.updateAudio({
                         project_id: project.id,
-                        input_path,
-                        target_path,
+                        input_path: capture.inputPath,
+                        target_path: capture.targetPath,
+                        target_sample_rate: capture.targetSampleRate,
+                        resample: capture.resample,
+                        channel_policy: capture.channelPolicy,
                       });
                       await commitProject(nextProject, "align");
                     } catch (caught) {
@@ -709,10 +723,30 @@ function CaptureView({
 }: {
   project: ProjectDetail;
   busy: boolean;
-  onAnalyze: (inputPath: string, targetPath: string) => Promise<void>;
+  onAnalyze: (payload: CaptureAnalyzePayload) => Promise<void>;
 }) {
   const [inputPath, setInputPath] = useState(project.audio?.input.path ?? "");
   const [targetPath, setTargetPath] = useState(project.audio?.target.path ?? "");
+  const [resample, setResample] = useState(false);
+  const [targetSampleRate, setTargetSampleRate] = useState(48_000);
+  const [channelPolicy, setChannelPolicy] = useState<CaptureChannelPolicy>("mixdown");
+  const captureValidation = validateCaptureForm(inputPath, targetPath);
+  const canPickFiles = isTauriRuntime();
+
+  async function pickCaptureFile(kind: "input" | "target") {
+    const selected = await openDialog({
+      multiple: false,
+      directory: false,
+      title: kind === "input" ? "Choose dry input WAV" : "Choose processed target WAV",
+      filters: [{ name: "WAV audio", extensions: ["wav", "wave"] }],
+    });
+    if (typeof selected !== "string") return;
+    if (kind === "input") {
+      setInputPath(selected);
+    } else {
+      setTargetPath(selected);
+    }
+  }
 
   return (
     <div className="screen-grid capture-grid">
@@ -726,26 +760,86 @@ function CaptureView({
           className="path-form"
           onSubmit={(event) => {
             event.preventDefault();
-            void onAnalyze(inputPath, targetPath);
+            void onAnalyze({
+              inputPath,
+              targetPath,
+              targetSampleRate,
+              resample,
+              channelPolicy,
+            });
           }}
         >
-          <label>
-            Dry input WAV
-            <input
-              value={inputPath}
-              onChange={(event) => setInputPath(event.target.value)}
-              placeholder="/path/to/input.wav"
-            />
-          </label>
-          <label>
-            Processed target WAV
-            <input
-              value={targetPath}
-              onChange={(event) => setTargetPath(event.target.value)}
-              placeholder="/path/to/target.wav"
-            />
-          </label>
-          <button className="primary-button" type="submit" disabled={busy}>
+          <PathPickerField
+            label="Dry input WAV"
+            value={inputPath}
+            placeholder="/path/to/input.wav"
+            disabled={busy}
+            canPick={canPickFiles}
+            onChange={setInputPath}
+            onPick={() => void pickCaptureFile("input")}
+          />
+          <PathPickerField
+            label="Processed target WAV"
+            value={targetPath}
+            placeholder="/path/to/target.wav"
+            disabled={busy}
+            canPick={canPickFiles}
+            onChange={setTargetPath}
+            onPick={() => void pickCaptureFile("target")}
+          />
+          <div className="capture-options">
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={resample}
+                onChange={(event) => setResample(event.target.checked)}
+              />
+              <span>
+                Resample prepared audio
+                <small>Use this when captures are not already at the target rate.</small>
+              </span>
+            </label>
+            <label>
+              Prepared sample rate
+              <select
+                value={targetSampleRate}
+                onChange={(event) => setTargetSampleRate(Number(event.target.value))}
+                disabled={!resample}
+              >
+                <option value={48000}>48 kHz</option>
+                <option value={44100}>44.1 kHz</option>
+                <option value={96000}>96 kHz</option>
+              </select>
+            </label>
+            <label>
+              Stereo and multichannel
+              <select
+                value={channelPolicy}
+                onChange={(event) =>
+                  setChannelPolicy(event.target.value as CaptureChannelPolicy)
+                }
+              >
+                <option value="mixdown">Mix to mono</option>
+                <option value="first">Use first channel</option>
+                <option value="reject">Require mono</option>
+              </select>
+            </label>
+          </div>
+          {captureValidation.length ? (
+            <div className="validation-list">
+              {captureValidation.map((message) => (
+                <div className="validation-row" key={message}>
+                  <AlertTriangle size={15} />
+                  <span>{message}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={busy || captureValidation.length > 0}
+          >
             {busy ? <LoaderCircle className="spin" size={16} /> : <Gauge size={16} />}
             Analyze
           </button>
@@ -767,6 +861,48 @@ function CaptureView({
         )}
       </div>
     </div>
+  );
+}
+
+function PathPickerField({
+  label,
+  value,
+  placeholder,
+  disabled,
+  canPick,
+  onChange,
+  onPick,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  disabled: boolean;
+  canPick: boolean;
+  onChange: (value: string) => void;
+  onPick: () => void;
+}) {
+  return (
+    <label>
+      {label}
+      <div className="path-picker">
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          disabled={disabled}
+        />
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={disabled || !canPick}
+          onClick={onPick}
+          title={canPick ? `Choose ${label}` : "Native file picker is available in Tauri"}
+        >
+          <FolderOpen size={16} />
+          Choose
+        </button>
+      </div>
+    </label>
   );
 }
 
@@ -805,8 +941,10 @@ function AlignView({ project }: { project: ProjectDetail }) {
           />
           <span>{nudge} samples</span>
         </label>
-        {project.audio?.warnings.length ? (
-          <WarningList warnings={project.audio.warnings} />
+        {project.audio?.warning_details.length ? (
+          <WarningList warnings={project.audio.warning_details} />
+        ) : project.audio?.warnings.length ? (
+          <WarningList warnings={legacyWarnings(project.audio.warnings)} />
         ) : (
           <div className="notice notice-ok">
             <CheckCircle2 size={18} />
@@ -1090,13 +1228,22 @@ function AudioReportView({ project }: { project: ProjectDetail }) {
   return (
     <div className="report">
       <div className="metric-stack">
-        <Metric label="Input" value={`${audio.input.sample_rate / 1000} kHz mono`} />
+        <Metric
+          label="Input"
+          value={`${audio.input.sample_rate / 1000} kHz · ${audio.input.channels} ch`}
+        />
+        <Metric
+          label="Target"
+          value={`${audio.target.sample_rate / 1000} kHz · ${audio.target.channels} ch`}
+        />
         <Metric label="Target peak" value={`${audio.target.peak_dbfs.toFixed(1)} dBFS`} />
         <Metric label="Duration" value={`${audio.input.duration_seconds.toFixed(1)} s`} />
         <Metric label="Latency" value={`${audio.latency_samples} samples`} />
       </div>
-      {audio.warnings.length ? (
-        <WarningList warnings={audio.warnings} />
+      {audio.warning_details.length ? (
+        <WarningList warnings={audio.warning_details} />
+      ) : audio.warnings.length ? (
+        <WarningList warnings={legacyWarnings(audio.warnings)} />
       ) : (
         <div className="notice notice-ok">
           <CheckCircle2 size={18} />
@@ -1413,13 +1560,17 @@ function WaveformOverlay({ latency }: { latency: number }) {
   );
 }
 
-function WarningList({ warnings }: { warnings: string[] }) {
+function WarningList({ warnings }: { warnings: AudioWarning[] }) {
   return (
     <div className="warning-list">
       {warnings.map((warning) => (
-        <div className="notice notice-warning" key={warning}>
-          <AlertTriangle size={18} />
-          <span>{warning}</span>
+        <div className={warning.severity === "info" ? "notice notice-info" : "notice notice-warning"} key={`${warning.code}-${warning.message}`}>
+          {warning.severity === "info" ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}
+          <span>
+            <strong>{warning.message}</strong>
+            {warning.detail ? <small>{warning.detail}</small> : null}
+            {warning.action ? <small>{warning.action}</small> : null}
+          </span>
         </div>
       ))}
     </div>
@@ -1614,6 +1765,34 @@ function operationLabel(operation: string) {
   return operation
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function validateCaptureForm(inputPath: string, targetPath: string) {
+  const messages: string[] = [];
+  const input = inputPath.trim();
+  const target = targetPath.trim();
+  if (!input) messages.push("Choose or enter a dry input WAV.");
+  if (!target) messages.push("Choose or enter a processed target WAV.");
+  if (input && !isWavPath(input)) messages.push("Dry input must be a .wav file.");
+  if (target && !isWavPath(target)) messages.push("Processed target must be a .wav file.");
+  if (input && target && input === target) {
+    messages.push("Dry input and processed target must be different files.");
+  }
+  return messages;
+}
+
+function isWavPath(path: string) {
+  return /\.(wav|wave)$/i.test(path.trim());
+}
+
+function legacyWarnings(warnings: string[]): AudioWarning[] {
+  return warnings.map((message) => ({
+    code: message,
+    severity: "warning",
+    message,
+    detail: "",
+    action: "",
+  }));
 }
 
 function backendLabel(backend: RuntimeBackend) {

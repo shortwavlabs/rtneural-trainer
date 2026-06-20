@@ -4,7 +4,13 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from rttrainer.data.audio_io import AudioBuffer, audio_report, read_wav_mono, write_wav_mono
+from rttrainer.data.audio_io import (
+    AudioBuffer,
+    audio_report,
+    normalize_channel_policy,
+    read_wav_mono,
+    write_wav_mono,
+)
 from rttrainer.utils import mkdir, write_json
 
 
@@ -16,11 +22,56 @@ class PreparedAudio:
     report: dict
 
 
-def prepare_audio(input_path: Path, target_path: Path, output_dir: Path) -> PreparedAudio:
+def prepare_audio(
+    input_path: Path,
+    target_path: Path,
+    output_dir: Path,
+    *,
+    target_sample_rate: int | None = None,
+    resample: bool = False,
+    channel_policy: str = "mixdown",
+) -> PreparedAudio:
     output_dir = mkdir(output_dir)
-    input_audio = read_wav_mono(input_path)
-    target_audio = read_wav_mono(target_path)
-    warnings = validate_audio(input_audio, target_audio)
+    normalized_channel_policy = normalize_channel_policy(channel_policy)
+    preferred_sample_rate = target_sample_rate or 48_000
+    if preferred_sample_rate <= 0:
+        raise ValueError("target_sample_rate must be a positive integer.")
+
+    source_input_audio = read_wav_mono(input_path, normalized_channel_policy)
+    source_target_audio = read_wav_mono(target_path, normalized_channel_policy)
+    warning_details = channel_policy_details(
+        source_input_audio,
+        source_target_audio,
+        normalized_channel_policy,
+    )
+
+    input_audio = source_input_audio
+    target_audio = source_target_audio
+    if resample:
+        input_audio, input_resample_notice = resample_if_needed(
+            input_audio,
+            preferred_sample_rate,
+            "Dry input",
+        )
+        target_audio, target_resample_notice = resample_if_needed(
+            target_audio,
+            preferred_sample_rate,
+            "Processed target",
+        )
+        warning_details.extend(input_resample_notice)
+        warning_details.extend(target_resample_notice)
+
+    warning_details.extend(
+        validate_audio(
+            input_audio,
+            target_audio,
+            preferred_sample_rate=preferred_sample_rate,
+            resample_enabled=resample,
+        )
+    )
+    warnings = [
+        str(item["message"]) for item in warning_details if item.get("severity") == "warning"
+    ]
 
     latency_samples, confidence = estimate_latency(input_audio.samples, target_audio.samples)
     aligned_input, aligned_target = align_pair(
@@ -36,14 +87,21 @@ def prepare_audio(input_path: Path, target_path: Path, output_dir: Path) -> Prep
 
     report = {
         "schema_version": 1,
-        "input": audio_report(input_audio),
-        "target": audio_report(target_audio),
+        "input": audio_report(source_input_audio),
+        "target": audio_report(source_target_audio),
         "prepared": {
             "input_path": str(prepared_input_path),
             "target_path": str(prepared_target_path),
             "sample_rate": input_audio.sample_rate,
             "samples": len(aligned_input),
             "duration_seconds": len(aligned_input) / input_audio.sample_rate,
+            "channel_policy": normalized_channel_policy,
+            "resampled": resample,
+        },
+        "options": {
+            "target_sample_rate": preferred_sample_rate,
+            "resample": resample,
+            "channel_policy": normalized_channel_policy,
         },
         "latency": {
             "estimated_samples": latency_samples,
@@ -51,6 +109,7 @@ def prepare_audio(input_path: Path, target_path: Path, output_dir: Path) -> Prep
             "method": "cross_correlation",
         },
         "warnings": warnings,
+        "warning_details": warning_details,
         "status": "ready" if not warnings else "warning",
     }
     report_path = output_dir / "preparation-report.json"
@@ -58,24 +117,209 @@ def prepare_audio(input_path: Path, target_path: Path, output_dir: Path) -> Prep
     return PreparedAudio(prepared_input_path, prepared_target_path, report_path, report)
 
 
-def validate_audio(input_audio: AudioBuffer, target_audio: AudioBuffer) -> list[str]:
-    warnings: list[str] = []
+def validate_audio(
+    input_audio: AudioBuffer,
+    target_audio: AudioBuffer,
+    *,
+    preferred_sample_rate: int,
+    resample_enabled: bool,
+) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
     if input_audio.sample_rate != target_audio.sample_rate:
-        warnings.append("Input and target sample rates differ; resampling is not implemented yet.")
-    if input_audio.sample_rate != 48_000:
-        warnings.append("48 kHz WAV is recommended for v1 exports.")
+        warnings.append(
+            warning_detail(
+                "sample_rate_mismatch",
+                "warning",
+                "Dry input and processed target have different sample rates.",
+                f"Dry input is {input_audio.sample_rate} Hz; processed target is {target_audio.sample_rate} Hz.",
+                "Enable resampling or recapture both files at the same sample rate.",
+            )
+        )
+    if input_audio.sample_rate != preferred_sample_rate:
+        warnings.append(
+            warning_detail(
+                "sample_rate_not_target",
+                "warning",
+                f"Prepared audio is {input_audio.sample_rate} Hz, not {preferred_sample_rate} Hz.",
+                "RTNeural Trainer v1 expects a consistent prepared sample rate for training and export.",
+                "Enable resampling or choose source files already captured at the target rate.",
+            )
+        )
+    elif not resample_enabled and input_audio.sample_rate != 48_000:
+        warnings.append(
+            warning_detail(
+                "sample_rate_not_48k",
+                "warning",
+                "Prepared audio is not 48 kHz.",
+                f"Current prepared rate is {input_audio.sample_rate} Hz.",
+                "48 kHz is the recommended v1 export rate unless your target runtime is fixed to another rate.",
+            )
+        )
     duration_delta = abs(input_audio.duration_seconds - target_audio.duration_seconds)
     if duration_delta > 0.25:
-        warnings.append(f"Input and target durations differ by {duration_delta:.2f} seconds.")
+        warnings.append(
+            warning_detail(
+                "duration_mismatch",
+                "warning",
+                f"Dry input and processed target durations differ by {duration_delta:.2f} seconds.",
+                "Large duration differences can make latency alignment unreliable.",
+                "Trim both captures to the same program material before training.",
+            )
+        )
     if len(input_audio.samples) < input_audio.sample_rate:
-        warnings.append("Capture is shorter than one second.")
+        warnings.append(
+            warning_detail(
+                "capture_too_short",
+                "warning",
+                "Capture is shorter than one second.",
+                "Very short captures rarely cover enough dynamics for a useful model.",
+                "Use at least a few seconds of varied material.",
+            )
+        )
     if active_ratio(input_audio.samples) < 0.05:
-        warnings.append("Input appears to contain too much silence.")
+        warnings.append(
+            warning_detail(
+                "input_too_silent",
+                "warning",
+                "Dry input appears to contain too much silence.",
+                "Most samples are below the activity threshold.",
+                "Trim silence or recapture with a stronger dry signal.",
+            )
+        )
     if active_ratio(target_audio.samples) < 0.05:
-        warnings.append("Target appears to contain too much silence.")
+        warnings.append(
+            warning_detail(
+                "target_too_silent",
+                "warning",
+                "Processed target appears to contain too much silence.",
+                "Most samples are below the activity threshold.",
+                "Trim silence or recapture the processed signal.",
+            )
+        )
+    if max((abs(sample) for sample in input_audio.samples), default=0.0) >= 0.999:
+        warnings.append(
+            warning_detail(
+                "input_clipped",
+                "warning",
+                "Dry input contains clipped samples.",
+                "Clipping in the dry reference can teach the model the wrong transfer curve.",
+                "Lower the capture gain and record again.",
+            )
+        )
     if max((abs(sample) for sample in target_audio.samples), default=0.0) >= 0.999:
-        warnings.append("Target contains clipped samples.")
+        warnings.append(
+            warning_detail(
+                "target_clipped",
+                "warning",
+                "Processed target contains clipped samples.",
+                "Clipped target audio can dominate the loss and hide the actual device behavior.",
+                "Lower the output gain or use a capture with more headroom.",
+            )
+        )
     return warnings
+
+
+def channel_policy_details(
+    input_audio: AudioBuffer,
+    target_audio: AudioBuffer,
+    channel_policy: str,
+) -> list[dict[str, str]]:
+    details: list[dict[str, str]] = []
+    for label, audio in (("Dry input", input_audio), ("Processed target", target_audio)):
+        if audio.channels <= 1:
+            continue
+        if channel_policy == "first":
+            details.append(
+                warning_detail(
+                    "first_channel_selected",
+                    "info",
+                    f"{label} has {audio.channels} channels; using channel 1 only.",
+                    "Prepared audio is mono for the current RTNeural presets.",
+                    "Use this only when channel 1 is the intended capture path.",
+                )
+            )
+        else:
+            details.append(
+                warning_detail(
+                    "mixed_to_mono",
+                    "info",
+                    f"{label} has {audio.channels} channels; mixed to mono.",
+                    "Prepared audio averages all source channels before alignment.",
+                    "For best repeatability, capture mono when possible.",
+                )
+            )
+    return details
+
+
+def resample_if_needed(
+    audio: AudioBuffer,
+    target_sample_rate: int,
+    label: str,
+) -> tuple[AudioBuffer, list[dict[str, str]]]:
+    if audio.sample_rate == target_sample_rate:
+        return audio, []
+    resampled = resample_audio(audio, target_sample_rate)
+    return resampled, [
+        warning_detail(
+            "resampled",
+            "info",
+            f"{label} was resampled to {target_sample_rate} Hz.",
+            f"Original sample rate was {audio.sample_rate} Hz.",
+            "Use high-quality offline resampling before import if this capture is final-critical.",
+        )
+    ]
+
+
+def resample_audio(audio: AudioBuffer, target_sample_rate: int) -> AudioBuffer:
+    if audio.sample_rate == target_sample_rate or not audio.samples:
+        return AudioBuffer(
+            samples=list(audio.samples),
+            sample_rate=target_sample_rate,
+            channels=audio.channels,
+            sample_width=audio.sample_width,
+            path=audio.path,
+        )
+    if len(audio.samples) == 1:
+        return AudioBuffer(
+            samples=[audio.samples[0]],
+            sample_rate=target_sample_rate,
+            channels=audio.channels,
+            sample_width=audio.sample_width,
+            path=audio.path,
+        )
+
+    output_count = max(1, round(len(audio.samples) * target_sample_rate / audio.sample_rate))
+    ratio = audio.sample_rate / target_sample_rate
+    resampled: list[float] = []
+    for index in range(output_count):
+        position = index * ratio
+        left = min(int(math.floor(position)), len(audio.samples) - 1)
+        right = min(left + 1, len(audio.samples) - 1)
+        fraction = position - left
+        resampled.append(audio.samples[left] * (1.0 - fraction) + audio.samples[right] * fraction)
+    return AudioBuffer(
+        samples=resampled,
+        sample_rate=target_sample_rate,
+        channels=audio.channels,
+        sample_width=audio.sample_width,
+        path=audio.path,
+    )
+
+
+def warning_detail(
+    code: str,
+    severity: str,
+    message: str,
+    detail: str,
+    action: str,
+) -> dict[str, str]:
+    return {
+        "code": code,
+        "severity": severity,
+        "message": message,
+        "detail": detail,
+        "action": action,
+    }
 
 
 def estimate_latency(input_samples: list[float], target_samples: list[float]) -> tuple[int, float]:

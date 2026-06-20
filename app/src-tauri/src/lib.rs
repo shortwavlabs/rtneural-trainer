@@ -121,7 +121,18 @@ struct AudioReport {
     latency_samples: i32,
     latency_confidence: f64,
     warnings: Vec<String>,
+    #[serde(default)]
+    warning_details: Vec<AudioWarning>,
     status: AudioStatus,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct AudioWarning {
+    code: String,
+    severity: String,
+    message: String,
+    detail: String,
+    action: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -193,6 +204,12 @@ struct UpdateAudioRequest {
     project_id: String,
     input_path: String,
     target_path: String,
+    #[serde(default = "default_capture_sample_rate")]
+    target_sample_rate: u32,
+    #[serde(default)]
+    resample: bool,
+    #[serde(default = "default_channel_policy")]
+    channel_policy: String,
 }
 
 #[derive(Deserialize)]
@@ -338,6 +355,8 @@ struct PrepareReport {
     target: AudioFileReport,
     latency: LatencyReport,
     warnings: Vec<String>,
+    #[serde(default)]
+    warning_details: Vec<AudioWarning>,
     status: AudioStatus,
 }
 
@@ -534,15 +553,11 @@ fn update_project_audio(
     state: tauri::State<AppState>,
     payload: UpdateAudioRequest,
 ) -> Result<ProjectDetail, String> {
-    if payload.input_path.trim().is_empty() {
-        return Err("Input path is required.".to_string());
-    }
-    if payload.target_path.trim().is_empty() {
-        return Err("Target path is required.".to_string());
-    }
-    if payload.input_path == payload.target_path {
-        return Err("Input and target paths should be different files.".to_string());
-    }
+    let input_path = validate_capture_wav_path(&payload.input_path, "Dry input")?;
+    let target_path = validate_capture_wav_path(&payload.target_path, "Processed target")?;
+    ensure_distinct_capture_paths(&input_path, &target_path)?;
+    let target_sample_rate = normalize_capture_sample_rate(payload.target_sample_rate)?;
+    let channel_policy = normalize_channel_policy_name(&payload.channel_policy)?;
 
     let project_dir = {
         let db = state.db.lock().map_err(lock_error)?;
@@ -557,9 +572,12 @@ fn update_project_audio(
     write_json(
         &manifest_path,
         &serde_json::json!({
-            "input_path": payload.input_path,
-            "target_path": payload.target_path,
-            "output_dir": prepared_dir
+            "input_path": input_path,
+            "target_path": target_path,
+            "output_dir": prepared_dir,
+            "target_sample_rate": target_sample_rate,
+            "resample": payload.resample,
+            "channel_policy": channel_policy
         }),
     )?;
     let job_id = create_job(&state, "prepare", Some(&payload.project_id), None, None)?;
@@ -591,6 +609,7 @@ fn update_project_audio(
         latency_samples: prepare_report.latency.estimated_samples,
         latency_confidence: prepare_report.latency.confidence,
         warnings: prepare_report.warnings,
+        warning_details: prepare_report.warning_details,
         status: prepare_report.status,
     };
 
@@ -1056,6 +1075,7 @@ fn update_notes(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let app_dir = app
@@ -1240,6 +1260,73 @@ fn parse_json_from_stdout(stdout: &str) -> Result<serde_json::Value, String> {
         .rfind('}')
         .ok_or_else(|| "rttrainer inspect-device did not return complete JSON.".to_string())?;
     serde_json::from_str(&stdout[start..=end]).map_err(to_error)
+}
+
+fn default_capture_sample_rate() -> u32 {
+    48_000
+}
+
+fn default_channel_policy() -> String {
+    "mixdown".to_string()
+}
+
+fn validate_capture_wav_path(value: &str, label: &str) -> Result<PathBuf, String> {
+    let Some(trimmed) = non_empty_string(value) else {
+        return Err(format!("{label} WAV path is required."));
+    };
+    let path = expand_home_path(&trimmed);
+    if !path.exists() {
+        return Err(format!(
+            "{label} WAV file does not exist: {}",
+            path.display()
+        ));
+    }
+    if !path.is_file() {
+        return Err(format!("{label} path is not a file: {}", path.display()));
+    }
+    let is_wav = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            extension.eq_ignore_ascii_case("wav") || extension.eq_ignore_ascii_case("wave")
+        })
+        .unwrap_or(false);
+    if !is_wav {
+        return Err(format!("{label} must be a .wav file: {}", path.display()));
+    }
+    Ok(path)
+}
+
+fn ensure_distinct_capture_paths(input_path: &Path, target_path: &Path) -> Result<(), String> {
+    let same_path = match (input_path.canonicalize(), target_path.canonicalize()) {
+        (Ok(input), Ok(target)) => input == target,
+        _ => input_path == target_path,
+    };
+    if same_path {
+        return Err("Dry input and processed target must be different WAV files.".to_string());
+    }
+    Ok(())
+}
+
+fn normalize_capture_sample_rate(value: u32) -> Result<u32, String> {
+    let sample_rate = if value == 0 {
+        default_capture_sample_rate()
+    } else {
+        value
+    };
+    if !(8_000..=384_000).contains(&sample_rate) {
+        return Err("Target sample rate must be between 8 kHz and 384 kHz.".to_string());
+    }
+    Ok(sample_rate)
+}
+
+fn normalize_channel_policy_name(value: &str) -> Result<&'static str, String> {
+    match value.trim().to_lowercase().replace('-', "_").as_str() {
+        "" | "mixdown" | "mono_mixdown" | "mix_to_mono" => Ok("mixdown"),
+        "first" | "first_channel" | "left" => Ok("first"),
+        "reject" | "reject_multichannel" | "mono_only" => Ok("reject"),
+        _ => Err("Channel policy must be mixdown, first, or reject.".to_string()),
+    }
 }
 
 fn configure_database(db: &mut Connection) -> Result<(), String> {
@@ -3250,6 +3337,7 @@ mod tests {
             latency_samples: 0,
             latency_confidence: 1.0,
             warnings: Vec::new(),
+            warning_details: Vec::new(),
             status: AudioStatus::Ready,
         };
         upsert_audio_report(&db, &project.id, &audio).expect("insert audio report");
@@ -3333,6 +3421,25 @@ mod tests {
             )
             .expect("query recovered project status");
         assert_eq!(project_status, "ready");
+    }
+
+    #[test]
+    fn capture_path_validation_rejects_non_wav_and_normalizes_policy() {
+        let root = std::env::temp_dir().join(format!(
+            "rttrainer-capture-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).expect("create temp dir");
+        let text_path = root.join("capture.txt");
+        fs::write(&text_path, "not audio").expect("write non-wav file");
+
+        let error = validate_capture_wav_path(&text_path.display().to_string(), "Dry input")
+            .expect_err("reject non-wav");
+        assert!(error.contains(".wav"));
+        assert_eq!(normalize_channel_policy_name("mono_mixdown"), Ok("mixdown"));
+        assert_eq!(normalize_channel_policy_name("left"), Ok("first"));
+        assert!(normalize_capture_sample_rate(48_000).is_ok());
+        assert!(normalize_capture_sample_rate(1).is_err());
     }
 
     #[test]

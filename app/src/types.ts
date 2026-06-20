@@ -1,6 +1,7 @@
 export type ProjectStatus = "draft" | "ready" | "training" | "exported";
 export type TargetKind = "amp" | "pedal" | "line" | "generic";
 export type AudioStatus = "missing" | "warning" | "ready";
+export type CaptureChannelPolicy = "mixdown" | "first" | "reject";
 export type RunStatus =
   | "queued"
   | "preparing"
@@ -81,7 +82,16 @@ export interface AudioReport {
   latency_samples: number;
   latency_confidence: number;
   warnings: string[];
+  warning_details: AudioWarning[];
   status: AudioStatus;
+}
+
+export interface AudioWarning {
+  code: string;
+  severity: "info" | "warning" | "error" | string;
+  message: string;
+  detail: string;
+  action: string;
 }
 
 export interface TrainingMetrics {
@@ -143,6 +153,9 @@ export interface UpdateAudioRequest {
   project_id: string;
   input_path: string;
   target_path: string;
+  target_sample_rate: number;
+  resample: boolean;
+  channel_policy: CaptureChannelPolicy;
 }
 
 export interface StartTrainingRequest {

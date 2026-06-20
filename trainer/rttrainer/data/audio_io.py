@@ -21,9 +21,10 @@ class AudioBuffer:
         return len(self.samples) / self.sample_rate
 
 
-def read_wav_mono(path: Path) -> AudioBuffer:
+def read_wav_mono(path: Path, channel_policy: str = "mixdown") -> AudioBuffer:
     if not path.exists():
         raise FileNotFoundError(f"WAV file not found: {path}")
+    policy = normalize_channel_policy(channel_policy)
 
     with wave.open(str(path), "rb") as wav:
         channels = wav.getnchannels()
@@ -39,11 +40,18 @@ def read_wav_mono(path: Path) -> AudioBuffer:
 
     values = pcm_to_float(raw, sample_width)
     if channels > 1:
+        if policy == "reject":
+            raise ValueError(
+                f"{path} has {channels} channels. Choose mono files or enable a mono channel policy."
+            )
         mono = []
         for index in range(0, len(values), channels):
             frame = values[index : index + channels]
             if len(frame) == channels:
-                mono.append(sum(frame) / channels)
+                if policy == "first":
+                    mono.append(frame[0])
+                else:
+                    mono.append(sum(frame) / channels)
         values = mono
 
     return AudioBuffer(
@@ -53,6 +61,17 @@ def read_wav_mono(path: Path) -> AudioBuffer:
         sample_width=sample_width,
         path=str(path),
     )
+
+
+def normalize_channel_policy(value: str) -> str:
+    normalized = value.strip().lower().replace("-", "_")
+    if normalized in {"mixdown", "mono_mixdown", "mix_to_mono"}:
+        return "mixdown"
+    if normalized in {"first", "first_channel", "left"}:
+        return "first"
+    if normalized in {"reject", "reject_multichannel", "mono_only"}:
+        return "reject"
+    raise ValueError("Channel policy must be 'mixdown', 'first', or 'reject'.")
 
 
 def write_wav_mono(path: Path, samples: list[float], sample_rate: int) -> None:

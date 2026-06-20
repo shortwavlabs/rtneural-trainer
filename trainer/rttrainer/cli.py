@@ -65,6 +65,9 @@ def run_prepare_command(manifest: dict) -> int:
         input_path=require_path(manifest.get("input_path"), "input_path"),
         target_path=require_path(manifest.get("target_path"), "target_path"),
         output_dir=output_dir,
+        target_sample_rate=optional_int(manifest.get("target_sample_rate")),
+        resample=bool(manifest.get("resample", False)),
+        channel_policy=str(manifest.get("channel_policy", "mixdown")),
     )
     emit(
         {
@@ -77,6 +80,12 @@ def run_prepare_command(manifest: dict) -> int:
         }
     )
     return 0
+
+
+def optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
 
 
 if __name__ == "__main__":
