@@ -1,6 +1,6 @@
 # RTNeural Trainer
 
-RTNeural Trainer is an early desktop workbench for preparing paired audio,
+RTNeural Trainer is a local desktop workbench for preparing paired audio,
 training a small neural audio model, exporting RTNeural-compatible JSON, and
 validating/benchmarking the result before use in a real-time target.
 
@@ -10,16 +10,27 @@ The repo currently contains:
 - `trainer/`: `uv`-managed Python sidecar and CLI.
 - `native/rtneural-validator/`: CMake-built validator/benchmark sidecar.
 - `scripts/`: RTNeural support and Keras fixture helper scripts.
-- `docs/`: research notes and implementation plan.
+- `docs/`: research notes and the current implementation guide.
 
-The implementation is still a prototype. The desktop app now calls the real
-Python `prepare`, `train`, and `export` commands, and the export path invokes the
-native RTNeural validator/benchmark sidecar. The commands resolve after the job
-finishes, while stdout/stderr stream to the UI as `sidecar-progress` events for
-live prepare, training, export, validation, and benchmark updates. The current
-train/evaluate/export CLI uses TensorFlow/Keras as the canonical RTNeural JSON
-path, with PyTorch retained as an optional compatibility backend for curated
-presets.
+The implementation is now a working local desktop prototype. The desktop app
+calls the real Python `prepare`, `train`, `evaluate`, and `export` commands, and
+the export path invokes the native RTNeural validator/benchmark sidecar. The
+commands resolve after the job finishes, while stdout/stderr stream to the UI as
+`sidecar-progress` events for live prepare, training, export, validation, and
+benchmark updates. The current train/evaluate/export CLI uses TensorFlow/Keras
+as the canonical RTNeural JSON path, with PyTorch retained as an optional
+compatibility backend for curated LSTM presets.
+
+Current local v1 coverage includes SQLite-backed project/job state, native file
+pickers, optional resampling and stereo policy, manual latency override,
+cancel/resume/recovery, validation curves, early stopping controls, runtime
+inspection, target/prediction/residual playback, golden RTNeural JSON fixtures,
+native parity checks, and debug/release smoke scripts.
+
+Still deferred: signed/notarized release distribution, richer waveform/spectrum
+inspection, a full tiny train/export smoke inside an installed bundle, UI smoke
+tests with a real Tauri window, and any `.aidax` or generated player envelope
+until format/license review is complete.
 
 ## Requirements
 
@@ -90,7 +101,7 @@ Check the Rust side:
 
 ```bash
 cd app/src-tauri
-cargo check
+cargo test
 ```
 
 ## Package Tauri Sidecars
@@ -415,12 +426,13 @@ Rust:
 
 ```bash
 cd app/src-tauri
-cargo check
+cargo test
 ```
 
 Native validator:
 
 ```bash
+cmake -S native/rtneural-validator -B native/rtneural-validator/build
 cmake --build native/rtneural-validator/build
 python3 scripts/smoke_rtneural_validator.py
 ```
@@ -466,6 +478,13 @@ Release package smoke:
 ```bash
 pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles app,dmg
 ```
+
+## CI Gates
+
+`.github/workflows/ci.yml` runs the fast desktop gate on Ubuntu: dependency
+setup, TensorFlow trainer sync, native validator build/smoke, Python tests,
+golden fixture freshness, frontend build, development sidecar staging, Rust
+tests, Tauri workflow smoke, and debug packaged-app smoke.
 
 GitHub Actions has a separate `Release Packaging` workflow for the slow path. It
 runs the release package smoke on Linux, macOS, and Windows, then uploads the

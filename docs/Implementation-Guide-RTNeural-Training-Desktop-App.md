@@ -1,6 +1,6 @@
 # Implementation Guide: RTNeural Training Desktop App
 
-Date: 2026-06-19
+Date: 2026-06-20
 
 Source reviewed: [Research-RTNeural-Training-Desktop-App.md](Research-RTNeural-Training-Desktop-App.md)
 
@@ -12,6 +12,50 @@ artifacts. The core product promise is intentionally narrow:
 > real-time-safe model, proves the exported RTNeural JSON matches the trained
 > model, proves RTNeural can load it, and reports runtime cost before the user
 > ships the model.
+
+## Current Implementation Status
+
+This document started as a build plan. As of June 20, 2026, the repository has
+crossed from architecture planning into a working desktop prototype. Treat this
+guide as both the historical implementation map and the current engineering
+checklist.
+
+Implemented:
+
+1. Tauri v2 + React desktop app with project creation, runtime inspection,
+   capture import, preparation, alignment, training, evaluation, export, notes,
+   and progress streaming.
+2. `uv`-managed Python `rttrainer` sidecar with `prepare`, `train`, `evaluate`,
+   `export`, and `inspect-device` commands.
+3. TensorFlow/Keras-first training and RTNeural JSON export path, with optional
+   PyTorch support only for curated LSTM presets.
+4. Dense-only, GRU, LSTM, causal Conv1D, safe BatchNorm/PReLU, and Conv+GRU
+   hybrid Keras presets with golden JSON and native RTNeural parity coverage.
+5. Native C++ `rtneural-validator` sidecar that validates exported JSON against
+   WAV fixtures and benchmarks runtime cost.
+6. SQLite-backed project/job store with durable job events, status recovery,
+   cancellation, resume-from-checkpoint, failed/interrupted states, and job
+   locking.
+7. Native file pickers, capture validation, optional resampling, stereo policy,
+   manual alignment override, sampled-window handling for long captures,
+   gain/headroom guidance, validation curves, early stopping controls, preset
+   recommendations, and good/usable/needs-work report language.
+8. Offline preview playback for target, prediction, and residual WAVs.
+9. Rich export package metadata, validation/benchmark report display, and
+   open-export-folder support.
+10. Development sidecar shims, production sidecar packaging, release sidecar
+    smoke tests, Tauri bundle smoke tests, and release artifact manifests.
+
+Deferred or still productization work:
+
+1. Signed/notarized release distribution and final release publishing policy.
+2. Installer metadata polish for macOS, Windows, and Linux release channels.
+3. Real-world capture threshold tuning for preset recommendations, gain
+   guidance, and good/usable/needs-work quality language.
+4. More visual waveform/spectrum inspection for target/prediction/residual.
+5. `.aidax` envelope pending format/license review.
+6. Generated JUCE/player integration and compile-time RTNeural model generation.
+7. Accessibility, onboarding/sample project, error copy, and broader UI polish.
 
 ## 1. Non-Negotiable Product Decisions
 
@@ -35,7 +79,7 @@ version buildable and protect the app from becoming a generic ML IDE.
 
 Use a Tauri v2 desktop shell with a React/TypeScript UI, a Rust orchestration
 layer, a `uv`-managed Python trainer/export sidecar, and a native C++ RTNeural
-validator sidecar. The Python sidecar should make TensorFlow/Keras the canonical
+validator sidecar. The Python sidecar makes TensorFlow/Keras the canonical
 RTNeural JSON path while keeping PyTorch isolated behind optional extras and
 known-good parity tests.
 
@@ -44,27 +88,28 @@ rtneural-trainer/
   app/
     package.json
     src/
-      app/
-      components/
-      features/
-      lib/
+      App.tsx
+      lib/api.ts
+      styles.css
+      types.ts
     src-tauri/
       Cargo.toml
       tauri.conf.json
       capabilities/
       binaries/
       src/
+        lib.rs
+        main.rs
   trainer/
     pyproject.toml
+    uv.lock
     rttrainer/
       __init__.py
       cli.py
-      config.py
       data/
       export_rtneural/
       metrics/
       models/
-      reports/
       training/
       validation/
     tests/
@@ -72,16 +117,13 @@ rtneural-trainer/
     rtneural-validator/
       CMakeLists.txt
       src/
-      tests/
-  fixtures/
-    audio/
-    models/
+  scripts/
   projects/
     .gitkeep
   docs/
 ```
 
-The app should store structured state in SQLite and large artifacts on disk.
+The app stores structured state in SQLite and large artifacts on disk.
 
 ```text
 projects/
@@ -91,34 +133,36 @@ projects/
       prepared/
     runs/
       <run-id>/
-        manifest.json
+        train-manifest.json
         checkpoints/
         events.jsonl
         metrics.json
+        history.json
+        training-report.json
         previews/
-        plots/
     exports/
       <export-id>/
         model.rtneural.json
         package.json
         validation-report.json
         benchmark-report.json
-        preview-target.wav
-        preview-prediction.wav
-        preview-residual.wav
+        native-validation-report.json
+        native-benchmark-report.json
+        export-events.jsonl
 ```
 
 ## 3. Milestone Map
 
-Build the product in four phases. Do not start the desktop UI until the CLI can
-train, export, and validate one boring LSTM preset.
+The original build map used four phases. The repo is now in late Phase 2: the
+core desktop workflow works locally, while release distribution and runtime
+integrations remain productization work.
 
-| Phase | Name | Goal | Exit Criteria |
+| Phase | Name | Current Status | Notes |
 | --- | --- | --- | --- |
-| 0 | Export spike | Prove Keras to RTNeural JSON parity | Tiny Dense/LSTM/GRU/Conv1D/activation/BatchNorm/PReLU exports load in native RTNeural and match within tolerance |
-| 1 | CLI trainer | Build product core without UI | Paired WAVs produce validated RTNeural JSON, metrics, and preview audio |
-| 2 | Desktop MVP | Make the workflow usable by non-developers | Project creation, import, align, train, evaluate, export all work without a terminal |
-| 3 | Runtime integrations | Make exports immediately useful | `.aidax` envelope, generated player, compile-time model, or cloud training path |
+| 0 | Export spike | Complete | Dense/LSTM/GRU/Conv1D/activation/BatchNorm/PReLU fixtures export, run through Python parity, and validate in native RTNeural. |
+| 1 | CLI trainer | Complete for local v1 | Paired WAVs produce metrics, checkpoints, preview WAVs, RTNeural JSON, package metadata, and validation/benchmark reports. |
+| 2 | Desktop MVP | Implemented prototype | Project creation, import, align, train, evaluate, export, progress, cancel/resume, runtime inspection, previews, and report display are wired. |
+| 3 | Runtime integrations | Deferred | `.aidax`, generated player, compile-time model generation, and cloud training remain later work. |
 
 ## 4. Prerequisites And Pins
 
@@ -146,27 +190,25 @@ repo. Pinning early matters because parity failures are often version-sensitive.
    - `numpy`
    - `tensorflow` for canonical Keras export fixtures and compatible presets
    - `torch` only for the optional PyTorch training/export backend
-   - `torchaudio` if used for PyTorch-side audio IO/resampling
-   - `scipy`
-   - `soundfile`
-   - `pydantic`
-   - `typer` or `argparse`
-   - `matplotlib` or another plot renderer
+   - `pyinstaller`, injected by the packaging script when building production
+     sidecars
+   - WAV IO currently uses Python's standard library `wave` module
+   - CLI parsing currently uses `argparse`
 5. Record frontend/runtime versions:
    - Tauri v2
    - React
    - TypeScript
    - Vite or the selected frontend build tool
-6. Decide whether the default packaged trainer includes TensorFlow and/or
-   PyTorch, or whether the app also supports an advanced external Python
-   environment.
+6. Current packaging decision:
+   - production `rttrainer` sidecars include the TensorFlow/Keras path
+   - PyTorch remains optional and limited to supported LSTM presets
+   - the desktop app exposes an external Python path for advanced environments
 
 Recommended local commands:
 
 ```bash
 cd trainer
 uv lock
-uv sync
 uv sync --extra tensorflow
 uv sync --extra training
 ```
@@ -184,11 +226,9 @@ Phase 0 is the most important technical milestone. Keep it small and ruthless:
 one synthetic dataset, one Keras Dense/LSTM/GRU export path, the optional PyTorch
 presets kept behind parity tests, and a native parity test.
 
-### Step 5.1 Create The Minimal Python Package
+### Step 5.1 Python Package
 
-Create `trainer/pyproject.toml` and a package named `rttrainer`.
-
-Initial modules:
+Current package:
 
 ```text
 trainer/rttrainer/
@@ -198,52 +238,57 @@ trainer/rttrainer/
   export_rtneural/json_exporter.py
   export_rtneural/registry.py
   validation/parity.py
-  training/synthetic.py
+  training/runner.py
+  training/dataset.py
+  data/audio_io.py
+  data/prepare.py
+  metrics/audio_metrics.py
 ```
 
-Implementation tasks:
+Implemented CLI commands:
 
-1. Add a CLI entry point named `rttrainer`.
-2. Add `rttrainer spike-train --preset lstm-light --out <dir>`.
-3. Generate deterministic synthetic data:
-   - sine sweep
-   - stepped gain
-   - simple nonlinear saturation target
-4. Train a tiny recurrent model quickly enough for CI.
-5. Save:
-   - backend checkpoint
-   - `training-config.json`
-   - `backend-output.npy`
-   - `test-input.npy`
+```bash
+rttrainer inspect-device --json
+rttrainer prepare --manifest prepare-manifest.json
+rttrainer train --manifest train-manifest.json
+rttrainer evaluate --manifest evaluate-manifest.json
+rttrainer export --manifest export-manifest.json
+```
 
-Acceptance criteria:
+Current status:
 
-- The command trains in a few seconds on CPU.
-- The same seed produces stable outputs.
-- The model uses only layers planned for RTNeural export.
+- `trainer/pyproject.toml` defines the package and optional `tensorflow` and
+  `training` extras.
+- Keras/TensorFlow is the canonical training/export path.
+- PyTorch is retained only where parity is proven and worth supporting.
+- Deterministic fixture generation and parity tests now cover the export surface
+  instead of a separate `spike-train` command.
 
 ### Step 5.2 Implement First Model Presets And Support Matrix
 
 Implement presets as code-owned architecture factories. Do not serialize
 arbitrary model definitions.
 
-Start with:
+Implemented presets:
 
 | Preset ID | Architecture | Use |
 | --- | --- | --- |
-| `lstm_light` | 1 LSTM, hidden 8 or 12, dense output | Lowest-risk recurrent export |
-| `lstm_standard` | 1 LSTM, hidden 16 or 20, dense output | Default v1 target |
-| `gru_light` | 1 GRU, hidden 8 or 12, dense output | GRU parity coverage |
-| `dense_memoryless` | Small dense stack | Simple gain/EQ/saturation targets |
+| `dense_only` | Dense stack | Fast memoryless baseline |
+| `gru_light` | 1 GRU, hidden 10, dense output | Compact recurrent model |
+| `lstm_light` | 1 LSTM, hidden 12, dense output | Lowest-risk recurrent export |
+| `lstm_standard` | 1 LSTM, hidden 16, dense output | Default recurrent target |
+| `conv1d_light` | Causal Conv1D | Fast temporal front-end |
+| `conv1d_bn_prelu` | Causal Conv1D with BatchNorm/PReLU | Safe BatchNorm/PReLU coverage |
+| `conv_gru_hybrid` | Conv1D front-end + GRU | Richer Keras temporal preset |
 
 Model rules:
 
 1. Use mono input and mono output first.
 2. Keep tensor shape conventions documented in the model file.
-3. Avoid BatchNorm in v1 unless export parity is already covered.
-4. Avoid Conv1D/TCN in the UI until recurrent export and validation are boring,
-   but keep Conv1D in the fixture/support scripts because RTNeural-compare
-   benchmarks it.
+3. BatchNorm/PReLU is exposed only in the safe Conv1D preset with parity
+   coverage.
+4. Conv1D and Conv+GRU are exposed because golden JSON plus native parity now
+   cover those paths.
 5. Add each preset to a known-good compatibility matrix.
 6. Keep the RTNeural layer/activation support matrix in code and generate docs
    from it instead of hand-maintaining scattered tables.
@@ -252,8 +297,8 @@ Benchmark-driven v1 support:
 
 | Kind | v1 | v1-plus | Later | Defer |
 | --- | --- | --- | --- | --- |
-| Layers | Dense, GRU, LSTM | Conv1D | Conv2D, BatchNorm1D, BatchNorm2D, PReLU | MaxPooling |
-| Activations | tanh, ReLU, sigmoid |  | softmax, ELU, PReLU |  |
+| Layers | Dense, GRU, LSTM, Conv1D | BatchNorm/PReLU only in safe cases | Conv2D, broader BatchNorm variants | MaxPooling |
+| Activations | tanh, ReLU, sigmoid, softmax, ELU, PReLU |  |  |  |
 
 Acceptance criteria:
 
@@ -267,9 +312,10 @@ Acceptance criteria:
 
 ### Step 5.3 Build The RTNeural JSON Exporters
 
-Create `trainer/rttrainer/export_rtneural/keras_exporter.py` first, then keep
+Implemented in `trainer/rttrainer/export_rtneural/keras_exporter.py` for the
+canonical TensorFlow/Keras path and
 `trainer/rttrainer/export_rtneural/json_exporter.py` for the optional PyTorch
-path.
+path plus shared package metadata helpers.
 
 Exporter responsibilities:
 
@@ -330,9 +376,9 @@ Acceptance criteria:
 
 ### Step 5.4 Write A Python Parity Validator
 
-Create `trainer/rttrainer/validation/parity.py`.
+Implemented in `trainer/rttrainer/validation/parity.py`.
 
-The Python parity validator should:
+The Python parity validator:
 
 1. Load the original backend checkpoint or Keras model.
 2. Load the exported JSON.
@@ -340,10 +386,9 @@ The Python parity validator should:
 4. Compare output arrays sample by sample.
 5. Save a tolerance report.
 
-If a full Python RTNeural JSON simulator is too much for Phase 0, start with
-exporter-level tensor layout tests and let the native validator be the runtime
-source of truth. Keep the Python validator interface anyway so the UI and CI
-contract does not change later.
+The native validator remains the runtime source of truth, while Python parity
+tests keep backend/export tensor layout changes honest before the native smoke
+stage runs.
 
 Acceptance criteria:
 
@@ -353,7 +398,7 @@ Acceptance criteria:
 
 ### Step 5.5 Build The Native RTNeural Validator
 
-Create `native/rtneural-validator`.
+Implemented in `native/rtneural-validator`.
 
 CLI shape:
 
@@ -371,7 +416,7 @@ rtneural-validator benchmark \
   --report benchmark-report.json
 ```
 
-Implementation tasks:
+Current responsibilities:
 
 1. Add a CMake project.
 2. Fetch or vendor RTNeural at the pinned commit.
@@ -405,8 +450,9 @@ Acceptance criteria:
 
 ## 6. Phase 1: CLI Trainer
 
-Phase 1 turns the spike into the real product core. The app UI will eventually
-call these commands, so design them as stable sidecar contracts.
+Phase 1 is implemented as the `rttrainer` Python sidecar. The Tauri app calls
+these commands through saved manifest JSON files and streams JSONL progress
+events into the desktop UI and SQLite job event store.
 
 ### Step 6.1 Define CLI Commands And JSON Contracts
 
@@ -445,8 +491,7 @@ Acceptance criteria:
 
 ### Step 6.2 Implement Audio Import And Preparation
 
-Create `rttrainer/data/audio_io.py`, `rttrainer/data/prepare.py`, and
-`rttrainer/data/analysis.py`.
+Implemented in `rttrainer/data/audio_io.py` and `rttrainer/data/prepare.py`.
 
 Input contract:
 
@@ -467,6 +512,10 @@ Preparation tasks:
 10. Trim and align prepared files.
 11. Create reproducible train/validation/test splits.
 12. Save a preparation report.
+13. Apply and persist a manual latency adjustment when the user overrides the
+    automatic estimate.
+14. Report long-capture handling, recommended training window budget, and
+    gain/headroom guidance.
 
 Validation report fields:
 
@@ -492,9 +541,25 @@ Validation report fields:
     "dc_offset": 0.0002
   },
   "latency": {
-    "estimated_samples": 123,
+    "estimated_samples": 128,
+    "auto_estimated_samples": 123,
+    "manual_adjustment_samples": 5,
+    "effective_samples": 128,
     "confidence": 0.94,
-    "method": "impulse"
+    "method": "cross_correlation"
+  },
+  "capture_profile": {
+    "duration_seconds": 120.0,
+    "recommended_max_windows": 2048,
+    "handling": "sampled_windows"
+  },
+  "gain": {
+    "input_peak_dbfs": -8.2,
+    "target_peak_dbfs": -7.1,
+    "rms_delta_db": 1.4,
+    "headroom_db": 7.1,
+    "verdict": "healthy",
+    "guidance": "Levels are in a good range for training."
   },
   "warnings": []
 }
@@ -512,11 +577,12 @@ Acceptance criteria:
 
 - Prepared files have matching sample rate, channel count, and effective length.
 - The report contains enough data to drive UI warnings.
-- Alignment can be manually overridden later without rerunning decode.
+- Alignment can be manually overridden from the desktop app; applying the
+  override regenerates prepared audio with the saved manual adjustment.
 
 ### Step 6.3 Implement Dataset Windowing
 
-Create `rttrainer/data/dataset.py`.
+Implemented in `rttrainer/training/dataset.py`.
 
 Training examples should be generated from aligned audio with reproducible
 windowing.
@@ -528,26 +594,29 @@ Recommended first approach:
 3. Keep recurrent hidden state handling explicit.
 4. Use deterministic train/validation/test splits.
 5. Avoid training on long silence-dominated regions.
-6. Save split indices and random seed.
+6. Save split metadata and random seed.
+7. Sample windows across long captures instead of only taking the first windows.
 
 Acceptance criteria:
 
-- Re-running `prepare` with the same seed produces the same splits.
-- Dataset code can stream from disk if files become too large for memory.
-- Unit tests cover short files, stereo-to-mono conversion, and silence trimming.
+- Re-running training with the same seed produces stable sampled windows.
+- Dataset summaries record available windows, selected windows, train/validation
+  counts, stride, sample rate, duration, and selection mode.
+- Unit tests cover WAV IO, resampling, stereo policy, manual alignment metadata,
+  and long-capture window sampling.
 
 ### Step 6.4 Implement Training Loop
 
-Create `rttrainer/training/runner.py`.
+Implemented in `rttrainer/training/runner.py`.
 
-The default runner should train Keras models whose layer graph is known to export
-through `rttrainer.export_rtneural.keras_exporter`. Keep backend selection
+The default runner trains Keras models whose layer graph is known to export
+through `rttrainer.export_rtneural.keras_exporter`. Backend selection remains
 explicit in the run manifest: `keras` for the canonical path and `pytorch` only
 for presets that have matching parity fixtures.
 
-Device selection should be reported, but the first reliable requirement is
-reproducibility. Record TensorFlow-visible accelerators for Keras runs and
-PyTorch CUDA/MPS availability for optional PyTorch runs.
+Device selection is reported, but the first reliable requirement is
+reproducibility. The run records TensorFlow-visible accelerators for Keras runs
+and PyTorch CUDA/MPS availability for optional PyTorch runs.
 
 Training loop requirements:
 
@@ -561,6 +630,9 @@ Training loop requirements:
 6. Support cancellation by signal and by a cancellation file in the run folder.
 7. Emit JSONL progress events after every epoch.
 8. Save exact package versions, device name, seed, and preset metadata.
+9. Support early stopping by validation ESR plateau.
+10. Save per-epoch validation history for the desktop validation curve.
+11. Save good/usable/needs-work quality assessment language for the report UI.
 
 Validation/inference preview requirements:
 
@@ -577,10 +649,12 @@ Acceptance criteria:
 - Cancelling leaves a valid interrupted state and latest checkpoint.
 - Validation previews do not allocate training graphs.
 - Run metadata is sufficient to reproduce the run.
+- Desktop controls now expose epochs, early-stop patience, minimum ESR
+  improvement, and training window budget.
 
 ### Step 6.5 Implement Losses And Metrics
 
-Create `rttrainer/metrics`.
+Implemented in `rttrainer/metrics/audio_metrics.py`.
 
 Minimum v1 metrics:
 
@@ -603,8 +677,8 @@ Expose user-facing summaries as:
 - CPU
 - Latency
 
-Do not make raw loss the only quality indicator. Users should be able to A/B/C
-target, prediction, and residual audio in the desktop app.
+Raw loss is not the only quality indicator. Users can A/B/C target, prediction,
+and residual audio in the desktop app.
 
 Acceptance criteria:
 
@@ -614,7 +688,8 @@ Acceptance criteria:
 
 ### Step 6.6 Implement Export Packaging
 
-Create `rttrainer/export_rtneural/package.py`.
+Implemented across `trainer/rttrainer/export_rtneural/json_exporter.py`, the
+`rttrainer export` CLI command, and the Rust `export_run` orchestration command.
 
 Export folder contents:
 
@@ -626,9 +701,10 @@ exports/<export-id>/
   metrics.json
   validation-report.json
   benchmark-report.json
-  preview-target.wav
-  preview-prediction.wav
-  preview-residual.wav
+  native-validation-report.json
+  native-benchmark-report.json
+  export-events.jsonl
+  stderr.log
 ```
 
 Package metadata:
@@ -662,6 +738,8 @@ Acceptance criteria:
 - Export fails if parity validation or native validation fails.
 - Export fails if benchmark does not meet the selected target tier.
 - Export can be regenerated from the saved run without retraining.
+- Export package metadata includes validation/benchmark report summaries,
+  artifact metadata, compatibility flags, and `.aidax` status marked deferred.
 
 ## 7. Phase 2: Desktop MVP
 
@@ -669,22 +747,26 @@ Only begin Phase 2 after the CLI can complete the core workflow.
 
 ### Step 7.1 Scaffold The Tauri App
 
-Create the app with Tauri v2, React, and TypeScript.
+Implemented with Tauri v2, React, TypeScript, Vite,
+`@tauri-apps/plugin-shell`, and `@tauri-apps/plugin-dialog`.
 
-Implementation tasks:
+Current implementation:
 
-1. Create `app/`.
-2. Install Tauri v2 dependencies and `@tauri-apps/plugin-shell`.
-3. Add the shell plugin to the Rust app.
-4. Create a minimal React router or screen state system.
-5. Add a local app data directory abstraction.
-6. Add TypeScript types that mirror CLI manifest and event schemas.
+1. `app/` contains the Tauri v2 desktop app.
+2. Tauri v2 dependencies, `@tauri-apps/plugin-shell`, and
+   `@tauri-apps/plugin-dialog` are installed.
+3. The shell and dialog plugins are registered in the Rust app.
+4. `app/src/App.tsx` owns the current screen state system.
+5. Rust owns project and app data directory paths.
+6. `app/src/types.ts` mirrors the DTOs and events used by Tauri commands.
 
 Acceptance criteria:
 
 - `app` runs in development mode.
 - A Tauri command can return app version and app data path.
 - The frontend does not spawn arbitrary commands directly.
+- Runtime inspection, external Python path selection, backend selection, CPU/MPS
+  /CUDA availability, and package versions are exposed in the desktop UI.
 
 ### Step 7.2 Configure Sidecars
 
@@ -748,9 +830,9 @@ Development staging command:
 pnpm --filter rtneural-trainer-app package:sidecars:dev
 ```
 
-This should create ignored POSIX shims for local work. The `rttrainer` shim can
-delegate to `uv run --extra tensorflow python -m rttrainer`; the validator shim
-can delegate to `native/rtneural-validator/build/rtneural-validator`.
+This creates ignored POSIX shims for local work. The `rttrainer` shim delegates
+to `uv run --extra tensorflow python -m rttrainer`; the validator shim delegates
+to `native/rtneural-validator/build/rtneural-validator`.
 
 Production staging command:
 
@@ -758,7 +840,7 @@ Production staging command:
 pnpm --filter rtneural-trainer-app package:sidecars
 ```
 
-This should build or copy real executables into `app/src-tauri/binaries/`.
+This builds or copies real executables into `app/src-tauri/binaries/`.
 Support prebuilt override paths for release automation:
 
 ```bash
@@ -767,8 +849,8 @@ RTNEURAL_VALIDATOR_SOURCE=/path/to/rtneural-validator \
 pnpm --filter rtneural-trainer-app package:sidecars
 ```
 
-Rust invocation should use `tauri_plugin_shell::ShellExt` and stream events from
-the child process into the app event bus.
+Rust invocation uses `tauri_plugin_shell::ShellExt` and streams events from the
+child process into the app event bus.
 
 Acceptance criteria:
 
@@ -779,8 +861,9 @@ Acceptance criteria:
 
 ### Step 7.3 Implement SQLite Project Store
 
-Create a Rust-side SQLite store. Keep large artifacts on disk and store paths,
-hashes, status, and metadata in SQLite.
+Implemented as a Rust-side SQLite store in `app/src-tauri/src/lib.rs`. Large
+artifacts remain on disk and SQLite stores relative paths, statuses, metadata,
+job events, and project settings.
 
 Tables:
 
@@ -795,6 +878,10 @@ hardware_profiles
 app_settings
 job_events
 ```
+
+The current schema is embedded in Rust migrations and includes the durable job
+state needed for restart recovery. Artifact hashing and separate hardware
+profile tables are still future polish.
 
 Recommended status enums:
 
@@ -819,6 +906,8 @@ Acceptance criteria:
 - Restarting the app reconstructs project state from SQLite and project folders.
 - Interrupted runs remain visible and resumable when possible.
 - Missing artifact files are detected and surfaced as repairable errors.
+- Running jobs are marked interrupted after restart and exports with missing
+  artifacts are audited into failed status.
 
 ### Step 7.4 Implement Job Orchestration
 
@@ -829,15 +918,17 @@ Rust commands:
 
 ```text
 create_project
-import_audio
-prepare_audio
-start_training_run
+update_project_audio
+update_project_alignment
+start_training
 cancel_training_run
 resume_training_run
-evaluate_run
+get_run_preview
 export_run
 open_export_folder
-list_hardware
+inspect_device
+get_runtime_settings
+update_runtime_settings
 ```
 
 Job runner responsibilities:
@@ -857,68 +948,74 @@ Acceptance criteria:
 - Cancelling from the UI reaches the Python process.
 - Failed jobs keep enough logs for diagnosis.
 - A project can have multiple runs and exports.
+- Sidecar stdout/stderr is streamed to the frontend as `sidecar-progress` events
+  and persisted as job events.
 
 ### Step 7.5 Build The Main Screens
 
 The app should feel like a guided audio workbench, not an ML dashboard.
 
-Screen 1: Projects
+Current screen: Projects and runtime sidebar
 
 - Recent projects
 - Last run status
 - Last quality score
-- Hardware used
+- Runtime source, backend, CPU/MPS/CUDA availability, package versions
 - Export readiness
-- Search/filter by tags
+- Search/filter by tags is deferred
 
-Screen 2: Capture
+Current screen: Capture
 
-- Create or choose capture signal
-- Import dry input WAV
-- Import wet target WAV
+- Import dry input WAV with native file picker
+- Import processed target WAV with native file picker
 - Show sample rate, duration, channel count, peak, RMS, clipping, DC offset
 - Show warnings before the user trains
+- Optional resampling and stereo/multichannel policy controls
+- Gain/headroom and long-capture guidance
 
-Screen 3: Align
+Current screen: Align
 
 - Display latency estimate
-- Show waveform overlay near impulse or active transient
-- Manual sample nudge
-- Trim controls
+- Show waveform-style alignment overlay
+- Manual sample nudge with saved apply action
+- Trim controls are deferred
 - Confidence indicator
-- Re-run alignment
+- Re-run alignment through saved manual adjustment
 
-Screen 4: Train
+Current screen: Train
 
 - Preset picker: Dense, GRU, Light LSTM, Standard LSTM, Conv1D, Conv1D
   BatchNorm/PReLU, Hybrid
 - Hardware indicator: CUDA, MPS, or CPU
 - Runtime warning for heavy presets
-- Progress chart
+- Validation ESR curve
 - Current best metric
 - Cancel/resume
-- "Train again with same settings"
-- "Train three seeds and keep best" after basic training is stable
+- Early stopping controls
+- Preset recommendation from target type, backend, capture duration, alignment,
+  and gain warnings
+- "Train again with same settings" and "train three seeds" are deferred
 
-Screen 5: Evaluate
+Current screen: Evaluate
 
 - A/B/C playback: target, prediction, residual
-- Waveform overlay
-- Spectrum or residual plot
+- Mini peak waveforms for preview artifacts
+- Spectrum or residual plot is deferred
 - Metrics table
+- Training report display with good/usable/needs-work language
 - Notes field
-- Mark run as favorite
+- Mark run as favorite is deferred
 
-Screen 6: Export
+Current screen: Export
 
 - RTNeural JSON export status
 - Python parity status
 - Native RTNeural validation status
 - Benchmark table
-- Optional `.aidax`-style package after license/format review
+- `.aidax` compatibility marked deferred after license/format review
 - Open export folder
 
-Screen 7: Library
+Deferred screen: Library
 
 - Local model collection
 - Tags
@@ -934,15 +1031,15 @@ Acceptance criteria:
 
 ### Step 7.6 Implement Audio Preview
 
-For v1, use offline previews. Live processing can wait.
+Implemented as offline previews. Live processing remains deferred.
 
-Implementation tasks:
+Current behavior:
 
 1. Render preview WAV files during `evaluate`.
-2. Load peaks or downsampled waveforms for display.
+2. Load mini peaks for display.
 3. Support target, prediction, and residual playback.
 4. Keep playback latency non-critical.
-5. Cache waveform data in the project folder.
+5. Keep playback and preview metadata tied to the run artifacts.
 
 Acceptance criteria:
 
@@ -952,13 +1049,13 @@ Acceptance criteria:
 
 ### Step 7.7 Implement Export Gate
 
-Before an export is marked ready, the app must verify:
+Before an export is marked ready, the app verifies:
 
 1. Audio preparation report has no blocking errors.
 2. Training run completed.
 3. Best checkpoint exists.
 4. RTNeural JSON was generated.
-5. Python parity passed or was intentionally waived for a documented reason.
+5. Python parity passed.
 6. Native RTNeural validator passed.
 7. Benchmark passed the selected CPU tier.
 8. Package metadata includes sample rate, latency, architecture, metrics, and
@@ -1045,58 +1142,106 @@ Exit criteria:
 Testing must focus on parity, audio edge cases, and packaging. A beautiful UI is
 not useful if exported weights are subtly wrong.
 
+Current local verification commands:
+
+```bash
+# Python unit, audio, registry, golden fixture, and parity tests
+(cd trainer && UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m unittest discover -s tests -v)
+
+# Golden fixture freshness
+(cd trainer && UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
+  ../scripts/generate_golden_rtneural_fixtures.py --check)
+
+# Native validator build and smoke
+cmake -S native/rtneural-validator -B native/rtneural-validator/build
+cmake --build native/rtneural-validator/build
+python3 scripts/smoke_rtneural_validator.py
+
+# Supported Keras layer export matrix through native RTNeural
+(cd trainer && UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
+  ../scripts/smoke_rtneural_keras_layers.py)
+
+# Frontend and Rust
+pnpm --filter rtneural-trainer-app build
+(cd app/src-tauri && cargo test)
+
+# Tauri workflow and debug packaged-app smoke
+pnpm --filter rtneural-trainer-app smoke:tauri-workflow
+pnpm --filter rtneural-trainer-app smoke:packaged-app
+```
+
 ### Python Tests
 
-Add tests for:
+Current coverage includes:
 
 1. Audio decode and validation.
 2. Sample-rate conversion metadata.
 3. Mono/stereo conversion.
-4. Clipping and DC offset detection.
+4. Manual latency adjustment metadata.
 5. Latency estimation.
-6. Dataset split reproducibility.
+6. Long-capture sampled window selection.
 7. Preset construction.
-8. Training checkpoint save/resume.
-9. Metrics.
-10. Export JSON schema.
-11. Tensor layout conversion.
-12. Python parity reports.
+8. Metrics.
+9. Golden RTNeural JSON fixture freshness.
+10. Python parity for every exported preset.
+11. Native RTNeural validation for every golden fixture.
+12. Support matrix registry checks.
+
+Still worth adding:
+
+- Training checkpoint save/resume unit tests at the Python layer.
+- More real-world capture edge cases.
+- Stronger schema validation around manifests and reports.
 
 ### Native Tests
 
-Add tests for:
+Current native coverage is mostly smoke/golden driven:
 
 1. Valid RTNeural JSON loads.
-2. Invalid JSON fails clearly.
-3. Known fixture output matches tolerance.
-4. Benchmark output schema is stable.
-5. NaN/Inf detection fails validation.
+2. Known fixture output matches tolerance.
+3. Benchmark output schema is stable enough for desktop display.
+
+Still worth adding:
+
+- Invalid JSON failure fixtures.
+- NaN/Inf output failure fixtures.
+- More benchmark threshold fixtures by preset tier.
 
 ### Desktop Tests
 
-Add tests for:
+Current desktop coverage includes Rust unit tests and smoke scripts for:
 
 1. SQLite migrations.
 2. Project folder creation.
 3. Manifest generation.
 4. Job event parsing.
 5. Cancellation status transitions.
-6. Export gate rules.
-7. UI screen smoke tests.
+6. Runtime settings persistence.
+7. Missing artifact audits and restart recovery.
+8. Tauri workflow smoke.
+9. Debug packaged-app smoke.
+
+Still worth adding:
+
+- UI screen smoke with a real Tauri window.
+- Packaged-app smoke that runs a tiny end-to-end training/export workflow.
+- Export gate edge-case tests around failed native validation and failed
+  benchmarks.
 
 ### Golden Fixture Tests
 
-Keep tiny fixtures in `fixtures/`:
+Golden fixtures are generated and checked by script rather than hand-maintained
+by editing individual JSON files:
 
 ```text
-fixtures/
-  audio/
-    dry-48k-mono-short.wav
-    wet-48k-mono-short.wav
-  models/
-    lstm-light-checkpoint.pt
-    lstm-light.rtneural.json
-    lstm-light-reference-output.wav
+fixtures/rtneural-json/golden/
+  dense_only.rtneural.json
+  gru_light.rtneural.json
+  lstm_light.rtneural.json
+  lstm_standard.rtneural.json
+  conv1d_light.rtneural.json
+  conv1d_bn_prelu.rtneural.json
+  conv_gru_hybrid.rtneural.json
 ```
 
 Acceptance criteria:
@@ -1120,9 +1265,9 @@ Recommended v1 approach:
 5. Keep an advanced setting for an external Python environment if packaging size
    becomes unacceptable.
 
-Packaging tasks:
+Current packaging tasks:
 
-1. Build Python sidecar with PyInstaller or equivalent.
+1. Build Python sidecar with PyInstaller.
 2. Build native validator with CMake release settings.
 3. Copy sidecars into Tauri binary folder.
 4. Name sidecars as `rttrainer-<target-triple>` and
@@ -1148,31 +1293,52 @@ Tauri release bundle with `--ci --no-sign`, validates the copied sidecars beside
 the release binary, and writes
 `app/src-tauri/target/release/release-artifacts-manifest.json`.
 
-Acceptance criteria:
+Current release smoke gate:
 
-- Packaged app can inspect hardware, prepare audio, train a tiny model, validate,
-  and export.
 - Packaged sidecars report their versions.
-- The app can surface a clear error when a sidecar is missing or incompatible.
+- Packaged sidecars can inspect hardware.
+- Native validator CLI is present and executable.
+- Tauri release bundles can be produced with `--ci --no-sign`.
+- Copied sidecars are found beside the release binary.
 - Release bundles produce uploadable artifacts and a manifest on every target OS.
+
+Remaining release acceptance:
+
+- Packaged app can prepare audio, train a tiny model, validate, and export from
+  inside the installed bundle.
+- The app can surface a clear error when a sidecar is missing or incompatible.
+- macOS and Windows signing/notarization policy is implemented.
 
 ## 11. CI And Release Gates
 
-Set up CI before Phase 2 becomes large.
+CI is split into a fast desktop workflow and a slower release-packaging
+workflow.
 
-Suggested jobs:
+Current `.github/workflows/ci.yml` jobs:
 
-1. Python lint and unit tests.
-2. Python tiny training smoke test.
-3. RTNeural JSON export test.
-4. Native CMake build.
-5. Native validator fixture test.
-6. Rust unit tests.
-7. TypeScript typecheck.
-8. Frontend test/build.
-9. Tauri development build smoke test.
-10. Packaged app smoke test on release branches.
-11. Cross-platform release package smoke and artifact upload.
+1. Install Tauri Linux dependencies.
+2. Setup pnpm 11, Node 22, uv, Python 3.12, and Rust stable.
+3. Sync trainer dependencies with the TensorFlow extra.
+4. Build the native RTNeural validator.
+5. Smoke-test the native validator.
+6. Run Python tests.
+7. Check golden RTNeural JSON fixtures.
+8. Build the frontend.
+9. Stage Tauri development sidecars.
+10. Run Rust tests.
+11. Run Tauri workflow smoke.
+12. Run debug packaged-app smoke.
+
+Current `.github/workflows/release-packaging.yml` jobs:
+
+1. Build real PyInstaller `rttrainer` and CMake `rtneural-validator` sidecars.
+2. Smoke-test staged release sidecars with `rttrainer --version`,
+   `rttrainer inspect-device --json`, and native validator CLI checks.
+3. Run Tauri release bundle smoke with `tauri build --ci --no-sign`.
+4. Validate copied packaged sidecars beside the release binary.
+5. Collect `release-artifacts-manifest.json`.
+6. Upload bundle outputs and staged sidecars for Linux deb, macOS app+dmg, and
+   Windows NSIS matrix jobs.
 
 Release gate checklist:
 
@@ -1185,6 +1351,14 @@ Release gate checklist:
 - Tauri release bundles are produced on Linux, macOS, and Windows.
 - Release artifacts include the platform bundle, sidecars, and artifact manifest.
 - Project migration test passes from the previous app version.
+
+Known CI/release gaps:
+
+- Release bundles are unsigned; signing and notarization require credentials and
+  product policy decisions.
+- Packaged-app smoke currently proves bundle shape and sidecar execution, not a
+  full tiny train/export workflow inside the installed app.
+- UI smoke tests with real Tauri windows are still missing.
 
 ## 12. Known-Good Preset Matrix
 
@@ -1207,10 +1381,12 @@ Do not expose a preset in the UI unless its row is green for the target release.
 
 ## 13. Data And Metadata Schemas
 
-Define schemas early. The UI, Python sidecar, Rust orchestrator, and reports all
-need a shared contract.
+The UI, Python sidecar, Rust orchestrator, and reports all need a shared
+contract. Today those schemas are encoded in TypeScript DTOs, Rust structs and
+SQLite migrations, Python manifest/report writers, and the golden fixture tests.
+Dedicated JSON Schema files are deferred until the contracts stabilize further.
 
-Recommended schema files:
+Deferred schema file layout:
 
 ```text
 schemas/
@@ -1234,38 +1410,52 @@ Schema rules:
 5. Include app, trainer, validator, TensorFlow, PyTorch, and RTNeural versions.
 6. Include hardware and device selection metadata for training runs.
 
-Acceptance criteria:
+Current acceptance:
 
-- Rust and Python both validate manifests.
-- Breaking schema changes require a migration plan.
+- Rust and Python both write and read versioned manifests/reports.
 - Reports are readable without opening the SQLite database.
+- SQLite migrations are covered by Rust tests.
+
+Remaining work:
+
+- Add dedicated JSON Schema files for external integrations.
+- Add stricter manifest validation errors at the Python boundary.
+- Require explicit migration notes for breaking schema changes.
 
 ## 14. Implementation Order
 
-Use this order to avoid UI-first churn.
+The original order below is now mostly complete:
 
-1. Create repo skeleton and dependency pins.
-2. Build Python synthetic training spike.
-3. Add LSTM light preset.
-4. Export LSTM light to RTNeural JSON.
-5. Build native RTNeural validator.
-6. Make native parity pass for the synthetic fixture.
-7. Add GRU light or dense memoryless parity coverage.
-8. Build real WAV preparation command.
-9. Add latency estimation and preparation reports.
-10. Train from paired WAVs through CLI.
-11. Export and validate a real paired-WAV run.
-12. Add metrics and preview WAV rendering.
-13. Add SQLite schema and Rust project store.
-14. Scaffold Tauri/React UI.
-15. Wire sidecar execution and event streaming.
-16. Build Projects, Capture, Align, and Train screens.
-17. Build Evaluate and Export screens.
-18. Package sidecars.
-19. Run packaged smoke tests.
-20. Add optional runtime integration only after v1 gates pass, starting with an
-    RTNeural-example-style JUCE player if immediate plugin auditioning is the
-    highest-value path.
+1. Repo skeleton and dependency pins: complete.
+2. Python trainer/export package: complete.
+3. LSTM, GRU, Dense, Conv1D, BatchNorm/PReLU, and hybrid presets: complete for
+   the supported Keras path.
+4. RTNeural JSON export and Python parity: complete for every exposed preset.
+5. Native RTNeural validator/benchmark sidecar: complete.
+6. WAV preparation, resampling, stereo policy, latency estimation, manual
+   alignment override, and preparation reports: complete.
+7. Paired-WAV training with metrics, checkpoints, preview WAVs, validation
+   history, early stopping, and quality language: complete for local v1.
+8. SQLite project/job store, recovery, cancellation, resume, and event
+   persistence: complete.
+9. Tauri/React UI for Projects, Capture, Align, Train, Evaluate, Export, notes,
+   runtime inspection, progress, and preview playback: complete.
+10. Development and production sidecar packaging plus debug/release smoke
+    scripts: complete.
+
+Current next implementation order:
+
+1. Run a real capture project through the full app and tune capture/gain/preset
+   recommendation thresholds.
+2. Add UI smoke tests with real Tauri windows.
+3. Add packaged-app smoke that exercises a tiny train/export workflow inside the
+   packaged app, not only bundle shape and sidecar execution.
+4. Decide macOS signing/notarization, Windows signing, artifact retention, and
+   release-publishing policy.
+5. Add visual waveform/spectrum inspection for target, prediction, and residual.
+6. Add onboarding/sample project, accessibility pass, and error copy polish.
+7. Revisit `.aidax`, generated JUCE/player, and compile-time RTNeural only after
+   release distribution is boring.
 
 ## 15. First End-To-End Demo Target
 
@@ -1296,13 +1486,20 @@ Output:
 Demo script:
 
 ```bash
-rttrainer prepare --manifest projects/demo/prepare-manifest.json
-rttrainer train --manifest projects/demo/runs/run_001/train-manifest.json
-rttrainer evaluate --manifest projects/demo/runs/run_001/evaluate-manifest.json
-rttrainer export --manifest projects/demo/runs/run_001/export-manifest.json
-rtneural-validator validate \
+cd trainer
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m rttrainer prepare \
+  --manifest ../projects/demo/prepare-manifest.json
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m rttrainer train \
+  --manifest ../projects/demo/runs/run_001/train-manifest.json
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m rttrainer evaluate \
+  --manifest ../projects/demo/runs/run_001/evaluate-manifest.json
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m rttrainer export \
+  --manifest ../projects/demo/runs/run_001/export-manifest.json
+
+cd ..
+native/rtneural-validator/build/rtneural-validator validate \
   --model projects/demo/exports/export_001/model.rtneural.json \
-  --input projects/demo/audio/prepared/test-input.wav \
+  --input projects/demo/runs/run_001/test-input.wav \
   --reference projects/demo/runs/run_001/previews/prediction.wav \
   --report projects/demo/exports/export_001/validation-report.json
 ```
@@ -1330,32 +1527,47 @@ Success means:
 
 ## 17. Definition Of Done For V1
 
-V1 is done when all of the following are true:
+Local desktop V1 is effectively done when all of the following are true:
 
-1. A user can create a project from paired WAV files.
-2. The app validates audio and shows actionable warnings.
-3. The app estimates and stores latency.
-4. The user can train at least one Keras LSTM preset locally.
-5. Training progress, logs, checkpoints, and metrics persist.
-6. The app renders target, prediction, and residual preview audio.
-7. The app exports RTNeural JSON.
-8. Python/export parity passes.
-9. Native RTNeural validation passes.
-10. Benchmark results are shown before export is marked ready.
-11. The package contains metadata, reports, previews, and model JSON.
-12. The packaged desktop app can complete the workflow without a terminal.
+| Requirement | Status |
+| --- | --- |
+| A user can create a project from paired WAV files. | Implemented |
+| The app validates audio and shows actionable warnings. | Implemented |
+| The app estimates, stores, and manually overrides latency. | Implemented |
+| The user can train curated Keras presets locally. | Implemented |
+| Training progress, logs, checkpoints, metrics, validation curves, and quality language persist. | Implemented |
+| The app renders and plays target, prediction, and residual preview audio. | Implemented |
+| The app exports RTNeural JSON. | Implemented |
+| Python/export parity passes. | Implemented in tests and golden fixtures |
+| Native RTNeural validation passes. | Implemented in validator and CI smoke |
+| Benchmark results are shown before export is marked ready. | Implemented |
+| The package contains metadata, reports, previews, and model JSON. | Implemented |
+| The debug packaged desktop app can complete sidecar discovery and launch checks without a terminal. | Implemented |
+| Signed/notarized release packages are ready for end users. | Deferred |
+| Packaged-app smoke runs a tiny full train/export workflow inside the installed bundle. | Deferred |
+| Real capture thresholds are tuned against representative material. | Deferred |
 
 ## 18. Documentation To Keep Updated
 
-Maintain these documents as the build progresses:
+Current documents:
 
-1. `docs/Research-RTNeural-Training-Desktop-App.md`
-2. `docs/Implementation-Guide-RTNeural-Training-Desktop-App.md`
-3. `docs/RTNeural-Export-Schema.md`
-4. `docs/Preset-Compatibility-Matrix.md`
-5. `docs/Audio-Capture-Guidelines.md`
-6. `docs/Packaging-And-Sidecars.md`
-7. `docs/Troubleshooting.md`
+1. `README.md`
+2. `docs/Research-RTNeural-Training-Desktop-App.md`
+3. `docs/Implementation-Guide-RTNeural-Training-Desktop-App.md`
 
-The implementation guide should remain the build map. The export schema and
-preset matrix should become stricter engineering references once code exists.
+The README should stay task-oriented for users and developers. The research note
+should preserve source findings and RTNeural reference context. This
+implementation guide should remain the engineering map: what is built, what is
+deferred, and which smoke/CI gates define confidence today.
+
+Deferred documents worth splitting out when the project hardens:
+
+1. `docs/RTNeural-Export-Schema.md`
+2. `docs/Preset-Compatibility-Matrix.md`
+3. `docs/Audio-Capture-Guidelines.md`
+4. `docs/Packaging-And-Sidecars.md`
+5. `docs/Troubleshooting.md`
+
+Until those exist, keep the authoritative preset matrix in code and generated
+script output, keep export/package contract details in this guide, and mirror
+operator-facing setup in `README.md`.
