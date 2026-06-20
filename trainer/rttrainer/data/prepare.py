@@ -30,6 +30,7 @@ def prepare_audio(
     target_sample_rate: int | None = None,
     resample: bool = False,
     channel_policy: str = "mixdown",
+    manual_latency_adjustment_samples: int = 0,
 ) -> PreparedAudio:
     output_dir = mkdir(output_dir)
     normalized_channel_policy = normalize_channel_policy(channel_policy)
@@ -69,15 +70,19 @@ def prepare_audio(
             resample_enabled=resample,
         )
     )
+    latency_samples, confidence = estimate_latency(input_audio.samples, target_audio.samples)
+    effective_latency_samples = latency_samples + int(manual_latency_adjustment_samples)
+    warning_details.extend(capture_profile_details(input_audio, target_audio))
+    gain = gain_analysis(input_audio, target_audio)
+    warning_details.extend(gain["warnings"])
     warnings = [
         str(item["message"]) for item in warning_details if item.get("severity") == "warning"
     ]
 
-    latency_samples, confidence = estimate_latency(input_audio.samples, target_audio.samples)
     aligned_input, aligned_target = align_pair(
         input_audio.samples,
         target_audio.samples,
-        latency_samples,
+        effective_latency_samples,
     )
 
     prepared_input_path = output_dir / "input.wav"
@@ -98,13 +103,21 @@ def prepare_audio(
             "channel_policy": normalized_channel_policy,
             "resampled": resample,
         },
+        "capture_profile": capture_profile(input_audio, target_audio),
+        "gain": {
+            key: value for key, value in gain.items() if key != "warnings"
+        },
         "options": {
             "target_sample_rate": preferred_sample_rate,
             "resample": resample,
             "channel_policy": normalized_channel_policy,
+            "manual_latency_adjustment_samples": int(manual_latency_adjustment_samples),
         },
         "latency": {
-            "estimated_samples": latency_samples,
+            "estimated_samples": effective_latency_samples,
+            "auto_estimated_samples": latency_samples,
+            "manual_adjustment_samples": int(manual_latency_adjustment_samples),
+            "effective_samples": effective_latency_samples,
             "confidence": confidence,
             "method": "cross_correlation",
         },
@@ -115,6 +128,103 @@ def prepare_audio(
     report_path = output_dir / "preparation-report.json"
     write_json(report_path, report)
     return PreparedAudio(prepared_input_path, prepared_target_path, report_path, report)
+
+
+def capture_profile(input_audio: AudioBuffer, target_audio: AudioBuffer) -> dict[str, float | int | str]:
+    duration = min(input_audio.duration_seconds, target_audio.duration_seconds)
+    recommended_max_windows = 512
+    if duration >= 120:
+        recommended_max_windows = 2048
+    elif duration >= 45:
+        recommended_max_windows = 1024
+    return {
+        "duration_seconds": duration,
+        "recommended_max_windows": recommended_max_windows,
+        "handling": "sampled_windows" if duration >= 45 else "standard_windows",
+    }
+
+
+def capture_profile_details(
+    input_audio: AudioBuffer,
+    target_audio: AudioBuffer,
+) -> list[dict[str, str]]:
+    duration = min(input_audio.duration_seconds, target_audio.duration_seconds)
+    if duration < 45:
+        return []
+    return [
+        warning_detail(
+            "long_capture",
+            "info",
+            "Long capture detected.",
+            f"The prepared pair is {duration:.1f} seconds long.",
+            "Training will sample windows across the file; raise the window budget for more coverage.",
+        )
+    ]
+
+
+def gain_analysis(input_audio: AudioBuffer, target_audio: AudioBuffer) -> dict:
+    input_report = audio_report(input_audio)
+    target_report = audio_report(target_audio)
+    input_peak = float(input_report["peak_dbfs"])
+    target_peak = float(target_report["peak_dbfs"])
+    input_rms = float(input_report["rms_dbfs"])
+    target_rms = float(target_report["rms_dbfs"])
+    rms_delta = target_rms - input_rms
+    warnings: list[dict[str, str]] = []
+
+    if input_peak < -24.0 or target_peak < -24.0:
+        warnings.append(
+            warning_detail(
+                "capture_level_low",
+                "warning",
+                "Capture level is very low.",
+                f"Dry peak is {input_peak:.1f} dBFS; target peak is {target_peak:.1f} dBFS.",
+                "Recapture closer to -12 to -6 dBFS peak when possible.",
+            )
+        )
+    if max(input_peak, target_peak) > -1.0:
+        warnings.append(
+            warning_detail(
+                "capture_headroom_low",
+                "warning",
+                "Capture has less than 1 dB of peak headroom.",
+                f"Dry peak is {input_peak:.1f} dBFS; target peak is {target_peak:.1f} dBFS.",
+                "Leave a little headroom so clipped transients do not dominate training.",
+            )
+        )
+    if abs(rms_delta) > 12.0:
+        louder = "processed target" if rms_delta > 0 else "dry input"
+        warnings.append(
+            warning_detail(
+                "rms_mismatch",
+                "warning",
+                "Dry and processed RMS levels are far apart.",
+                f"The {louder} is about {abs(rms_delta):.1f} dB louder on average.",
+                "Check capture gain staging; large level offsets can look like model error.",
+            )
+        )
+
+    if warnings:
+        verdict = "fix_gain_before_training"
+        guidance = "Recapture or trim/gain-stage before spending a long training run."
+    elif -18.0 <= input_rms <= -6.0 and -18.0 <= target_rms <= -6.0:
+        verdict = "healthy"
+        guidance = "Levels are in a good range for training."
+    else:
+        verdict = "usable"
+        guidance = "Levels are usable; inspect the preview and residual after training."
+
+    return {
+        "input_peak_dbfs": input_peak,
+        "target_peak_dbfs": target_peak,
+        "input_rms_dbfs": input_rms,
+        "target_rms_dbfs": target_rms,
+        "rms_delta_db": rms_delta,
+        "headroom_db": -max(input_peak, target_peak),
+        "verdict": verdict,
+        "guidance": guidance,
+        "warnings": warnings,
+    }
 
 
 def validate_audio(

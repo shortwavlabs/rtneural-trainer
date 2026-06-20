@@ -119,10 +119,22 @@ struct AudioReport {
     input: AudioFileReport,
     target: AudioFileReport,
     latency_samples: i32,
+    #[serde(default)]
+    latency_auto_samples: Option<i32>,
+    #[serde(default)]
+    manual_latency_adjustment_samples: i32,
     latency_confidence: f64,
     warnings: Vec<String>,
     #[serde(default)]
     warning_details: Vec<AudioWarning>,
+    #[serde(default)]
+    prepared: Option<serde_json::Value>,
+    #[serde(default)]
+    capture_profile: Option<serde_json::Value>,
+    #[serde(default)]
+    gain: Option<serde_json::Value>,
+    #[serde(default)]
+    options: Option<serde_json::Value>,
     status: AudioStatus,
 }
 
@@ -213,9 +225,23 @@ struct UpdateAudioRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateAlignmentRequest {
+    project_id: String,
+    manual_latency_adjustment_samples: i32,
+}
+
+#[derive(Deserialize)]
 struct StartTrainingRequest {
     project_id: String,
     preset: String,
+    #[serde(default = "default_training_epochs")]
+    epochs: u32,
+    #[serde(default = "default_early_stopping_patience")]
+    early_stopping_patience: u32,
+    #[serde(default = "default_early_stopping_min_delta")]
+    early_stopping_min_delta: f64,
+    #[serde(default = "default_training_max_windows")]
+    max_windows: u32,
 }
 
 #[derive(Deserialize)]
@@ -353,6 +379,14 @@ struct FinalExportPackageInput<'a> {
 struct PrepareReport {
     input: AudioFileReport,
     target: AudioFileReport,
+    #[serde(default)]
+    prepared: Option<serde_json::Value>,
+    #[serde(default)]
+    capture_profile: Option<serde_json::Value>,
+    #[serde(default)]
+    gain: Option<serde_json::Value>,
+    #[serde(default)]
+    options: Option<serde_json::Value>,
     latency: LatencyReport,
     warnings: Vec<String>,
     #[serde(default)]
@@ -363,6 +397,12 @@ struct PrepareReport {
 #[derive(Deserialize)]
 struct LatencyReport {
     estimated_samples: i32,
+    #[serde(default)]
+    auto_estimated_samples: Option<i32>,
+    #[serde(default)]
+    manual_adjustment_samples: i32,
+    #[serde(default)]
+    effective_samples: Option<i32>,
     confidence: f64,
 }
 
@@ -577,7 +617,8 @@ fn update_project_audio(
             "output_dir": prepared_dir,
             "target_sample_rate": target_sample_rate,
             "resample": payload.resample,
-            "channel_policy": channel_policy
+            "channel_policy": channel_policy,
+            "manual_latency_adjustment_samples": 0
         }),
     )?;
     let job_id = create_job(&state, "prepare", Some(&payload.project_id), None, None)?;
@@ -606,10 +647,133 @@ fn update_project_audio(
     let report = AudioReport {
         input: prepare_report.input,
         target: prepare_report.target,
-        latency_samples: prepare_report.latency.estimated_samples,
+        latency_samples: prepare_report
+            .latency
+            .effective_samples
+            .unwrap_or(prepare_report.latency.estimated_samples),
+        latency_auto_samples: prepare_report.latency.auto_estimated_samples,
+        manual_latency_adjustment_samples: prepare_report.latency.manual_adjustment_samples,
         latency_confidence: prepare_report.latency.confidence,
         warnings: prepare_report.warnings,
         warning_details: prepare_report.warning_details,
+        prepared: prepare_report.prepared,
+        capture_profile: prepare_report.capture_profile,
+        gain: prepare_report.gain,
+        options: prepare_report.options,
+        status: prepare_report.status,
+    };
+
+    let project_status = if matches!(report.status, AudioStatus::Ready) {
+        ProjectStatus::Ready
+    } else {
+        ProjectStatus::Draft
+    };
+    let updated_at = now();
+    let db = state.db.lock().map_err(lock_error)?;
+    upsert_audio_report(&db, &payload.project_id, &report)?;
+    update_project_status(&db, &payload.project_id, &project_status, &updated_at)?;
+    load_project_detail(&db, &payload.project_id)
+}
+
+#[tauri::command]
+fn update_project_alignment(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    payload: UpdateAlignmentRequest,
+) -> Result<ProjectDetail, String> {
+    let manual_adjustment = payload.manual_latency_adjustment_samples.clamp(-48_000, 48_000);
+    let (project_dir, input_path, target_path, target_sample_rate, resample, channel_policy) = {
+        let db = state.db.lock().map_err(lock_error)?;
+        ensure_no_active_project_job(&db, &payload.project_id)?;
+        let project = load_project_detail(&db, &payload.project_id)?;
+        let audio = project
+            .audio
+            .ok_or_else(|| "Prepare audio before applying alignment.".to_string())?;
+        let options = audio.options.clone().unwrap_or_else(|| serde_json::json!({}));
+        let target_sample_rate = options
+            .get("target_sample_rate")
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(audio.input.sample_rate);
+        let resample = options
+            .get("resample")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let channel_policy = options
+            .get("channel_policy")
+            .and_then(|value| value.as_str())
+            .unwrap_or("mixdown")
+            .to_string();
+        (
+            PathBuf::from(project.project_dir),
+            audio.input.path,
+            audio.target.path,
+            target_sample_rate,
+            resample,
+            channel_policy,
+        )
+    };
+
+    let input_path = validate_capture_wav_path(&input_path, "Dry input")?;
+    let target_path = validate_capture_wav_path(&target_path, "Processed target")?;
+    ensure_distinct_capture_paths(&input_path, &target_path)?;
+    let target_sample_rate = normalize_capture_sample_rate(target_sample_rate)?;
+    let channel_policy = normalize_channel_policy_name(&channel_policy)?;
+
+    let prepared_dir = project_dir.join("audio/prepared");
+    fs::create_dir_all(&prepared_dir).map_err(to_error)?;
+    let manifest_path = project_dir.join("audio/prepare-manifest.json");
+    write_json(
+        &manifest_path,
+        &serde_json::json!({
+            "input_path": input_path,
+            "target_path": target_path,
+            "output_dir": prepared_dir,
+            "target_sample_rate": target_sample_rate,
+            "resample": resample,
+            "channel_policy": channel_policy,
+            "manual_latency_adjustment_samples": manual_adjustment
+        }),
+    )?;
+
+    let job_id = create_job(&state, "prepare", Some(&payload.project_id), None, None)?;
+    let prepare_result = run_rttrainer(
+        &app,
+        &state,
+        "prepare",
+        &manifest_path,
+        SidecarContext {
+            job_id: job_id.clone(),
+            operation: "prepare".to_string(),
+            project_id: Some(payload.project_id.clone()),
+            run_id: None,
+            export_id: None,
+        },
+    );
+    if let Err(error) = prepare_result {
+        mark_job_failed(&state, &job_id, &error)?;
+        return Err(error);
+    }
+    mark_job_completed(&state, &job_id)?;
+
+    let prepare_report_path = prepared_dir.join("preparation-report.json");
+    let prepare_report: PrepareReport = read_json(&prepare_report_path)?;
+    let report = AudioReport {
+        input: prepare_report.input,
+        target: prepare_report.target,
+        latency_samples: prepare_report
+            .latency
+            .effective_samples
+            .unwrap_or(prepare_report.latency.estimated_samples),
+        latency_auto_samples: prepare_report.latency.auto_estimated_samples,
+        manual_latency_adjustment_samples: prepare_report.latency.manual_adjustment_samples,
+        latency_confidence: prepare_report.latency.confidence,
+        warnings: prepare_report.warnings,
+        warning_details: prepare_report.warning_details,
+        prepared: prepare_report.prepared,
+        capture_profile: prepare_report.capture_profile,
+        gain: prepare_report.gain,
+        options: prepare_report.options,
         status: prepare_report.status,
     };
 
@@ -632,6 +796,12 @@ fn start_training(
     payload: StartTrainingRequest,
 ) -> Result<ProjectDetail, String> {
     let run_id = format!("run_{}", Uuid::new_v4().simple());
+    let epochs = normalize_training_epochs(payload.epochs);
+    let early_stopping_patience =
+        normalize_early_stopping_patience(payload.early_stopping_patience);
+    let early_stopping_min_delta =
+        normalize_early_stopping_min_delta(payload.early_stopping_min_delta);
+    let max_windows = normalize_training_max_windows(payload.max_windows);
     let (project_dir, selected_backend) = {
         let db = state.db.lock().map_err(lock_error)?;
         let project = load_project_detail(&db, &payload.project_id)?;
@@ -662,11 +832,13 @@ fn start_training(
             "prepared_dir": project_dir.join("audio/prepared"),
             "preset": &payload.preset,
             "backend": selected_backend,
-            "epochs": 20,
+            "epochs": epochs,
             "batch_size": 16,
             "learning_rate": 0.001,
             "sequence_length": 1024,
-            "max_windows": 512,
+            "max_windows": max_windows,
+            "early_stopping_patience": early_stopping_patience,
+            "early_stopping_min_delta": early_stopping_min_delta,
             "seed": 1337
         }),
     )?;
@@ -1111,6 +1283,7 @@ pub fn run() {
             get_run_preview,
             create_project,
             update_project_audio,
+            update_project_alignment,
             start_training,
             cancel_training_run,
             resume_training_run,
@@ -1270,6 +1443,22 @@ fn default_channel_policy() -> String {
     "mixdown".to_string()
 }
 
+fn default_training_epochs() -> u32 {
+    20
+}
+
+fn default_early_stopping_patience() -> u32 {
+    5
+}
+
+fn default_early_stopping_min_delta() -> f64 {
+    0.0001
+}
+
+fn default_training_max_windows() -> u32 {
+    512
+}
+
 fn validate_capture_wav_path(value: &str, label: &str) -> Result<PathBuf, String> {
     let Some(trimmed) = non_empty_string(value) else {
         return Err(format!("{label} WAV path is required."));
@@ -1327,6 +1516,26 @@ fn normalize_channel_policy_name(value: &str) -> Result<&'static str, String> {
         "reject" | "reject_multichannel" | "mono_only" => Ok("reject"),
         _ => Err("Channel policy must be mixdown, first, or reject.".to_string()),
     }
+}
+
+fn normalize_training_epochs(value: u32) -> u32 {
+    value.clamp(1, 500)
+}
+
+fn normalize_early_stopping_patience(value: u32) -> u32 {
+    value.min(100)
+}
+
+fn normalize_early_stopping_min_delta(value: f64) -> f64 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        default_early_stopping_min_delta()
+    }
+}
+
+fn normalize_training_max_windows(value: u32) -> u32 {
+    value.clamp(32, 16_384)
 }
 
 fn configure_database(db: &mut Connection) -> Result<(), String> {
@@ -3335,9 +3544,15 @@ mod tests {
                 path: "target.wav".to_string(),
             },
             latency_samples: 0,
+            latency_auto_samples: Some(0),
+            manual_latency_adjustment_samples: 0,
             latency_confidence: 1.0,
             warnings: Vec::new(),
             warning_details: Vec::new(),
+            prepared: None,
+            capture_profile: None,
+            gain: None,
+            options: None,
             status: AudioStatus::Ready,
         };
         upsert_audio_report(&db, &project.id, &audio).expect("insert audio report");

@@ -26,6 +26,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./lib/api";
 import type {
   AppStatus,
+  AudioReport,
   AudioWarning,
   CaptureChannelPolicy,
   DeviceInspection,
@@ -38,6 +39,7 @@ import type {
   RunPreviewArtifact,
   SidecarProgressEvent,
   TargetKind,
+  TrainingMetrics,
   TrainingRun,
 } from "./types";
 
@@ -49,6 +51,35 @@ type CaptureAnalyzePayload = {
   targetSampleRate: number;
   resample: boolean;
   channelPolicy: CaptureChannelPolicy;
+};
+
+type TrainingOptions = {
+  preset: string;
+  epochs: number;
+  earlyStoppingPatience: number;
+  earlyStoppingMinDelta: number;
+  maxWindows: number;
+};
+
+type TrainingHistoryPoint = {
+  epoch: number;
+  trainLoss: number | null;
+  valEsr: number | null;
+  valRmse: number | null;
+  isBest: boolean;
+};
+
+type PresetRecommendation = {
+  presetId: string;
+  label: string;
+  confidence: "high" | "medium" | "low";
+  reasons: string[];
+};
+
+type QualityDecision = {
+  verdict: "good" | "usable" | "needs_work" | "unknown";
+  summary: string;
+  action: string;
 };
 
 const tabs: Array<{ id: TabId; label: string; icon: LucideIcon }> = [
@@ -340,20 +371,45 @@ export default function App() {
                 />
               ) : null}
 
-              {activeTab === "align" ? <AlignView project={project} /> : null}
+              {activeTab === "align" ? (
+                <AlignView
+                  project={project}
+                  busy={busy === "alignment"}
+                  onApply={async (manualLatencyAdjustmentSamples) => {
+                    setProgressEvents([]);
+                    setBusy("alignment");
+                    try {
+                      const nextProject = await api.updateAlignment({
+                        project_id: project.id,
+                        manual_latency_adjustment_samples: manualLatencyAdjustmentSamples,
+                      });
+                      await commitProject(nextProject, "align");
+                    } catch (caught) {
+                      setError(toMessage(caught));
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                />
+              ) : null}
 
               {activeTab === "train" ? (
                 <TrainView
                   project={project}
                   backend={runtimeSettings?.selected_backend ?? "keras"}
                   busy={busy === "train"}
-                  onTrain={async (preset) => {
+                  events={progressEvents}
+                  onTrain={async (options) => {
                     setProgressEvents([]);
                     setBusy("train");
                     try {
                       const nextProject = await api.startTraining({
                         project_id: project.id,
-                        preset,
+                        preset: options.preset,
+                        epochs: options.epochs,
+                        early_stopping_patience: options.earlyStoppingPatience,
+                        early_stopping_min_delta: options.earlyStoppingMinDelta,
+                        max_windows: options.maxWindows,
                       });
                       await commitProject(nextProject, "train");
                     } catch (caught) {
@@ -950,10 +1006,30 @@ function PathPickerField({
   );
 }
 
-function AlignView({ project }: { project: ProjectDetail }) {
-  const [nudge, setNudge] = useState(0);
-  const latency = project.audio?.latency_samples ?? 0;
+function AlignView({
+  project,
+  busy,
+  onApply,
+}: {
+  project: ProjectDetail;
+  busy: boolean;
+  onApply: (manualLatencyAdjustmentSamples: number) => Promise<void>;
+}) {
+  const [nudge, setNudge] = useState(project.audio?.manual_latency_adjustment_samples ?? 0);
+  const autoLatency =
+    project.audio?.latency_auto_samples ?? project.audio?.latency_samples ?? 0;
+  const effectiveLatency = autoLatency + nudge;
   const confidence = project.audio?.latency_confidence ?? 0;
+  const sampleRate =
+    getNumber(project.audio?.prepared ?? null, "sample_rate") ??
+    project.audio?.input.sample_rate ??
+    48_000;
+  const savedNudge = project.audio?.manual_latency_adjustment_samples ?? 0;
+  const hasUnsavedNudge = nudge !== savedNudge;
+
+  useEffect(() => {
+    setNudge(project.audio?.manual_latency_adjustment_samples ?? 0);
+  }, [project.audio?.manual_latency_adjustment_samples, project.id]);
 
   return (
     <div className="screen-grid">
@@ -963,15 +1039,17 @@ function AlignView({ project }: { project: ProjectDetail }) {
           title="Latency Alignment"
           detail="Inspect the detected offset before committing training time."
         />
-        <WaveformOverlay latency={latency + nudge} />
+        <WaveformOverlay latency={effectiveLatency} />
       </div>
       <div className="panel span-4">
         <div className="metric-stack">
-          <Metric label="Estimated latency" value={`${latency + nudge} samples`} />
+          <Metric label="Auto estimate" value={`${autoLatency} samples`} />
+          <Metric label="Manual adjustment" value={`${nudge} samples`} />
+          <Metric label="Training latency" value={`${effectiveLatency} samples`} />
           <Metric label="Confidence" value={`${Math.round(confidence * 100)}%`} />
           <Metric
             label="Milliseconds"
-            value={`${(((latency + nudge) / 48000) * 1000).toFixed(2)} ms`}
+            value={`${((effectiveLatency / sampleRate) * 1000).toFixed(2)} ms`}
           />
         </div>
         <label className="range-control">
@@ -985,6 +1063,23 @@ function AlignView({ project }: { project: ProjectDetail }) {
           />
           <span>{nudge} samples</span>
         </label>
+        <button
+          className="primary-button wide"
+          type="button"
+          disabled={busy || !hasUnsavedNudge}
+          onClick={() => void onApply(nudge)}
+        >
+          {busy ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}
+          Apply alignment
+        </button>
+        {project.audio?.manual_latency_adjustment_samples ? (
+          <div className="notice notice-info">
+            <CheckCircle2 size={18} />
+            <span>
+              Manual alignment is saved and will be used for training and export.
+            </span>
+          </div>
+        ) : null}
         {project.audio?.warning_details.length ? (
           <WarningList warnings={project.audio.warning_details} />
         ) : project.audio?.warnings.length ? (
@@ -1004,6 +1099,7 @@ function TrainView({
   project,
   backend,
   busy,
+  events,
   onTrain,
   onCancel,
   onResume,
@@ -1011,11 +1107,22 @@ function TrainView({
   project: ProjectDetail;
   backend: RuntimeBackend;
   busy: boolean;
-  onTrain: (preset: string) => Promise<void>;
+  events: SidecarProgressEvent[];
+  onTrain: (options: TrainingOptions) => Promise<void>;
   onCancel: (runId: string) => Promise<void>;
   onResume: (runId: string) => Promise<void>;
 }) {
-  const [preset, setPreset] = useState("lstm_standard");
+  const recommendation = useMemo(
+    () => recommendPreset(project, backend),
+    [backend, project.audio, project.target_kind],
+  );
+  const [preset, setPreset] = useState(recommendation.presetId);
+  const [epochs, setEpochs] = useState(40);
+  const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(6);
+  const [earlyStoppingMinDelta, setEarlyStoppingMinDelta] = useState(0.0001);
+  const [maxWindows, setMaxWindows] = useState(recommendedWindowBudget(project));
+  const [preview, setPreview] = useState<RunPreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
   const selectedPreset = presets.find((item) => item.id === preset) ?? presets[0];
   const selectedPresetSupported = selectedPreset.backends.includes(backend);
   const canTrain = project.audio?.status === "ready";
@@ -1025,11 +1132,51 @@ function TrainView({
   const resumableRun = [...project.runs]
     .reverse()
     .find((run) => run.status === "failed" || run.status === "interrupted");
+  const evidenceRun =
+    activeRun ??
+    [...project.runs]
+      .reverse()
+      .find((run) => run.metrics || ["failed", "interrupted"].includes(run.status)) ??
+    null;
+  const liveHistory = trainingHistoryFromEvents(events, evidenceRun?.id ?? null);
+  const reportHistory = historyFromReport(preview?.report ?? null);
+  const curveHistory = liveHistory.length ? liveHistory : reportHistory;
+  const reportAssessment = getNestedObject(preview?.report ?? null, ["quality_assessment"]);
+  const quality = qualityVerdict(evidenceRun?.metrics ?? null, reportAssessment);
 
   useEffect(() => {
-    if (selectedPresetSupported) return;
-    setPreset(presets.find((item) => item.backends.includes(backend))?.id ?? "lstm_standard");
-  }, [backend, selectedPresetSupported]);
+    if (selectedPresetSupported && preset === recommendation.presetId) return;
+    if (selectedPresetSupported && preset !== recommendation.presetId) return;
+    setPreset(recommendation.presetId);
+  }, [backend, preset, recommendation.presetId, selectedPresetSupported]);
+
+  useEffect(() => {
+    setMaxWindows(recommendedWindowBudget(project));
+  }, [project.audio?.capture_profile, project.id]);
+
+  useEffect(() => {
+    let mounted = true;
+    setPreview(null);
+    if (!evidenceRun || !["completed", "failed", "interrupted"].includes(evidenceRun.status)) {
+      setPreviewBusy(false);
+      return;
+    }
+    setPreviewBusy(true);
+    api
+      .getRunPreview({ project_id: project.id, run_id: evidenceRun.id })
+      .then((nextPreview) => {
+        if (mounted) setPreview(nextPreview);
+      })
+      .catch(() => {
+        if (mounted) setPreview(null);
+      })
+      .finally(() => {
+        if (mounted) setPreviewBusy(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [evidenceRun?.id, evidenceRun?.status, project.id]);
 
   return (
     <div className="screen-grid">
@@ -1039,6 +1186,7 @@ function TrainView({
           title="Model Preset"
           detail="Curated architectures keep RTNeural export predictable."
         />
+        <PresetRecommendation recommendation={recommendation} selectedPreset={selectedPreset} />
         <div className="preset-list">
           {presets.map((item) => {
             const supported = item.backends.includes(backend);
@@ -1060,11 +1208,72 @@ function TrainView({
             );
           })}
         </div>
+        <div className="training-controls">
+          <label>
+            Epochs
+            <input
+              type="number"
+              min={1}
+              max={500}
+              value={epochs}
+              onChange={(event) => setEpochs(clampNumber(event.target.valueAsNumber, 1, 500))}
+            />
+          </label>
+          <label>
+            Early-stop patience
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={earlyStoppingPatience}
+              onChange={(event) =>
+                setEarlyStoppingPatience(clampNumber(event.target.valueAsNumber, 0, 100))
+              }
+            />
+          </label>
+          <label>
+            Min ESR improvement
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.0001}
+              value={earlyStoppingMinDelta}
+              onChange={(event) =>
+                setEarlyStoppingMinDelta(
+                  clampFloat(event.target.valueAsNumber, 0, 1, 0.0001),
+                )
+              }
+            />
+          </label>
+          <label>
+            Window budget
+            <input
+              type="number"
+              min={32}
+              max={16384}
+              step={32}
+              value={maxWindows}
+              onChange={(event) =>
+                setMaxWindows(clampNumber(event.target.valueAsNumber, 32, 16384))
+              }
+            />
+          </label>
+        </div>
+        <CaptureTrainingGuidance project={project} />
         <button
           className="primary-button wide"
           type="button"
           disabled={!canTrain || !selectedPresetSupported || busy || Boolean(activeRun)}
-          onClick={() => void onTrain(preset)}
+          onClick={() =>
+            void onTrain({
+              preset,
+              epochs,
+              earlyStoppingPatience,
+              earlyStoppingMinDelta,
+              maxWindows,
+            })
+          }
         >
           {busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
           Train
@@ -1103,8 +1312,195 @@ function TrainView({
           title="Runs"
           detail="Each run keeps checkpoints, metrics, and preview artifacts."
         />
+        <TrainingEvidence
+          history={curveHistory}
+          quality={quality}
+          loading={previewBusy}
+          report={preview?.report ?? null}
+        />
         <RunTable runs={project.runs} />
       </div>
+    </div>
+  );
+}
+
+function PresetRecommendation({
+  recommendation,
+  selectedPreset,
+}: {
+  recommendation: PresetRecommendation;
+  selectedPreset: { id: string; label: string; detail: string };
+}) {
+  const isFollowing = recommendation.presetId === selectedPreset.id;
+  return (
+    <div className="recommendation-box">
+      <div className="recommendation-head">
+        <span className={`confidence ${recommendation.confidence}`}>
+          {recommendation.confidence}
+        </span>
+        <strong>{isFollowing ? "Recommended preset selected" : "Recommendation differs"}</strong>
+      </div>
+      <p>
+        {recommendation.label}: {recommendation.reasons.join(" ")}
+      </p>
+    </div>
+  );
+}
+
+function CaptureTrainingGuidance({ project }: { project: ProjectDetail }) {
+  const profile = project.audio?.capture_profile ?? null;
+  const gain = project.audio?.gain ?? null;
+  const duration = getNumber(profile, "duration_seconds");
+  const windowBudget = getNumber(profile, "recommended_max_windows");
+  const gainGuidance = getString(gain, "guidance");
+  const gainVerdict = getString(gain, "verdict");
+  const headroom = getNumber(gain, "headroom_db");
+  const rmsDelta = getNumber(gain, "rms_delta_db");
+
+  if (!project.audio) return null;
+
+  return (
+    <div className="training-guidance">
+      <div>
+        <span>Capture length</span>
+        <strong>{duration !== null ? formatSeconds(duration) : "unknown"}</strong>
+        <small>
+          {windowBudget !== null
+            ? `${windowBudget} windows recommended`
+            : "Use more windows for longer captures."}
+        </small>
+      </div>
+      <div>
+        <span>Gain staging</span>
+        <strong>{gainVerdict ? gainVerdict.replace(/_/g, " ") : "unknown"}</strong>
+        <small>{gainGuidance ?? "Check peak and RMS before long runs."}</small>
+      </div>
+      <div>
+        <span>Level delta</span>
+        <strong>{rmsDelta !== null ? `${rmsDelta.toFixed(1)} dB RMS` : "unknown"}</strong>
+        <small>{headroom !== null ? `${headroom.toFixed(1)} dB peak headroom` : ""}</small>
+      </div>
+    </div>
+  );
+}
+
+function TrainingEvidence({
+  history,
+  quality,
+  loading,
+  report,
+}: {
+  history: TrainingHistoryPoint[];
+  quality: QualityDecision;
+  loading: boolean;
+  report: Record<string, unknown> | null;
+}) {
+  const earlyStopping = getNestedObject(report, ["early_stopping"]);
+  const stopped = getBoolean(earlyStopping, "stopped");
+  const bestEpoch = getNumber(earlyStopping, "best_epoch");
+  const dataset = getNestedObject(report, ["dataset"]);
+  const selectedWindows = getNumber(dataset, "selected_windows");
+  const availableWindows = getNumber(dataset, "available_windows");
+
+  return (
+    <div className="training-evidence">
+      <QualityCallout decision={quality} />
+      <ValidationCurve history={history} loading={loading} />
+      <div className="evidence-grid">
+        <Metric
+          label="Early stopping"
+          value={
+            stopped
+              ? `Stopped at ${getNumber(earlyStopping, "epoch") ?? "?"}`
+              : bestEpoch !== null
+                ? `Best epoch ${bestEpoch}`
+                : "waiting"
+          }
+        />
+        <Metric
+          label="Window coverage"
+          value={
+            selectedWindows !== null && availableWindows !== null
+              ? `${selectedWindows}/${availableWindows}`
+              : "waiting"
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+function QualityCallout({ decision }: { decision: QualityDecision }) {
+  return (
+    <div className={`quality-callout ${decision.verdict}`}>
+      <strong>{decision.summary}</strong>
+      <span>{decision.action}</span>
+    </div>
+  );
+}
+
+function ValidationCurve({
+  history,
+  loading,
+}: {
+  history: TrainingHistoryPoint[];
+  loading: boolean;
+}) {
+  if (loading && history.length === 0) {
+    return (
+      <div className="curve-empty">
+        <LoaderCircle className="spin" size={18} />
+        <span>Loading validation curve.</span>
+      </div>
+    );
+  }
+
+  if (history.length === 0) {
+    return <p className="muted">Validation curve appears after the first epoch.</p>;
+  }
+
+  const values = history
+    .map((point) => point.valEsr)
+    .filter((value): value is number => value !== null);
+  const max = Math.max(...values, 0.001);
+  const min = Math.min(...values, max);
+  const range = Math.max(0.0001, max - min);
+  const path = history
+    .map((point, index) => {
+      const x = history.length === 1 ? 0 : (index / (history.length - 1)) * 100;
+      const normalized = point.valEsr === null ? max : point.valEsr;
+      const y = 90 - ((normalized - min) / range) * 70;
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+  const latest = history[history.length - 1];
+  const best = history.reduce(
+    (current, point) =>
+      point.valEsr !== null && (current.valEsr === null || point.valEsr < current.valEsr)
+        ? point
+        : current,
+    history[0],
+  );
+
+  return (
+    <div className="curve-card">
+      <div className="curve-header">
+        <div>
+          <span>Validation ESR</span>
+          <strong>{latest.valEsr !== null ? latest.valEsr.toFixed(4) : "waiting"}</strong>
+        </div>
+        <small>Best epoch {best.epoch}</small>
+      </div>
+      <svg viewBox="0 0 100 100" role="img" aria-label="Validation ESR curve">
+        <path d="M 0 90 L 100 90" className="curve-baseline" />
+        <path d={path} className="curve-line" />
+        {history.map((point, index) => {
+          if (!point.isBest || point.valEsr === null) return null;
+          const x = history.length === 1 ? 0 : (index / (history.length - 1)) * 100;
+          const y = 90 - ((point.valEsr - min) / range) * 70;
+          return <circle cx={x} cy={y} r="2.2" key={`${point.epoch}-${index}`} />;
+        })}
+      </svg>
     </div>
   );
 }
@@ -1298,6 +1694,7 @@ function AudioReportView({ project }: { project: ProjectDetail }) {
         <Metric label="Duration" value={`${audio.input.duration_seconds.toFixed(1)} s`} />
         <Metric label="Latency" value={`${audio.latency_samples} samples`} />
       </div>
+      <GainGuidance audio={audio} />
       {audio.warning_details.length ? (
         <WarningList warnings={audio.warning_details} />
       ) : audio.warnings.length ? (
@@ -1308,6 +1705,39 @@ function AudioReportView({ project }: { project: ProjectDetail }) {
           <span>No blocking preflight warnings.</span>
         </div>
       )}
+    </div>
+  );
+}
+
+function GainGuidance({ audio }: { audio: AudioReport }) {
+  const gain = audio.gain ?? null;
+  const profile = audio.capture_profile ?? null;
+  const verdict = getString(gain, "verdict");
+  const guidance = getString(gain, "guidance");
+  const rmsDelta = getNumber(gain, "rms_delta_db");
+  const headroom = getNumber(gain, "headroom_db");
+  const duration = getNumber(profile, "duration_seconds");
+  const windows = getNumber(profile, "recommended_max_windows");
+
+  if (!gain && !profile) return null;
+
+  return (
+    <div className="guidance-grid">
+      <div>
+        <span>Gain read</span>
+        <strong>{verdict ? verdict.replace(/_/g, " ") : "unknown"}</strong>
+        <small>{guidance ?? "Check peak and RMS before long runs."}</small>
+      </div>
+      <div>
+        <span>Headroom</span>
+        <strong>{headroom !== null ? `${headroom.toFixed(1)} dB` : "unknown"}</strong>
+        <small>{rmsDelta !== null ? `${rmsDelta.toFixed(1)} dB RMS target offset` : ""}</small>
+      </div>
+      <div>
+        <span>Capture handling</span>
+        <strong>{duration !== null ? formatSeconds(duration) : "unknown"}</strong>
+        <small>{windows !== null ? `${windows} windows recommended` : ""}</small>
+      </div>
     </div>
   );
 }
@@ -1375,10 +1805,14 @@ function RunReport({
   if (!report) {
     return <p className="muted">No training report found.</p>;
   }
+  const decision = qualityVerdict(null, getNestedObject(report, ["quality_assessment"]));
+  const earlyStopping = getNestedObject(report, ["early_stopping"]);
+  const stopped = getBoolean(earlyStopping, "stopped");
 
   return (
     <div className="report-block">
       <p className="section-label">Training Report</p>
+      <QualityCallout decision={decision} />
       <div className="report-grid">
         <Metric label="Backend" value={getString(report, "backend") ?? "unknown"} />
         <Metric label="Epochs" value={String(getNumber(report, "epochs") ?? "unknown")} />
@@ -1387,6 +1821,14 @@ function RunReport({
           value={String(getNumber(report, "checkpoint_epoch") ?? "unknown")}
         />
         <Metric label="Created" value={formatReportDate(getString(report, "created_at"))} />
+        <Metric
+          label="Early stopping"
+          value={
+            stopped
+              ? `stopped at ${getNumber(earlyStopping, "epoch") ?? "?"}`
+              : `best ${getNumber(earlyStopping, "best_epoch") ?? "unknown"}`
+          }
+        />
       </div>
       {preview.report_path ? <p className="artifact-path">{preview.report_path}</p> : null}
     </div>
@@ -1780,6 +2222,173 @@ function eventType(event: SidecarProgressEvent) {
   return getString(event.json, "type");
 }
 
+function recommendPreset(
+  project: ProjectDetail,
+  backend: RuntimeBackend,
+): PresetRecommendation {
+  const duration = getNumber(project.audio?.capture_profile ?? null, "duration_seconds");
+  const confidence = project.audio?.latency_confidence ?? 0;
+  const warningCodes = new Set(project.audio?.warning_details.map((warning) => warning.code) ?? []);
+  const reasons: string[] = [];
+
+  if (backend === "pytorch") {
+    reasons.push("PyTorch parity is currently limited to LSTM presets.");
+    if (duration !== null && duration < 20) {
+      return {
+        presetId: "lstm_light",
+        label: "Light LSTM",
+        confidence: "medium",
+        reasons: [...reasons, "Short captures benefit from the lower-risk light model."],
+      };
+    }
+    return {
+      presetId: "lstm_standard",
+      label: "Standard LSTM",
+      confidence: "medium",
+      reasons: [...reasons, "It is the safest PyTorch-compatible default."],
+    };
+  }
+
+  if (warningCodes.has("capture_level_low") || warningCodes.has("rms_mismatch")) {
+    reasons.push("Gain warnings are present, so start with a stable recurrent baseline.");
+    return {
+      presetId: "gru_light",
+      label: "GRU",
+      confidence: "medium",
+      reasons,
+    };
+  }
+
+  if (project.target_kind === "line" || project.target_kind === "generic") {
+    reasons.push("Line/generic captures often need a quick memoryless baseline first.");
+    return {
+      presetId: "dense_only",
+      label: "Dense",
+      confidence: "medium",
+      reasons,
+    };
+  }
+
+  if (duration !== null && duration >= 90 && confidence >= 0.75) {
+    reasons.push("The capture is long enough for a richer temporal model.");
+    return {
+      presetId: "conv_gru_hybrid",
+      label: "Hybrid",
+      confidence: "high",
+      reasons,
+    };
+  }
+
+  if (duration !== null && duration < 15) {
+    reasons.push("Short captures should start with a compact recurrent model.");
+    return {
+      presetId: "gru_light",
+      label: "GRU",
+      confidence: "medium",
+      reasons,
+    };
+  }
+
+  reasons.push("Amp and pedal captures usually need short-term memory.");
+  return {
+    presetId: "lstm_standard",
+    label: "Standard LSTM",
+    confidence: confidence >= 0.65 ? "high" : "low",
+    reasons:
+      confidence >= 0.65
+        ? reasons
+        : [...reasons, "Alignment confidence is low, so verify the nudge before a long run."],
+  };
+}
+
+function recommendedWindowBudget(project: ProjectDetail) {
+  const recommended = getNumber(project.audio?.capture_profile ?? null, "recommended_max_windows");
+  if (recommended !== null) return Math.round(recommended);
+  const duration = project.audio?.input.duration_seconds ?? 0;
+  if (duration >= 120) return 2048;
+  if (duration >= 45) return 1024;
+  return 512;
+}
+
+function trainingHistoryFromEvents(
+  events: SidecarProgressEvent[],
+  runId: string | null,
+): TrainingHistoryPoint[] {
+  return events
+    .filter((event) => eventType(event) === "epoch")
+    .filter((event) => !runId || event.run_id === runId || getString(event.json, "run_id") === runId)
+    .map((event) => ({
+      epoch: getNumber(event.json, "epoch") ?? 0,
+      trainLoss: getNumber(event.json, "train_loss"),
+      valEsr: getNumber(event.json, "val_esr"),
+      valRmse: getNumber(event.json, "val_rmse"),
+      isBest: getBoolean(event.json, "is_best"),
+    }))
+    .filter((point) => point.epoch > 0);
+}
+
+function historyFromReport(report: Record<string, unknown> | null): TrainingHistoryPoint[] {
+  const history = getArray(report, "history");
+  return history
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const value = item as Record<string, unknown>;
+      return {
+        epoch: getNumber(value, "epoch") ?? 0,
+        trainLoss: getNumber(value, "train_loss"),
+        valEsr: getNumber(value, "val_esr"),
+        valRmse: getNumber(value, "val_rmse"),
+        isBest: getBoolean(value, "is_best"),
+      };
+    })
+    .filter((point): point is TrainingHistoryPoint => Boolean(point && point.epoch > 0));
+}
+
+function qualityVerdict(
+  metrics: TrainingMetrics | null,
+  reportAssessment: Record<string, unknown> | null,
+): QualityDecision {
+  const reportVerdict = getString(reportAssessment, "verdict");
+  if (reportVerdict) {
+    return {
+      verdict: normalizeQualityVerdict(reportVerdict),
+      summary: getString(reportAssessment, "summary") ?? "Training report is available.",
+      action: getString(reportAssessment, "action") ?? "Inspect the previews before export.",
+    };
+  }
+  if (!metrics) {
+    return {
+      verdict: "unknown",
+      summary: "No quality decision yet.",
+      action: "Run training to generate validation metrics and preview audio.",
+    };
+  }
+  if (metrics.esr <= 0.03 && metrics.rmse <= 0.03 && metrics.realtime_factor >= 40) {
+    return {
+      verdict: "good",
+      summary: "Good candidate for export.",
+      action: "Listen to the residual and export if the preview matches the target.",
+    };
+  }
+  if (metrics.esr <= 0.1 && metrics.rmse <= 0.08 && metrics.realtime_factor >= 20) {
+    return {
+      verdict: "usable",
+      summary: "Usable, but inspect before shipping.",
+      action: "Compare target and prediction. Try a richer preset if the residual is audible.",
+    };
+  }
+  return {
+    verdict: "needs_work",
+    summary: "Needs more work before export.",
+    action: "Check alignment and gain, then train longer or choose a stronger preset.",
+  };
+}
+
+function normalizeQualityVerdict(value: string): QualityDecision["verdict"] {
+  if (value === "good" || value === "usable" || value === "needs_work") return value;
+  return "unknown";
+}
+
 function getString(value: Record<string, unknown> | null, key: string) {
   const item = value?.[key];
   return typeof item === "string" ? item : null;
@@ -1810,6 +2419,13 @@ function getNestedNumber(value: Record<string, unknown> | null, keys: string[]) 
   return typeof item === "number" ? item : null;
 }
 
+function getNestedObject(value: Record<string, unknown> | null, keys: string[]) {
+  const item = getNestedValue(value, keys);
+  return item && typeof item === "object" && !Array.isArray(item)
+    ? (item as Record<string, unknown>)
+    : null;
+}
+
 function getNestedValue(value: Record<string, unknown> | null, keys: string[]) {
   let current: unknown = value;
   for (const key of keys) {
@@ -1817,6 +2433,16 @@ function getNestedValue(value: Record<string, unknown> | null, keys: string[]) {
     current = (current as Record<string, unknown>)[key];
   }
   return current;
+}
+
+function clampNumber(value: number, minimum: number, maximum: number) {
+  if (!Number.isFinite(value)) return minimum;
+  return Math.round(Math.min(maximum, Math.max(minimum, value)));
+}
+
+function clampFloat(value: number, minimum: number, maximum: number, fallback: number) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function operationLabel(operation: string) {

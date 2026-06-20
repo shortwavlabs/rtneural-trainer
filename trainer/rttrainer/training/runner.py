@@ -35,6 +35,8 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     learning_rate = float(manifest.get("learning_rate", 1e-3))
     sequence_length = int(manifest.get("sequence_length", 1024))
     max_windows = int(manifest.get("max_windows", 512))
+    early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
+    early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
     input_path, target_path = resolve_audio_paths(manifest)
     if not input_path.is_file() or not target_path.is_file():
         raise FileNotFoundError("Training requires prepared input_path and target_path WAV files.")
@@ -78,9 +80,14 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     best_esr = float(resumed_metrics.get("esr", float("inf")))
     last_metrics: dict[str, float] | None = dict(resumed_metrics) if resumed_metrics else None
     best_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
+    history: list[dict[str, float | int | bool]] = []
+    stopped_early: dict[str, Any] | None = None
+    epochs_without_improvement = 0
+    last_epoch = start_epoch - 1
 
     for epoch in range(start_epoch, epochs + 1):
-        history = model.fit(
+        last_epoch = epoch
+        fit_history = model.fit(
             dataset.train_x,
             dataset.train_y,
             batch_size=batch_size,
@@ -90,11 +97,12 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
         )
         val_prediction = model.predict(dataset.val_x, verbose=0)
         last_metrics = compute_metrics(flatten_array(dataset.val_y), flatten_array(val_prediction))
-        train_loss = float(history.history.get("loss", [0.0])[-1])
-        is_best = last_metrics["esr"] < best_esr
+        train_loss = float(fit_history.history.get("loss", [0.0])[-1])
+        is_best = last_metrics["esr"] < best_esr - early_stopping_min_delta
         if is_best:
             best_esr = last_metrics["esr"]
             best_epoch = epoch
+            epochs_without_improvement = 0
             model.save(best_model_path)
             save_keras_checkpoint_metadata(
                 checkpoint_metadata_path,
@@ -108,6 +116,19 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 keras_version=keras_version(tf),
                 device=device_label,
             )
+        else:
+            epochs_without_improvement += 1
+
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_esr": last_metrics["esr"],
+                "val_mae": last_metrics["mae"],
+                "val_rmse": last_metrics["rmse"],
+                "is_best": is_best,
+            }
+        )
 
         emit(
             {
@@ -117,9 +138,22 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "total_epochs": epochs,
                 "train_loss": train_loss,
                 "val_esr": last_metrics["esr"],
+                "val_mae": last_metrics["mae"],
+                "val_rmse": last_metrics["rmse"],
                 "is_best": is_best,
             }
         )
+        if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
+            stopped_early = {
+                "stopped": True,
+                "reason": "validation_esr_plateau",
+                "epoch": epoch,
+                "best_epoch": best_epoch,
+                "patience": early_stopping_patience,
+                "min_delta": early_stopping_min_delta,
+            }
+            emit({"type": "early_stopping", "run_id": run_id, **stopped_early})
+            break
 
     if last_metrics is None:
         raise RuntimeError("Training did not produce metrics.")
@@ -139,6 +173,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     write_wav_mono(run_dir / "test-input.wav", dataset.test_input, dataset.sample_rate)
     write_wav_mono(run_dir / "test-target.wav", dataset.test_target, dataset.sample_rate)
     write_json(run_dir / "metrics.json", metrics)
+    write_json(run_dir / "history.json", {"schema_version": 1, "history": history})
     write_json(
         run_dir / "training-report.json",
         {
@@ -147,11 +182,22 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "preset": preset.preset_id,
             "backend": "keras",
             "device": device_label,
-            "epochs": epochs,
+            "epochs": last_epoch,
+            "requested_epochs": epochs,
             "best_checkpoint_path": str(best_model_path),
             "checkpoint_metadata_path": str(checkpoint_metadata_path),
             "metrics": metrics,
+            "quality_assessment": quality_assessment(metrics),
             "checkpoint_epoch": checkpoint.get("epoch", best_epoch),
+            "history": history,
+            "dataset": dataset.summary,
+            "early_stopping": stopped_early
+            or {
+                "stopped": False,
+                "patience": early_stopping_patience,
+                "min_delta": early_stopping_min_delta,
+                "best_epoch": best_epoch,
+            },
             "tensorflow_version": tf.__version__,
             "keras_version": keras_version(tf),
             "created_at": now(),
@@ -181,6 +227,8 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     learning_rate = float(manifest.get("learning_rate", 1e-3))
     sequence_length = int(manifest.get("sequence_length", 1024))
     max_windows = int(manifest.get("max_windows", 512))
+    early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
+    early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
     input_path, target_path = resolve_audio_paths(manifest)
     if not input_path.is_file() or not target_path.is_file():
         raise FileNotFoundError("Training requires prepared input_path and target_path WAV files.")
@@ -228,8 +276,14 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     resumed_metrics = (resumed_checkpoint or {}).get("metrics", {})
     best_esr = float(resumed_metrics.get("esr", float("inf")))
     last_metrics: dict[str, float] | None = dict(resumed_metrics) if resumed_metrics else None
+    best_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
+    history: list[dict[str, float | int | bool]] = []
+    stopped_early: dict[str, Any] | None = None
+    epochs_without_improvement = 0
+    last_epoch = start_epoch - 1
 
     for epoch in range(start_epoch, epochs + 1):
+        last_epoch = epoch
         model.train()
         losses = []
         for batch_x, batch_y in train_loader:
@@ -247,9 +301,11 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
         flat_pred = flatten_array(val_prediction.squeeze(-1).detach().cpu().tolist())
         last_metrics = compute_metrics(flat_target, flat_pred)
         train_loss = sum(losses) / max(1, len(losses))
-        is_best = last_metrics["esr"] < best_esr
+        is_best = last_metrics["esr"] < best_esr - early_stopping_min_delta
         if is_best:
             best_esr = last_metrics["esr"]
+            best_epoch = epoch
+            epochs_without_improvement = 0
             save_torch_checkpoint(
                 torch,
                 best_checkpoint_path,
@@ -261,6 +317,19 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 seed,
                 sequence_length,
             )
+        else:
+            epochs_without_improvement += 1
+
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_esr": last_metrics["esr"],
+                "val_mae": last_metrics["mae"],
+                "val_rmse": last_metrics["rmse"],
+                "is_best": is_best,
+            }
+        )
 
         emit(
             {
@@ -270,9 +339,22 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "total_epochs": epochs,
                 "train_loss": train_loss,
                 "val_esr": last_metrics["esr"],
+                "val_mae": last_metrics["mae"],
+                "val_rmse": last_metrics["rmse"],
                 "is_best": is_best,
             }
         )
+        if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
+            stopped_early = {
+                "stopped": True,
+                "reason": "validation_esr_plateau",
+                "epoch": epoch,
+                "best_epoch": best_epoch,
+                "patience": early_stopping_patience,
+                "min_delta": early_stopping_min_delta,
+            }
+            emit({"type": "early_stopping", "run_id": run_id, **stopped_early})
+            break
 
     if last_metrics is None:
         raise RuntimeError("Training did not produce metrics.")
@@ -293,6 +375,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     write_wav_mono(run_dir / "test-input.wav", dataset.test_input, dataset.sample_rate)
     write_wav_mono(run_dir / "test-target.wav", dataset.test_target, dataset.sample_rate)
     write_json(run_dir / "metrics.json", metrics)
+    write_json(run_dir / "history.json", {"schema_version": 1, "history": history})
     write_json(
         run_dir / "training-report.json",
         {
@@ -301,10 +384,21 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "preset": preset.preset_id,
             "backend": "pytorch",
             "device": str(device),
-            "epochs": epochs,
+            "epochs": last_epoch,
+            "requested_epochs": epochs,
             "best_checkpoint_path": str(best_checkpoint_path),
             "metrics": metrics,
+            "quality_assessment": quality_assessment(metrics),
             "checkpoint_epoch": checkpoint["epoch"],
+            "history": history,
+            "dataset": dataset.summary,
+            "early_stopping": stopped_early
+            or {
+                "stopped": False,
+                "patience": early_stopping_patience,
+                "min_delta": early_stopping_min_delta,
+                "best_epoch": best_epoch,
+            },
             "created_at": now(),
         },
     )
@@ -555,6 +649,43 @@ def flatten_array(values) -> list[float]:  # type: ignore[no-untyped-def]
 def estimate_realtime_factor(preset: PresetConfig) -> float:
     # Placeholder until native RTNeural benchmarking is wired to the trainer.
     return 180.0 if preset.hidden_size <= 12 else 120.0
+
+
+def quality_assessment(metrics: dict[str, float]) -> dict[str, str | float]:
+    esr = float(metrics.get("esr", 1.0))
+    rmse = float(metrics.get("rmse", 1.0))
+    peak_residual = float(metrics.get("peak_residual", 1.0))
+    realtime_factor = float(metrics.get("realtime_factor", 0.0))
+
+    if esr <= 0.03 and rmse <= 0.03 and realtime_factor >= 40:
+        verdict = "good"
+        summary = "Good candidate for export."
+        action = "Listen to the residual and export if the preview matches the target."
+    elif esr <= 0.10 and rmse <= 0.08 and realtime_factor >= 20:
+        verdict = "usable"
+        summary = "Usable, but inspect before shipping."
+        action = "Compare target and prediction. Try a richer preset if the residual is audible."
+    else:
+        verdict = "needs_work"
+        summary = "Needs more work before export."
+        action = (
+            "Check alignment and gain staging, then train longer or choose a stronger preset."
+        )
+
+    if peak_residual > 0.5:
+        verdict = "needs_work"
+        summary = "Residual peaks are high."
+        action = "Look for alignment slips, clipping, or missing capture dynamics."
+
+    return {
+        "verdict": verdict,
+        "summary": summary,
+        "action": action,
+        "esr": esr,
+        "rmse": rmse,
+        "peak_residual": peak_residual,
+        "realtime_factor": realtime_factor,
+    }
 
 
 def require_tensorflow():

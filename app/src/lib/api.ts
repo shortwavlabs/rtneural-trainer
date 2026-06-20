@@ -13,6 +13,7 @@ import type {
   RuntimeSettings,
   SidecarProgressEvent,
   StartTrainingRequest,
+  UpdateAlignmentRequest,
   UpdateAudioRequest,
   UpdateNotesRequest,
   UpdateRuntimeSettingsRequest,
@@ -46,6 +47,8 @@ export const api = {
     call<ProjectDetail>("get_project", { project_id: projectId }),
   updateAudio: (payload: UpdateAudioRequest) =>
     call<ProjectDetail>("update_project_audio", { payload }),
+  updateAlignment: (payload: UpdateAlignmentRequest) =>
+    call<ProjectDetail>("update_project_alignment", { payload }),
   startTraining: (payload: StartTrainingRequest) =>
     call<ProjectDetail>("start_training", { payload }),
   cancelTrainingRun: (payload: RunControlRequest) =>

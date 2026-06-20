@@ -80,9 +80,15 @@ export interface AudioReport {
   input: AudioFileReport;
   target: AudioFileReport;
   latency_samples: number;
+  latency_auto_samples?: number | null;
+  manual_latency_adjustment_samples: number;
   latency_confidence: number;
   warnings: string[];
   warning_details: AudioWarning[];
+  prepared?: Record<string, unknown> | null;
+  capture_profile?: Record<string, unknown> | null;
+  gain?: Record<string, unknown> | null;
+  options?: Record<string, unknown> | null;
   status: AudioStatus;
 }
 
@@ -161,6 +167,15 @@ export interface UpdateAudioRequest {
 export interface StartTrainingRequest {
   project_id: string;
   preset: string;
+  epochs: number;
+  early_stopping_patience: number;
+  early_stopping_min_delta: number;
+  max_windows: number;
+}
+
+export interface UpdateAlignmentRequest {
+  project_id: string;
+  manual_latency_adjustment_samples: number;
 }
 
 export interface ExportRunRequest {

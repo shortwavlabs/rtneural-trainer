@@ -8,6 +8,7 @@ from pathlib import Path
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.data.prepare import prepare_audio
 from rttrainer.metrics.audio_metrics import compute_metrics
+from rttrainer.training.dataset import build_windowed_dataset
 
 
 class AudioPipelineTests(unittest.TestCase):
@@ -42,6 +43,30 @@ class AudioPipelineTests(unittest.TestCase):
             aligned_input = read_wav_mono(prepared.input_path)
             aligned_target = read_wav_mono(prepared.target_path)
             self.assertEqual(len(aligned_input.samples), len(aligned_target.samples))
+
+    def test_prepare_applies_manual_latency_adjustment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "input.wav"
+            target_path = root / "target.wav"
+            dry = [0.0] * 4096
+            for index in range(200, 900, 31):
+                dry[index] = 0.8
+            target = ([0.0] * 23 + dry)[: len(dry)]
+            write_wav_mono(input_path, dry, 48_000)
+            write_wav_mono(target_path, target, 48_000)
+
+            prepared = prepare_audio(
+                input_path,
+                target_path,
+                root / "prepared",
+                manual_latency_adjustment_samples=5,
+            )
+
+        latency = prepared.report["latency"]
+        self.assertEqual(latency["auto_estimated_samples"], 23)
+        self.assertEqual(latency["manual_adjustment_samples"], 5)
+        self.assertEqual(latency["effective_samples"], 28)
 
     def test_prepare_resamples_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -104,6 +129,28 @@ class AudioPipelineTests(unittest.TestCase):
         metrics = compute_metrics([0.0, 0.2, -0.2], [0.0, 0.2, -0.2])
         self.assertEqual(metrics["esr"], 0.0)
         self.assertEqual(metrics["rmse"], 0.0)
+
+    def test_long_dataset_samples_windows_across_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "input.wav"
+            target_path = root / "target.wav"
+            samples = alternating_signal(12_000)
+            write_wav_mono(input_path, samples, 48_000)
+            write_wav_mono(target_path, samples, 48_000)
+
+            dataset = build_windowed_dataset(
+                input_path,
+                target_path,
+                sequence_length=128,
+                max_windows=8,
+                seed=7,
+                backend="list",
+            )
+
+        self.assertEqual(dataset.summary["selected_windows"], 8)
+        self.assertGreater(dataset.summary["available_windows"], 8)
+        self.assertEqual(dataset.summary["selection"], "sampled_across_capture")
 
 
 def alternating_signal(length: int) -> list[float]:

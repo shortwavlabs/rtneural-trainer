@@ -15,6 +15,7 @@ class WindowedDataset:
     test_input: list[float]
     test_target: list[float]
     sample_rate: int
+    summary: dict[str, int | float | str]
 
 
 def build_windowed_dataset(
@@ -38,14 +39,18 @@ def build_windowed_dataset(
 
     input_samples = input_audio.samples[:length]
     target_samples = target_audio.samples[:length]
+    stride = max(1, sequence_length // 2)
+    starts = list(range(0, length - sequence_length + 1, stride))
+    total_windows = len(starts)
+    window_budget = max(4, max_windows)
+    random.Random(seed).shuffle(starts)
+    selected_starts = sorted(starts[:window_budget])
+
     windows_x: list[list[float]] = []
     windows_y: list[list[float]] = []
-    stride = max(1, sequence_length // 2)
-    for start in range(0, length - sequence_length + 1, stride):
+    for start in selected_starts:
         windows_x.append(input_samples[start : start + sequence_length])
         windows_y.append(target_samples[start : start + sequence_length])
-        if len(windows_x) >= max_windows:
-            break
 
     if len(windows_x) < 4:
         raise ValueError("Not enough training windows after slicing.")
@@ -79,6 +84,20 @@ def build_windowed_dataset(
         test_input=input_samples[test_start:test_end],
         test_target=target_samples[test_start:test_end],
         sample_rate=input_audio.sample_rate,
+        summary={
+            "sample_rate": input_audio.sample_rate,
+            "duration_seconds": length / input_audio.sample_rate,
+            "sequence_length": sequence_length,
+            "stride": stride,
+            "available_windows": total_windows,
+            "selected_windows": len(windows_x),
+            "train_windows": train_count,
+            "validation_windows": val_count,
+            "test_samples": test_end - test_start,
+            "selection": "sampled_across_capture"
+            if total_windows > len(windows_x)
+            else "all_windows",
+        },
     )
 
 
