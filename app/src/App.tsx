@@ -17,6 +17,7 @@ import {
   Save,
   SlidersHorizontal,
   Square,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -41,6 +42,7 @@ import type {
   SidecarProgressEvent,
   TargetKind,
   TrainingMetrics,
+  TrainingRecipe,
   TrainingRun,
 } from "./types";
 
@@ -57,9 +59,27 @@ type CaptureAnalyzePayload = {
 type TrainingOptions = {
   preset: string;
   epochs: number;
+  batchSize: number;
+  learningRate: number;
+  sequenceLength: number;
   earlyStoppingPatience: number;
   earlyStoppingMinDelta: number;
   maxWindows: number;
+};
+
+type TrainingRecipeOption = {
+  id: string;
+  source: "built_in" | "custom";
+  name: string;
+  description: string;
+  modelPreset: string;
+  epochs: number;
+  batchSize: number;
+  learningRate: number;
+  sequenceLength: number;
+  maxWindows: number;
+  earlyStoppingPatience: number;
+  earlyStoppingMinDelta: number;
 };
 
 type TrainingHistoryPoint = {
@@ -156,6 +176,65 @@ const presets = [
   backends: RuntimeBackend[];
 }>;
 
+const builtInTrainingRecipes = [
+  {
+    id: "builtin_smoke",
+    source: "built_in",
+    name: "Quick smoke",
+    description: "Fast pipeline check before spending time on a run.",
+    modelPreset: "conv_gru_hybrid",
+    epochs: 4,
+    batchSize: 16,
+    learningRate: 0.001,
+    sequenceLength: 1024,
+    maxWindows: 512,
+    earlyStoppingPatience: 0,
+    earlyStoppingMinDelta: 0.0001,
+  },
+  {
+    id: "builtin_balanced",
+    source: "built_in",
+    name: "Balanced",
+    description: "Default local training pass for usable long captures.",
+    modelPreset: "lstm_standard",
+    epochs: 40,
+    batchSize: 16,
+    learningRate: 0.001,
+    sequenceLength: 1024,
+    maxWindows: 2048,
+    earlyStoppingPatience: 6,
+    earlyStoppingMinDelta: 0.0001,
+  },
+  {
+    id: "builtin_production",
+    source: "built_in",
+    name: "Production",
+    description: "Longer run with more windows and patient early stopping.",
+    modelPreset: "conv_gru_hybrid",
+    epochs: 120,
+    batchSize: 16,
+    learningRate: 0.0007,
+    sequenceLength: 1024,
+    maxWindows: 4096,
+    earlyStoppingPatience: 12,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_long_capture",
+    source: "built_in",
+    name: "Long capture",
+    description: "Broader window coverage for multi-minute captures.",
+    modelPreset: "conv_gru_hybrid",
+    epochs: 80,
+    batchSize: 16,
+    learningRate: 0.001,
+    sequenceLength: 1024,
+    maxWindows: 4096,
+    earlyStoppingPatience: 10,
+    earlyStoppingMinDelta: 0.0001,
+  },
+] satisfies TrainingRecipeOption[];
+
 export default function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [runtimeSettings, setRuntimeSettings] = useState<RuntimeSettings | null>(null);
@@ -163,6 +242,7 @@ export default function App() {
   const [runtimeBusy, setRuntimeBusy] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [trainingRecipes, setTrainingRecipes] = useState<TrainingRecipe[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("capture");
@@ -210,14 +290,16 @@ export default function App() {
   async function boot() {
     try {
       setError(null);
-      const [nextStatus, nextSettings, nextProjects] = await Promise.all([
+      const [nextStatus, nextSettings, nextProjects, nextRecipes] = await Promise.all([
         api.appStatus(),
         api.getRuntimeSettings(),
         api.listProjects(),
+        api.listTrainingRecipes(),
       ]);
       setStatus(nextStatus);
       setRuntimeSettings(nextSettings);
       setProjects(nextProjects);
+      setTrainingRecipes(nextRecipes);
       setSelectedId((current) => current ?? nextProjects[0]?.id ?? null);
       void refreshDeviceInspection();
     } catch (caught) {
@@ -270,6 +352,29 @@ export default function App() {
   async function refreshProjects() {
     const nextProjects = await api.listProjects();
     setProjects(nextProjects);
+  }
+
+  async function saveTrainingRecipe(options: TrainingOptions, name: string, id?: string) {
+    const saved = await api.saveTrainingRecipe({
+      id: id ?? null,
+      name,
+      model_preset: options.preset,
+      epochs: options.epochs,
+      batch_size: options.batchSize,
+      learning_rate: options.learningRate,
+      sequence_length: options.sequenceLength,
+      max_windows: options.maxWindows,
+      early_stopping_patience: options.earlyStoppingPatience,
+      early_stopping_min_delta: options.earlyStoppingMinDelta,
+    });
+    const nextRecipes = await api.listTrainingRecipes();
+    setTrainingRecipes(nextRecipes);
+    return saved;
+  }
+
+  async function deleteTrainingRecipe(recipeId: string) {
+    const nextRecipes = await api.deleteTrainingRecipe({ id: recipeId });
+    setTrainingRecipes(nextRecipes);
   }
 
   async function commitProject(nextProject: ProjectDetail, nextTab?: TabId) {
@@ -400,7 +505,9 @@ export default function App() {
                   project={project}
                   backend={runtimeSettings?.selected_backend ?? "keras"}
                   busy={busy === "train"}
+                  recipeBusy={busy === "recipe"}
                   events={progressEvents}
+                  customRecipes={trainingRecipes}
                   onTrain={async (options) => {
                     setProgressEvents([]);
                     setBusy("train");
@@ -409,6 +516,9 @@ export default function App() {
                         project_id: project.id,
                         preset: options.preset,
                         epochs: options.epochs,
+                        batch_size: options.batchSize,
+                        learning_rate: options.learningRate,
+                        sequence_length: options.sequenceLength,
                         early_stopping_patience: options.earlyStoppingPatience,
                         early_stopping_min_delta: options.earlyStoppingMinDelta,
                         max_windows: options.maxWindows,
@@ -416,6 +526,28 @@ export default function App() {
                       await commitProject(nextProject, "train");
                     } catch (caught) {
                       setError(toFriendlyMessage(caught));
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                  onSaveRecipe={async (options, name, recipeId) => {
+                    setBusy("recipe");
+                    try {
+                      return await saveTrainingRecipe(options, name, recipeId);
+                    } catch (caught) {
+                      setError(toFriendlyMessage(caught));
+                      throw caught;
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                  onDeleteRecipe={async (recipeId) => {
+                    setBusy("recipe");
+                    try {
+                      await deleteTrainingRecipe(recipeId);
+                    } catch (caught) {
+                      setError(toFriendlyMessage(caught));
+                      throw caught;
                     } finally {
                       setBusy(null);
                     }
@@ -1163,16 +1295,28 @@ function TrainView({
   project,
   backend,
   busy,
+  recipeBusy,
   events,
+  customRecipes,
   onTrain,
+  onSaveRecipe,
+  onDeleteRecipe,
   onCancel,
   onResume,
 }: {
   project: ProjectDetail;
   backend: RuntimeBackend;
   busy: boolean;
+  recipeBusy: boolean;
   events: SidecarProgressEvent[];
+  customRecipes: TrainingRecipe[];
   onTrain: (options: TrainingOptions) => Promise<void>;
+  onSaveRecipe: (
+    options: TrainingOptions,
+    name: string,
+    recipeId?: string,
+  ) => Promise<TrainingRecipe>;
+  onDeleteRecipe: (recipeId: string) => Promise<void>;
   onCancel: (runId: string) => Promise<void>;
   onResume: (runId: string) => Promise<void>;
 }) {
@@ -1180,16 +1324,46 @@ function TrainView({
     () => recommendPreset(project, backend),
     [backend, project.audio, project.target_kind],
   );
-  const [preset, setPreset] = useState(recommendation.presetId);
+  const customRecipeOptions = useMemo(
+    () => customRecipes.map(trainingRecipeFromCustom),
+    [customRecipes],
+  );
+  const recipeOptions = useMemo(
+    () => [...builtInTrainingRecipes, ...customRecipeOptions],
+    [customRecipeOptions],
+  );
+  const [selectedRecipeId, setSelectedRecipeId] = useState("builtin_balanced");
+  const [preset, setPreset] = useState(
+    recipeOptions.find((recipe) => recipe.id === "builtin_balanced")?.modelPreset ??
+      recommendation.presetId,
+  );
   const [epochs, setEpochs] = useState(40);
+  const [batchSize, setBatchSize] = useState(16);
+  const [learningRate, setLearningRate] = useState(0.001);
+  const [sequenceLength, setSequenceLength] = useState(1024);
   const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(6);
   const [earlyStoppingMinDelta, setEarlyStoppingMinDelta] = useState(0.0001);
-  const [maxWindows, setMaxWindows] = useState(recommendedWindowBudget(project));
+  const [maxWindows, setMaxWindows] = useState(2048);
+  const [recipeName, setRecipeName] = useState("");
+  const [recipeNotice, setRecipeNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<RunPreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const selectedRecipe = recipeOptions.find((recipe) => recipe.id === selectedRecipeId) ?? null;
   const selectedPreset = presets.find((item) => item.id === preset) ?? presets[0];
   const selectedPresetSupported = selectedPreset.backends.includes(backend);
   const canTrain = project.audio?.status === "ready";
+  const currentOptions: TrainingOptions = {
+    preset,
+    epochs,
+    batchSize,
+    learningRate,
+    sequenceLength,
+    earlyStoppingPatience,
+    earlyStoppingMinDelta,
+    maxWindows,
+  };
+  const selectedCustomRecipe = customRecipes.find((recipe) => recipe.id === selectedRecipeId);
+  const hasRecipeName = recipeName.trim().length > 0;
   const activeRun = [...project.runs]
     .reverse()
     .find((run) => ["queued", "preparing", "running", "cancelling"].includes(run.status));
@@ -1209,14 +1383,26 @@ function TrainView({
   const quality = qualityVerdict(evidenceRun?.metrics ?? null, reportAssessment);
 
   useEffect(() => {
-    if (selectedPresetSupported && preset === recommendation.presetId) return;
-    if (selectedPresetSupported && preset !== recommendation.presetId) return;
+    if (selectedPresetSupported) return;
     setPreset(recommendation.presetId);
   }, [backend, preset, recommendation.presetId, selectedPresetSupported]);
 
   useEffect(() => {
-    setMaxWindows(recommendedWindowBudget(project));
-  }, [project.audio?.capture_profile, project.id]);
+    if (!selectedRecipe || recipeModelSupported(selectedRecipe.modelPreset, backend)) return;
+    setSelectedRecipeId("manual");
+    setRecipeNotice("Recipe model is not available on this backend.");
+  }, [backend, selectedRecipe]);
+
+  useEffect(() => {
+    if (selectedRecipeId !== "builtin_balanced") return;
+    setMaxWindows(Math.max(recommendedWindowBudget(project), 1024));
+  }, [project.audio?.capture_profile, project.id, selectedRecipeId]);
+
+  useEffect(() => {
+    const recipe = recipeOptions.find((item) => item.id === selectedRecipeId);
+    if (!recipe) return;
+    setRecipeName(recipe.source === "custom" ? recipe.name : "");
+  }, [recipeOptions, selectedRecipeId]);
 
   useEffect(() => {
     let mounted = true;
@@ -1242,14 +1428,152 @@ function TrainView({
     };
   }, [evidenceRun?.id, evidenceRun?.status, project.id]);
 
+  function applyRecipe(recipe: TrainingRecipeOption) {
+    setSelectedRecipeId(recipe.id);
+    setPreset(
+      recipeModelSupported(recipe.modelPreset, backend) ? recipe.modelPreset : recommendation.presetId,
+    );
+    setEpochs(recipe.epochs);
+    setBatchSize(recipe.batchSize);
+    setLearningRate(recipe.learningRate);
+    setSequenceLength(recipe.sequenceLength);
+    setMaxWindows(recipe.maxWindows);
+    setEarlyStoppingPatience(recipe.earlyStoppingPatience);
+    setEarlyStoppingMinDelta(recipe.earlyStoppingMinDelta);
+    setRecipeName(recipe.source === "custom" ? recipe.name : "");
+    setRecipeNotice(null);
+  }
+
+  function markManualRecipeEdit() {
+    setSelectedRecipeId("manual");
+    setRecipeNotice(null);
+  }
+
+  async function saveCurrentRecipe() {
+    if (!hasRecipeName) return;
+    try {
+      const saved = await onSaveRecipe(
+        currentOptions,
+        recipeName.trim(),
+        selectedCustomRecipe?.id,
+      );
+      setSelectedRecipeId(saved.id);
+      setRecipeName(saved.name);
+      setRecipeNotice(`Saved ${saved.name}.`);
+    } catch {
+      setRecipeNotice(null);
+    }
+  }
+
+  async function deleteCurrentRecipe() {
+    if (!selectedCustomRecipe) return;
+    const deletedName = selectedCustomRecipe.name;
+    try {
+      await onDeleteRecipe(selectedCustomRecipe.id);
+      const fallback = builtInTrainingRecipes.find((recipe) => recipe.id === "builtin_balanced");
+      if (fallback) applyRecipe(fallback);
+      setRecipeNotice(`Deleted ${deletedName}.`);
+    } catch {
+      setRecipeNotice(null);
+    }
+  }
+
   return (
     <div className="screen-grid">
       <div className="panel span-5">
         <ScreenTitle
           icon={Cpu}
-          title="Model Preset"
-          detail="Curated architectures keep RTNeural export predictable."
+          title="Training Setup"
+          detail="Start from a recipe, then tune the run before launching."
         />
+        <div className="recipe-panel">
+          <label>
+            Training recipe
+            <select
+              value={selectedRecipeId}
+              onChange={(event) => {
+                const nextId = event.target.value;
+                if (nextId === "manual") {
+                  setSelectedRecipeId("manual");
+                  return;
+                }
+                const recipe = recipeOptions.find((item) => item.id === nextId);
+                if (recipe) applyRecipe(recipe);
+              }}
+            >
+              {selectedRecipeId !== "manual" && !selectedRecipe ? (
+                <option value={selectedRecipeId}>Saved recipe</option>
+              ) : null}
+              <option value="manual">Custom settings</option>
+              <optgroup label="Built in">
+                {builtInTrainingRecipes.map((recipe) => (
+                  <option
+                    key={recipe.id}
+                    value={recipe.id}
+                    disabled={!recipeModelSupported(recipe.modelPreset, backend)}
+                  >
+                    {recipe.name}
+                  </option>
+                ))}
+              </optgroup>
+              {customRecipeOptions.length ? (
+                <optgroup label="Saved">
+                  {customRecipeOptions.map((recipe) => (
+                    <option
+                      key={recipe.id}
+                      value={recipe.id}
+                      disabled={!recipeModelSupported(recipe.modelPreset, backend)}
+                    >
+                      {recipe.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
+            </select>
+          </label>
+          <div className="recipe-summary">
+            <span>{selectedRecipe?.source === "custom" ? "Saved recipe" : "Recipe"}</span>
+            <strong>{selectedRecipe?.name ?? "Custom settings"}</strong>
+            <small>
+              {selectedRecipe?.description ??
+                "Manual values will be used for this run. Save them to reuse later."}
+            </small>
+          </div>
+          <div className="recipe-actions">
+            <label>
+              Recipe name
+              <input
+                value={recipeName}
+                onChange={(event) => {
+                  setRecipeName(event.target.value);
+                  setRecipeNotice(null);
+                }}
+                placeholder="e.g. Rhythm production"
+              />
+            </label>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={recipeBusy || !hasRecipeName}
+              onClick={() => void saveCurrentRecipe()}
+            >
+              {recipeBusy ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}
+              {selectedCustomRecipe ? "Update recipe" : "Save recipe"}
+            </button>
+            {selectedCustomRecipe ? (
+              <button
+                className="danger-button"
+                type="button"
+                disabled={recipeBusy}
+                onClick={() => void deleteCurrentRecipe()}
+              >
+                <Trash2 size={16} />
+                Delete
+              </button>
+            ) : null}
+          </div>
+          {recipeNotice ? <small className="recipe-notice">{recipeNotice}</small> : null}
+        </div>
         <PresetRecommendation recommendation={recommendation} selectedPreset={selectedPreset} />
         <div className="preset-list">
           {presets.map((item) => {
@@ -1261,7 +1585,10 @@ function TrainView({
                 key={item.id}
                 title={supported ? item.detail : "Select TensorFlow/Keras to train this preset."}
                 type="button"
-                onClick={() => setPreset(item.id)}
+                onClick={() => {
+                  markManualRecipeEdit();
+                  setPreset(item.id);
+                }}
               >
                 <span>
                   <strong>{item.label}</strong>
@@ -1280,7 +1607,51 @@ function TrainView({
               min={1}
               max={500}
               value={epochs}
-              onChange={(event) => setEpochs(clampNumber(event.target.valueAsNumber, 1, 500))}
+              onChange={(event) => {
+                markManualRecipeEdit();
+                setEpochs(clampNumber(event.target.valueAsNumber, 1, 500));
+              }}
+            />
+          </label>
+          <label>
+            Batch size
+            <input
+              type="number"
+              min={1}
+              max={512}
+              value={batchSize}
+              onChange={(event) => {
+                markManualRecipeEdit();
+                setBatchSize(clampNumber(event.target.valueAsNumber, 1, 512));
+              }}
+            />
+          </label>
+          <label>
+            Learning rate
+            <input
+              type="number"
+              min={0.000001}
+              max={1}
+              step={0.0001}
+              value={learningRate}
+              onChange={(event) => {
+                markManualRecipeEdit();
+                setLearningRate(clampFloat(event.target.valueAsNumber, 0.000001, 1, 0.001));
+              }}
+            />
+          </label>
+          <label>
+            Sequence length
+            <input
+              type="number"
+              min={32}
+              max={65536}
+              step={32}
+              value={sequenceLength}
+              onChange={(event) => {
+                markManualRecipeEdit();
+                setSequenceLength(clampNumber(event.target.valueAsNumber, 32, 65536));
+              }}
             />
           </label>
           <label>
@@ -1290,9 +1661,10 @@ function TrainView({
               min={0}
               max={100}
               value={earlyStoppingPatience}
-              onChange={(event) =>
-                setEarlyStoppingPatience(clampNumber(event.target.valueAsNumber, 0, 100))
-              }
+              onChange={(event) => {
+                markManualRecipeEdit();
+                setEarlyStoppingPatience(clampNumber(event.target.valueAsNumber, 0, 100));
+              }}
             />
           </label>
           <label>
@@ -1303,11 +1675,12 @@ function TrainView({
               max={1}
               step={0.0001}
               value={earlyStoppingMinDelta}
-              onChange={(event) =>
+              onChange={(event) => {
+                markManualRecipeEdit();
                 setEarlyStoppingMinDelta(
                   clampFloat(event.target.valueAsNumber, 0, 1, 0.0001),
-                )
-              }
+                );
+              }}
             />
           </label>
           <label>
@@ -1318,9 +1691,10 @@ function TrainView({
               max={16384}
               step={32}
               value={maxWindows}
-              onChange={(event) =>
-                setMaxWindows(clampNumber(event.target.valueAsNumber, 32, 16384))
-              }
+              onChange={(event) => {
+                markManualRecipeEdit();
+                setMaxWindows(clampNumber(event.target.valueAsNumber, 32, 16384));
+              }}
             />
           </label>
         </div>
@@ -1333,6 +1707,9 @@ function TrainView({
             void onTrain({
               preset,
               epochs,
+              batchSize,
+              learningRate,
+              sequenceLength,
               earlyStoppingPatience,
               earlyStoppingMinDelta,
               maxWindows,
@@ -2484,6 +2861,27 @@ function recommendedWindowBudget(project: ProjectDetail) {
   if (duration >= 120) return 2048;
   if (duration >= 45) return 1024;
   return 512;
+}
+
+function trainingRecipeFromCustom(recipe: TrainingRecipe): TrainingRecipeOption {
+  return {
+    id: recipe.id,
+    source: "custom",
+    name: recipe.name,
+    description: `${recipe.epochs} epochs, ${recipe.max_windows} windows`,
+    modelPreset: recipe.model_preset,
+    epochs: recipe.epochs,
+    batchSize: recipe.batch_size,
+    learningRate: recipe.learning_rate,
+    sequenceLength: recipe.sequence_length,
+    maxWindows: recipe.max_windows,
+    earlyStoppingPatience: recipe.early_stopping_patience,
+    earlyStoppingMinDelta: recipe.early_stopping_min_delta,
+  };
+}
+
+function recipeModelSupported(modelPreset: string, backend: RuntimeBackend) {
+  return Boolean(presets.find((preset) => preset.id === modelPreset)?.backends.includes(backend));
 }
 
 function trainingHistoryFromEvents(

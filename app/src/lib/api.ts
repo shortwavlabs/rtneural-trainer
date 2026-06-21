@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppStatus,
   CreateProjectRequest,
+  DeleteTrainingRecipeRequest,
   DeviceInspection,
   ExportFolderRequest,
   ExportRunRequest,
@@ -11,8 +12,10 @@ import type {
   RunPreview,
   RunPreviewRequest,
   RuntimeSettings,
+  SaveTrainingRecipeRequest,
   SidecarProgressEvent,
   StartTrainingRequest,
+  TrainingRecipe,
   UpdateAlignmentRequest,
   UpdateAudioRequest,
   UpdateNotesRequest,
@@ -35,6 +38,11 @@ export const api = {
   getRuntimeSettings: () => call<RuntimeSettings>("get_runtime_settings"),
   updateRuntimeSettings: (payload: UpdateRuntimeSettingsRequest) =>
     call<RuntimeSettings>("update_runtime_settings", { payload }),
+  listTrainingRecipes: () => call<TrainingRecipe[]>("list_training_recipes"),
+  saveTrainingRecipe: (payload: SaveTrainingRecipeRequest) =>
+    call<TrainingRecipe>("save_training_recipe", { payload }),
+  deleteTrainingRecipe: (payload: DeleteTrainingRecipeRequest) =>
+    call<TrainingRecipe[]>("delete_training_recipe", { payload }),
   inspectDevice: () => call<DeviceInspection>("inspect_device"),
   listProjects: () => call<ProjectSummary[]>("list_projects"),
   listProjectEvents: (projectId: string) =>

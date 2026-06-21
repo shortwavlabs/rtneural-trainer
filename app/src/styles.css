@@ -818,6 +818,50 @@ dd,
   gap: 10px;
 }
 
+.recipe-panel {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.recipe-summary {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 8px;
+}
+
+.recipe-summary span {
+  color: #9da9a1;
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.recipe-summary strong {
+  color: #eef2ec;
+  font-size: 0.92rem;
+}
+
+.recipe-summary small,
+.recipe-notice {
+  color: #aeb8b1;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.recipe-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.recipe-actions button {
+  min-width: 116px;
+}
+
 .recommendation-box,
 .training-guidance,
 .training-evidence,
@@ -1561,6 +1605,7 @@ dd,
   .export-main,
   .capture-options,
   .training-controls,
+  .recipe-actions,
   .training-guidance,
   .guidance-grid,
   .evidence-grid {

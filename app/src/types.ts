@@ -121,6 +121,21 @@ export interface TrainingRun {
   log_path: string;
 }
 
+export interface TrainingRecipe {
+  id: string;
+  name: string;
+  model_preset: string;
+  epochs: number;
+  batch_size: number;
+  learning_rate: number;
+  sequence_length: number;
+  max_windows: number;
+  early_stopping_patience: number;
+  early_stopping_min_delta: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ExportPackage {
   id: string;
   run_id: string;
@@ -168,9 +183,29 @@ export interface StartTrainingRequest {
   project_id: string;
   preset: string;
   epochs: number;
+  batch_size: number;
+  learning_rate: number;
+  sequence_length: number;
   early_stopping_patience: number;
   early_stopping_min_delta: number;
   max_windows: number;
+}
+
+export interface SaveTrainingRecipeRequest {
+  id?: string | null;
+  name: string;
+  model_preset: string;
+  epochs: number;
+  batch_size: number;
+  learning_rate: number;
+  sequence_length: number;
+  max_windows: number;
+  early_stopping_patience: number;
+  early_stopping_min_delta: number;
+}
+
+export interface DeleteTrainingRecipeRequest {
+  id: string;
 }
 
 export interface UpdateAlignmentRequest {

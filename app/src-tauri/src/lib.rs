@@ -21,6 +21,15 @@ use uuid::Uuid;
 const RTTRAINER_SIDECAR: &str = "rttrainer";
 const RTNEURAL_VALIDATOR_SIDECAR: &str = "rtneural-validator";
 const RUNTIME_SETTINGS_KEY: &str = "runtime";
+const MODEL_PRESETS: &[&str] = &[
+    "dense_only",
+    "gru_light",
+    "lstm_light",
+    "lstm_standard",
+    "conv1d_light",
+    "conv1d_bn_prelu",
+    "conv_gru_hybrid",
+];
 
 #[derive(Clone, Serialize)]
 struct AppStatus {
@@ -171,6 +180,22 @@ struct TrainingRun {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+struct TrainingRecipe {
+    id: String,
+    name: String,
+    model_preset: String,
+    epochs: u32,
+    batch_size: u32,
+    learning_rate: f64,
+    sequence_length: u32,
+    max_windows: u32,
+    early_stopping_patience: u32,
+    early_stopping_min_delta: f64,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct ExportPackage {
     id: String,
     run_id: String,
@@ -242,6 +267,32 @@ struct StartTrainingRequest {
     early_stopping_min_delta: f64,
     #[serde(default = "default_training_max_windows")]
     max_windows: u32,
+    #[serde(default = "default_training_batch_size")]
+    batch_size: u32,
+    #[serde(default = "default_training_learning_rate")]
+    learning_rate: f64,
+    #[serde(default = "default_training_sequence_length")]
+    sequence_length: u32,
+}
+
+#[derive(Deserialize)]
+struct SaveTrainingRecipeRequest {
+    #[serde(default)]
+    id: Option<String>,
+    name: String,
+    model_preset: String,
+    epochs: u32,
+    batch_size: u32,
+    learning_rate: f64,
+    sequence_length: u32,
+    max_windows: u32,
+    early_stopping_patience: u32,
+    early_stopping_min_delta: f64,
+}
+
+#[derive(Deserialize)]
+struct DeleteTrainingRecipeRequest {
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -451,6 +502,39 @@ fn update_runtime_settings(
     let db = state.db.lock().map_err(lock_error)?;
     save_runtime_settings(&db, &settings)?;
     Ok(settings)
+}
+
+#[tauri::command]
+fn list_training_recipes(state: tauri::State<AppState>) -> Result<Vec<TrainingRecipe>, String> {
+    let db = state.db.lock().map_err(lock_error)?;
+    load_training_recipes(&db)
+}
+
+#[tauri::command]
+fn save_training_recipe(
+    state: tauri::State<AppState>,
+    payload: SaveTrainingRecipeRequest,
+) -> Result<TrainingRecipe, String> {
+    let db = state.db.lock().map_err(lock_error)?;
+    let recipe = normalize_training_recipe(payload)?;
+    upsert_training_recipe(&db, &recipe)?;
+    Ok(recipe)
+}
+
+#[tauri::command]
+fn delete_training_recipe(
+    state: tauri::State<AppState>,
+    payload: DeleteTrainingRecipeRequest,
+) -> Result<Vec<TrainingRecipe>, String> {
+    let recipe_id = non_empty_string(&payload.id)
+        .ok_or_else(|| "Training recipe id is required.".to_string())?;
+    let db = state.db.lock().map_err(lock_error)?;
+    db.execute(
+        "DELETE FROM training_recipes WHERE id = ?1",
+        params![recipe_id],
+    )
+    .map_err(to_error)?;
+    load_training_recipes(&db)
 }
 
 #[tauri::command]
@@ -845,12 +929,16 @@ fn start_training(
     payload: StartTrainingRequest,
 ) -> Result<ProjectDetail, String> {
     let run_id = format!("run_{}", Uuid::new_v4().simple());
+    let model_preset = normalize_model_preset(&payload.preset)?.to_string();
     let epochs = normalize_training_epochs(payload.epochs);
     let early_stopping_patience =
         normalize_early_stopping_patience(payload.early_stopping_patience);
     let early_stopping_min_delta =
         normalize_early_stopping_min_delta(payload.early_stopping_min_delta);
     let max_windows = normalize_training_max_windows(payload.max_windows);
+    let batch_size = normalize_training_batch_size(payload.batch_size);
+    let learning_rate = normalize_training_learning_rate(payload.learning_rate);
+    let sequence_length = normalize_training_sequence_length(payload.sequence_length);
     let (project_dir, selected_backend) = {
         let db = state.db.lock().map_err(lock_error)?;
         let project = load_project_detail(&db, &payload.project_id)?;
@@ -879,12 +967,12 @@ fn start_training(
             "run_id": &run_id,
             "run_dir": &run_dir,
             "prepared_dir": project_dir.join("audio/prepared"),
-            "preset": &payload.preset,
+            "preset": &model_preset,
             "backend": selected_backend,
             "epochs": epochs,
-            "batch_size": 16,
-            "learning_rate": 0.001,
-            "sequence_length": 1024,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "sequence_length": sequence_length,
             "max_windows": max_windows,
             "early_stopping_patience": early_stopping_patience,
             "early_stopping_min_delta": early_stopping_min_delta,
@@ -896,7 +984,7 @@ fn start_training(
     let log_path = run_dir.join("events.jsonl");
     let run = TrainingRun {
         id: run_id.clone(),
-        preset: payload.preset.clone(),
+        preset: model_preset,
         status: RunStatus::Running,
         device: "pending".to_string(),
         epochs: 0,
@@ -1325,6 +1413,9 @@ pub fn run() {
             app_status,
             get_runtime_settings,
             update_runtime_settings,
+            list_training_recipes,
+            save_training_recipe,
+            delete_training_recipe,
             inspect_device,
             list_projects,
             get_project,
@@ -1399,6 +1490,78 @@ fn save_runtime_settings(db: &Connection, settings: &RuntimeSettings) -> Result<
             value_json = excluded.value_json,
             updated_at = excluded.updated_at",
         params![RUNTIME_SETTINGS_KEY, raw, now()],
+    )
+    .map_err(to_error)?;
+    Ok(())
+}
+
+fn load_training_recipes(db: &Connection) -> Result<Vec<TrainingRecipe>, String> {
+    let mut stmt = db
+        .prepare(
+            "SELECT id, name, model_preset, epochs, batch_size, learning_rate, sequence_length,
+                    max_windows, early_stopping_patience, early_stopping_min_delta,
+                    created_at, updated_at
+             FROM training_recipes
+             ORDER BY updated_at DESC, name ASC",
+        )
+        .map_err(to_error)?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(TrainingRecipe {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                model_preset: row.get(2)?,
+                epochs: row.get(3)?,
+                batch_size: row.get(4)?,
+                learning_rate: row.get(5)?,
+                sequence_length: row.get(6)?,
+                max_windows: row.get(7)?,
+                early_stopping_patience: row.get(8)?,
+                early_stopping_min_delta: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        })
+        .map_err(to_error)?;
+
+    let mut recipes = Vec::new();
+    for row in rows {
+        recipes.push(row.map_err(to_error)?);
+    }
+    Ok(recipes)
+}
+
+fn upsert_training_recipe(db: &Connection, recipe: &TrainingRecipe) -> Result<(), String> {
+    db.execute(
+        "INSERT INTO training_recipes
+         (id, name, model_preset, epochs, batch_size, learning_rate, sequence_length,
+          max_windows, early_stopping_patience, early_stopping_min_delta, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            model_preset = excluded.model_preset,
+            epochs = excluded.epochs,
+            batch_size = excluded.batch_size,
+            learning_rate = excluded.learning_rate,
+            sequence_length = excluded.sequence_length,
+            max_windows = excluded.max_windows,
+            early_stopping_patience = excluded.early_stopping_patience,
+            early_stopping_min_delta = excluded.early_stopping_min_delta,
+            updated_at = excluded.updated_at",
+        params![
+            recipe.id,
+            recipe.name,
+            recipe.model_preset,
+            recipe.epochs,
+            recipe.batch_size,
+            recipe.learning_rate,
+            recipe.sequence_length,
+            recipe.max_windows,
+            recipe.early_stopping_patience,
+            recipe.early_stopping_min_delta,
+            recipe.created_at,
+            recipe.updated_at
+        ],
     )
     .map_err(to_error)?;
     Ok(())
@@ -1507,6 +1670,18 @@ fn default_early_stopping_min_delta() -> f64 {
 
 fn default_training_max_windows() -> u32 {
     512
+}
+
+fn default_training_batch_size() -> u32 {
+    16
+}
+
+fn default_training_learning_rate() -> f64 {
+    0.001
+}
+
+fn default_training_sequence_length() -> u32 {
+    1024
 }
 
 fn validate_capture_wav_path(value: &str, label: &str) -> Result<PathBuf, String> {
@@ -1647,6 +1822,67 @@ fn normalize_training_max_windows(value: u32) -> u32 {
     value.clamp(32, 16_384)
 }
 
+fn normalize_training_batch_size(value: u32) -> u32 {
+    if value == 0 {
+        return default_training_batch_size();
+    }
+    value.clamp(1, 512)
+}
+
+fn normalize_training_learning_rate(value: f64) -> f64 {
+    if value.is_finite() && value > 0.0 {
+        value.clamp(0.000001, 1.0)
+    } else {
+        default_training_learning_rate()
+    }
+}
+
+fn normalize_training_sequence_length(value: u32) -> u32 {
+    if value == 0 {
+        return default_training_sequence_length();
+    }
+    value.clamp(32, 65_536)
+}
+
+fn normalize_model_preset(value: &str) -> Result<&'static str, String> {
+    let normalized = value.trim();
+    MODEL_PRESETS
+        .iter()
+        .copied()
+        .find(|preset| *preset == normalized)
+        .ok_or_else(|| {
+            format!(
+                "Unknown model preset '{normalized}'. Known presets: {}.",
+                MODEL_PRESETS.join(", ")
+            )
+        })
+}
+
+fn normalize_training_recipe(payload: SaveTrainingRecipeRequest) -> Result<TrainingRecipe, String> {
+    let name = non_empty_string(&payload.name)
+        .ok_or_else(|| "Training recipe name is required.".to_string())?;
+    let timestamp = now();
+    Ok(TrainingRecipe {
+        id: payload
+            .id
+            .and_then(|id| non_empty_string(&id))
+            .unwrap_or_else(|| format!("recipe_{}", Uuid::new_v4().simple())),
+        name,
+        model_preset: normalize_model_preset(&payload.model_preset)?.to_string(),
+        epochs: normalize_training_epochs(payload.epochs),
+        batch_size: normalize_training_batch_size(payload.batch_size),
+        learning_rate: normalize_training_learning_rate(payload.learning_rate),
+        sequence_length: normalize_training_sequence_length(payload.sequence_length),
+        max_windows: normalize_training_max_windows(payload.max_windows),
+        early_stopping_patience: normalize_early_stopping_patience(payload.early_stopping_patience),
+        early_stopping_min_delta: normalize_early_stopping_min_delta(
+            payload.early_stopping_min_delta,
+        ),
+        created_at: timestamp.clone(),
+        updated_at: timestamp,
+    })
+}
+
 fn configure_database(db: &mut Connection) -> Result<(), String> {
     db.execute_batch(
         r#"
@@ -1689,9 +1925,10 @@ fn apply_migrations(db: &mut Connection) -> Result<(), String> {
     Ok(())
 }
 
-const MIGRATIONS: &[(&str, &str)] = &[(
-    "001_initial_project_store",
-    r#"
+const MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "001_initial_project_store",
+        r#"
     CREATE TABLE projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -1784,7 +2021,27 @@ const MIGRATIONS: &[(&str, &str)] = &[(
         updated_at TEXT NOT NULL
     );
     "#,
-)];
+    ),
+    (
+        "002_training_recipes",
+        r#"
+    CREATE TABLE training_recipes (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        model_preset TEXT NOT NULL,
+        epochs INTEGER NOT NULL,
+        batch_size INTEGER NOT NULL,
+        learning_rate REAL NOT NULL,
+        sequence_length INTEGER NOT NULL,
+        max_windows INTEGER NOT NULL,
+        early_stopping_patience INTEGER NOT NULL,
+        early_stopping_min_delta REAL NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    "#,
+    ),
+];
 
 fn migrate_legacy_store(db: &Connection, store_path: &Path) -> Result<(), String> {
     let existing_projects: i64 = db
@@ -3823,6 +4080,69 @@ mod tests {
             settings.external_python_path,
             Some("/tmp/rttrainer-python".to_string())
         );
+    }
+
+    #[test]
+    fn training_recipes_round_trip_through_sqlite() {
+        let mut db = Connection::open_in_memory().expect("open in-memory sqlite");
+        configure_database(&mut db).expect("migrate sqlite");
+
+        let recipe = normalize_training_recipe(SaveTrainingRecipeRequest {
+            id: None,
+            name: "  Rhythm long run  ".to_string(),
+            model_preset: "conv_gru_hybrid".to_string(),
+            epochs: 80,
+            batch_size: 24,
+            learning_rate: 0.0005,
+            sequence_length: 2048,
+            max_windows: 4096,
+            early_stopping_patience: 12,
+            early_stopping_min_delta: 0.00005,
+        })
+        .expect("normalize recipe");
+        upsert_training_recipe(&db, &recipe).expect("save recipe");
+
+        let saved = load_training_recipes(&db).expect("load recipes");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "Rhythm long run");
+        assert_eq!(saved[0].model_preset, "conv_gru_hybrid");
+        assert_eq!(saved[0].epochs, 80);
+        assert_eq!(saved[0].sequence_length, 2048);
+
+        let updated = normalize_training_recipe(SaveTrainingRecipeRequest {
+            id: Some(recipe.id.clone()),
+            name: "Rhythm production".to_string(),
+            model_preset: "lstm_standard".to_string(),
+            epochs: 999,
+            batch_size: 0,
+            learning_rate: f64::NAN,
+            sequence_length: 0,
+            max_windows: 99_999,
+            early_stopping_patience: 999,
+            early_stopping_min_delta: 2.0,
+        })
+        .expect("normalize updated recipe");
+        upsert_training_recipe(&db, &updated).expect("update recipe");
+
+        let saved = load_training_recipes(&db).expect("reload recipes");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].name, "Rhythm production");
+        assert_eq!(saved[0].model_preset, "lstm_standard");
+        assert_eq!(saved[0].epochs, 500);
+        assert_eq!(saved[0].batch_size, default_training_batch_size());
+        assert_eq!(saved[0].learning_rate, default_training_learning_rate());
+        assert_eq!(saved[0].sequence_length, default_training_sequence_length());
+        assert_eq!(saved[0].max_windows, 16_384);
+        assert_eq!(saved[0].early_stopping_patience, 100);
+        assert_eq!(saved[0].early_stopping_min_delta, 1.0);
+
+        db.execute(
+            "DELETE FROM training_recipes WHERE id = ?1",
+            params![recipe.id],
+        )
+        .expect("delete recipe");
+        let saved = load_training_recipes(&db).expect("reload after delete");
+        assert!(saved.is_empty());
     }
 
     fn write_test_wav(path: &Path, samples: &[i16], sample_rate: u32) {
