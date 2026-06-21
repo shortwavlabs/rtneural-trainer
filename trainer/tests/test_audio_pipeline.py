@@ -213,14 +213,36 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertGreater(available_windows, 8)
         self.assertEqual(dataset.summary["selection"], "sampled_across_capture")
 
+    def test_dataset_preview_defaults_to_three_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "input.wav"
+            target_path = root / "target.wav"
+            samples = alternating_signal(240_000)
+            write_wav_mono(input_path, samples, 48_000)
+            write_wav_mono(target_path, samples, 48_000)
+
+            dataset = build_windowed_dataset(
+                input_path,
+                target_path,
+                sequence_length=512,
+                max_windows=16,
+                seed=9,
+                backend="list",
+            )
+
+        self.assertEqual(len(dataset.test_target), 144_000)
+        self.assertEqual(int(dataset.summary["test_samples"]), 144_000)
+        self.assertAlmostEqual(float(dataset.summary["preview_seconds"]), 3.0)
+
     def test_dataset_preview_prefers_active_target_excerpt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             input_path = root / "input.wav"
             target_path = root / "target.wav"
-            dry = [0.0] * 16_000
-            target = [0.0] * 16_000
-            for index in range(10_000, 12_000):
+            dry = [0.0] * 240_000
+            target = [0.0] * 240_000
+            for index in range(180_000, 184_000):
                 dry[index] = 0.2
                 target[index] = 0.4 if index % 2 == 0 else -0.4
             write_wav_mono(input_path, dry, 48_000)
@@ -236,7 +258,8 @@ class AudioPipelineTests(unittest.TestCase):
             )
 
         self.assertGreater(max(abs(sample) for sample in dataset.test_target), 0.3)
-        self.assertGreaterEqual(int(dataset.summary["test_start_sample"]), 8_000)
+        self.assertEqual(len(dataset.test_target), 144_000)
+        self.assertGreaterEqual(int(dataset.summary["test_start_sample"]), 40_000)
 
 
 def alternating_signal(length: int) -> list[float]:

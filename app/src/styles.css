@@ -1123,6 +1123,7 @@ dd,
 .curve-card {
   display: grid;
   gap: 10px;
+  min-height: 310px;
 }
 
 .curve-header {
@@ -1146,7 +1147,7 @@ dd,
 
 .curve-card svg {
   width: 100%;
-  height: 150px;
+  height: clamp(260px, 32vh, 420px);
 }
 
 .curve-line {
@@ -1154,16 +1155,45 @@ dd,
   stroke: #8ee690;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.4;
+  stroke-width: 5;
+  vector-effect: non-scaling-stroke;
 }
 
-.curve-baseline {
+.curve-baseline,
+.curve-gridline,
+.curve-axis {
   stroke: #303735;
+  vector-effect: non-scaling-stroke;
+}
+
+.curve-baseline,
+.curve-axis {
   stroke-width: 1;
+}
+
+.curve-gridline {
+  stroke-width: 0.8;
+  opacity: 0.72;
+}
+
+.curve-axis-label {
+  fill: #9da9a1;
+  font-size: 20px;
+  font-weight: 700;
 }
 
 .curve-card circle {
   fill: #f2bf5e;
+  stroke: #101212;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.curve-note {
+  margin: 0;
+  color: #f5e0b8;
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 .curve-empty {

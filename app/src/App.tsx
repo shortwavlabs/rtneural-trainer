@@ -2116,6 +2116,7 @@ function TrainingEvidence({
   const dataset = getNestedObject(report, ["dataset"]);
   const selectedWindows = getNumber(dataset, "selected_windows");
   const availableWindows = getNumber(dataset, "available_windows");
+  const trend = validationTrend(history);
 
   return (
     <div className="training-evidence">
@@ -2123,12 +2124,16 @@ function TrainingEvidence({
       <ValidationCurve history={history} loading={loading} />
       <div className="evidence-grid">
         <Metric
-          label="Early stopping"
+          label="Curve trend"
+          value={trend}
+        />
+        <Metric
+          label="Best epoch"
           value={
             stopped
               ? `Stopped at ${getNumber(earlyStopping, "epoch") ?? "?"}`
               : bestEpoch !== null
-                ? `Best epoch ${bestEpoch}`
+                ? String(bestEpoch)
                 : "waiting"
           }
         />
@@ -2177,14 +2182,32 @@ function ValidationCurve({
   const values = history
     .map((point) => point.valEsr)
     .filter((value): value is number => value !== null);
-  const max = Math.max(...values, 0.001);
-  const min = Math.min(...values, max);
-  const range = Math.max(0.0001, max - min);
+  const chart = {
+    width: 1000,
+    height: 360,
+    left: 66,
+    right: 24,
+    top: 24,
+    bottom: 46,
+  };
+  const plotWidth = chart.width - chart.left - chart.right;
+  const plotHeight = chart.height - chart.top - chart.bottom;
+  const rawMax = Math.max(...values, 0.001);
+  const rawMin = Math.min(...values, rawMax);
+  const rawRange = Math.max(0.0001, rawMax - rawMin);
+  const domainMax = rawMax + rawRange * 0.08;
+  const domainMin = Math.max(0, rawMin - rawRange * 0.08);
+  const domainRange = Math.max(0.0001, domainMax - domainMin);
+  const xForIndex = (index: number) =>
+    chart.left + (history.length === 1 ? plotWidth / 2 : (index / (history.length - 1)) * plotWidth);
+  const yForValue = (value: number | null) => {
+    const safeValue = value ?? domainMax;
+    return chart.top + ((domainMax - safeValue) / domainRange) * plotHeight;
+  };
   const path = history
     .map((point, index) => {
-      const x = history.length === 1 ? 0 : (index / (history.length - 1)) * 100;
-      const normalized = point.valEsr === null ? max : point.valEsr;
-      const y = 90 - ((normalized - min) / range) * 70;
+      const x = xForIndex(index);
+      const y = yForValue(point.valEsr);
       return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
     })
     .join(" ");
@@ -2196,6 +2219,17 @@ function ValidationCurve({
         : current,
     history[0],
   );
+  const first = history.find((point) => point.valEsr !== null);
+  const improvement =
+    first?.valEsr !== null && first?.valEsr !== undefined && latest.valEsr !== null
+      ? Math.max(0, first.valEsr - latest.valEsr)
+      : null;
+  const stillImproving =
+    history.length >= 8 &&
+    latest.valEsr !== null &&
+    best.valEsr !== null &&
+    latest.epoch === best.epoch;
+  const gridValues = [domainMax, domainMin + domainRange / 2, domainMin];
 
   return (
     <div className="curve-card">
@@ -2204,18 +2238,57 @@ function ValidationCurve({
           <span>Validation ESR</span>
           <strong>{latest.valEsr !== null ? latest.valEsr.toFixed(4) : "waiting"}</strong>
         </div>
-        <small>Best epoch {best.epoch}</small>
+        <small>
+          Best epoch {best.epoch}
+          {improvement !== null ? ` · -${improvement.toFixed(4)} ESR` : ""}
+        </small>
       </div>
-      <svg viewBox="0 0 100 100" role="img" aria-label="Validation ESR curve">
-        <path d="M 0 90 L 100 90" className="curve-baseline" />
+      <svg
+        viewBox={`0 0 ${chart.width} ${chart.height}`}
+        role="img"
+        aria-label="Validation ESR curve"
+      >
+        {gridValues.map((value, index) => {
+          const y = yForValue(value);
+          return (
+            <g key={`${value}-${index}`}>
+              <path
+                d={`M ${chart.left} ${y.toFixed(2)} L ${chart.width - chart.right} ${y.toFixed(2)}`}
+                className={index === gridValues.length - 1 ? "curve-baseline" : "curve-gridline"}
+              />
+              <text x="8" y={y + 4} className="curve-axis-label">
+                {value.toFixed(3)}
+              </text>
+            </g>
+          );
+        })}
+        <path
+          d={`M ${chart.left} ${chart.top} L ${chart.left} ${chart.height - chart.bottom} L ${chart.width - chart.right} ${chart.height - chart.bottom}`}
+          className="curve-axis"
+        />
+        <path
+          d={`M ${chart.left} ${chart.height - chart.bottom} L ${chart.width - chart.right} ${chart.height - chart.bottom}`}
+          className="curve-baseline"
+        />
         <path d={path} className="curve-line" />
         {history.map((point, index) => {
           if (!point.isBest || point.valEsr === null) return null;
-          const x = history.length === 1 ? 0 : (index / (history.length - 1)) * 100;
-          const y = 90 - ((point.valEsr - min) / range) * 70;
-          return <circle cx={x} cy={y} r="2.2" key={`${point.epoch}-${index}`} />;
+          return (
+            <circle
+              cx={xForIndex(index)}
+              cy={yForValue(point.valEsr)}
+              r="5"
+              key={`${point.epoch}-${index}`}
+            />
+          );
         })}
       </svg>
+      {stillImproving ? (
+        <p className="curve-note">
+          Best value landed at the final epoch. This run was still improving, so a
+          longer run or more patience may be worth testing.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -3323,6 +3396,28 @@ function historyFromReport(report: Record<string, unknown> | null): TrainingHist
       };
     })
     .filter((point): point is TrainingHistoryPoint => Boolean(point && point.epoch > 0));
+}
+
+function validationTrend(history: TrainingHistoryPoint[]) {
+  const values = history
+    .filter((point) => point.valEsr !== null)
+    .map((point) => ({ epoch: point.epoch, value: point.valEsr as number }));
+  if (values.length < 4) return "waiting";
+
+  const latest = values[values.length - 1];
+  const best = values.reduce((current, point) =>
+    point.value < current.value ? point : current,
+  );
+  const first = values[0];
+  const improvement = first.value - latest.value;
+  const tail = values.slice(-Math.min(8, values.length));
+  const tailImprovement = tail[0].value - tail[tail.length - 1].value;
+
+  if (latest.epoch === best.epoch && tailImprovement > 0.0005) {
+    return "still improving";
+  }
+  if (improvement > 0.0005) return "improved";
+  return "flat";
 }
 
 function qualityVerdict(

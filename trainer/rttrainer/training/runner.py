@@ -35,6 +35,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     learning_rate = float(manifest.get("learning_rate", 1e-3))
     sequence_length = int(manifest.get("sequence_length", 1024))
     max_windows = int(manifest.get("max_windows", 512))
+    preview_seconds = float(manifest.get("preview_seconds", 3.0))
     early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
     early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
     input_path, target_path = resolve_audio_paths(manifest)
@@ -49,6 +50,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
         max_windows,
         seed,
         backend="numpy",
+        preview_seconds=preview_seconds,
     )
     best_model_path = checkpoint_dir / "best-model.keras"
     checkpoint_metadata_path = checkpoint_dir / "best-checkpoint.json"
@@ -227,6 +229,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     learning_rate = float(manifest.get("learning_rate", 1e-3))
     sequence_length = int(manifest.get("sequence_length", 1024))
     max_windows = int(manifest.get("max_windows", 512))
+    preview_seconds = float(manifest.get("preview_seconds", 3.0))
     early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
     early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
     input_path, target_path = resolve_audio_paths(manifest)
@@ -242,6 +245,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
         max_windows,
         seed,
         backend="torch",
+        preview_seconds=preview_seconds,
     )
     model = build_model(preset).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)

@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 from rttrainer.data.audio_io import read_wav_mono
 
+DEFAULT_PREVIEW_SECONDS = 3.0
+MIN_PREVIEW_SEQUENCE_MULTIPLIER = 4
+
 
 @dataclass(frozen=True)
 class WindowedDataset:
@@ -25,6 +28,7 @@ def build_windowed_dataset(
     max_windows: int,
     seed: int,
     backend: str = "torch",
+    preview_seconds: float = DEFAULT_PREVIEW_SECONDS,
 ) -> WindowedDataset:
     input_audio = read_wav_mono(input_path)
     target_audio = read_wav_mono(target_path)
@@ -70,11 +74,17 @@ def build_windowed_dataset(
     train_y = make_backend_array(backend, windows_y[:train_count])
     val_x = make_backend_array(backend, windows_x[train_count : train_count + val_count])
     val_y = make_backend_array(backend, windows_y[train_count : train_count + val_count])
+    minimum_preview_samples = sequence_length * MIN_PREVIEW_SEQUENCE_MULTIPLIER
+    requested_preview_samples = int(
+        round(input_audio.sample_rate * max(0.1, preview_seconds))
+    )
+    preview_samples = max(minimum_preview_samples, requested_preview_samples)
     test_start, test_end = choose_active_excerpt(
         target_samples,
-        excerpt_length=sequence_length * 4,
+        excerpt_length=preview_samples,
         stride=stride,
     )
+    test_samples = test_end - test_start
 
     return WindowedDataset(
         train_x=train_x,
@@ -93,8 +103,9 @@ def build_windowed_dataset(
             "selected_windows": len(windows_x),
             "train_windows": train_count,
             "validation_windows": val_count,
-            "test_samples": test_end - test_start,
+            "test_samples": test_samples,
             "test_start_sample": test_start,
+            "preview_seconds": test_samples / input_audio.sample_rate,
             "selection": "sampled_across_capture"
             if total_windows > len(windows_x)
             else "all_windows",
