@@ -170,6 +170,10 @@ export interface CreateProjectRequest {
   target_kind: TargetKind;
 }
 
+export interface DeleteProjectRequest {
+  project_id: string;
+}
+
 export interface UpdateAudioRequest {
   project_id: string;
   input_path: string;

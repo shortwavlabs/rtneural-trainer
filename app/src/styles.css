@@ -568,11 +568,31 @@ dd,
   align-items: end;
 }
 
+.project-header-side {
+  display: grid;
+  gap: 12px;
+}
+
 .path-line {
   margin-bottom: 0;
   overflow-wrap: anywhere;
   color: #9da9a1;
   font-size: 0.86rem;
+}
+
+.delete-confirmation,
+.project-action-hint {
+  margin: 8px 0 0;
+  color: #f0b0a8;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.project-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .summary-strip {
@@ -1581,6 +1601,10 @@ dd,
 
   .summary-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .project-actions {
+    justify-content: flex-start;
   }
 
   .span-4,

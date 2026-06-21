@@ -237,6 +237,11 @@ struct CreateProjectRequest {
 }
 
 #[derive(Deserialize)]
+struct DeleteProjectRequest {
+    project_id: String,
+}
+
+#[derive(Deserialize)]
 struct UpdateAudioRequest {
     project_id: String,
     input_path: String,
@@ -582,6 +587,17 @@ fn get_project(state: tauri::State<AppState>, project_id: String) -> Result<Proj
 }
 
 #[tauri::command]
+fn delete_project(
+    state: tauri::State<AppState>,
+    payload: DeleteProjectRequest,
+) -> Result<Vec<ProjectSummary>, String> {
+    let db = state.db.lock().map_err(lock_error)?;
+    delete_project_by_id(&db, &payload.project_id, &state.projects_dir)?;
+    let projects = load_all_projects(&db)?;
+    Ok(projects.iter().map(summarize_project).collect())
+}
+
+#[tauri::command]
 fn list_project_events(
     state: tauri::State<AppState>,
     project_id: String,
@@ -705,6 +721,58 @@ fn create_project_record(
     let db = state.db.lock().map_err(lock_error)?;
     insert_project(&db, &project)?;
     Ok(project)
+}
+
+fn delete_project_by_id(
+    db: &Connection,
+    project_id: &str,
+    projects_dir: &Path,
+) -> Result<(), String> {
+    let project_id = project_id.trim();
+    if project_id.is_empty() {
+        return Err("Project id is required.".to_string());
+    }
+
+    ensure_no_active_project_job(db, project_id)?;
+    let project_dir: String = db
+        .query_row(
+            "SELECT project_dir FROM projects WHERE id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(to_error)?
+        .ok_or_else(|| "Project not found.".to_string())?;
+    let project_path = PathBuf::from(project_dir);
+    ensure_managed_project_dir(&project_path, projects_dir)?;
+
+    db.execute("DELETE FROM projects WHERE id = ?1", params![project_id])
+        .map_err(to_error)?;
+
+    match fs::remove_dir_all(&project_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Project was removed from the database, but its folder could not be deleted: {error}"
+        )),
+    }
+}
+
+fn ensure_managed_project_dir(project_dir: &Path, projects_dir: &Path) -> Result<(), String> {
+    let root = projects_dir.canonicalize().map_err(to_error)?;
+    let project = if project_dir.exists() {
+        project_dir.canonicalize().map_err(to_error)?
+    } else {
+        project_dir.to_path_buf()
+    };
+
+    if project == root || !project.starts_with(&root) {
+        return Err(
+            "Project folder is outside the managed project directory; delete it manually."
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1419,6 +1487,7 @@ pub fn run() {
             inspect_device,
             list_projects,
             get_project,
+            delete_project,
             list_project_events,
             get_run_preview,
             create_project,
@@ -2545,7 +2614,7 @@ fn ensure_no_active_project_job(db: &Connection, project_id: &str) -> Result<(),
         .map_err(to_error)?;
     if let Some(operation) = active_job {
         return Err(format!(
-            "Project already has an active {operation} job. Wait, cancel, or resume before starting another job."
+            "Project already has an active {operation} job. Wait, cancel, or resume before changing this project."
         ));
     }
     Ok(())
@@ -4035,6 +4104,75 @@ mod tests {
             )
             .expect("query recovered project status");
         assert_eq!(project_status, "ready");
+    }
+
+    #[test]
+    fn delete_project_removes_sqlite_rows_and_managed_folder() {
+        let mut db = Connection::open_in_memory().expect("open in-memory sqlite");
+        configure_database(&mut db).expect("migrate sqlite");
+
+        let root =
+            std::env::temp_dir().join(format!("rttrainer-delete-test-{}", Uuid::new_v4().simple()));
+        let project_dir = root.join("project_delete_test");
+        fs::create_dir_all(project_dir.join("runs")).expect("create temp project dir");
+        fs::write(project_dir.join("runs/progress.jsonl"), "{}\n").expect("write artifact");
+        let timestamp = now();
+        let project = ProjectDetail {
+            id: "project_delete_test".to_string(),
+            name: "Delete me".to_string(),
+            target_kind: TargetKind::Generic,
+            status: ProjectStatus::Draft,
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+            notes: String::new(),
+            project_dir: project_dir.display().to_string(),
+            audio: None,
+            runs: Vec::new(),
+            exports: Vec::new(),
+        };
+        insert_project(&db, &project).expect("insert project");
+
+        let run = TrainingRun {
+            id: "run_delete_test".to_string(),
+            preset: "lstm_standard".to_string(),
+            status: RunStatus::Completed,
+            device: "cpu".to_string(),
+            epochs: 1,
+            created_at: now(),
+            updated_at: now(),
+            metrics: None,
+            log_path: "runs/run_delete_test/events.jsonl".to_string(),
+        };
+        insert_training_run(
+            &db,
+            &project.id,
+            &run,
+            Path::new(&project.project_dir),
+            &project_dir.join("runs/run_delete_test"),
+        )
+        .expect("insert completed run");
+
+        delete_project_by_id(&db, &project.id, &root).expect("delete project");
+
+        let project_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM projects WHERE id = ?1",
+                params![project.id],
+                |row| row.get(0),
+            )
+            .expect("count projects");
+        let run_count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM training_runs WHERE id = 'run_delete_test'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count runs");
+        assert_eq!(project_count, 0);
+        assert_eq!(run_count, 0);
+        assert!(!project_dir.exists());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

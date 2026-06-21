@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppStatus,
   CreateProjectRequest,
+  DeleteProjectRequest,
   DeleteTrainingRecipeRequest,
   DeviceInspection,
   ExportFolderRequest,
@@ -46,14 +47,16 @@ export const api = {
   inspectDevice: () => call<DeviceInspection>("inspect_device"),
   listProjects: () => call<ProjectSummary[]>("list_projects"),
   listProjectEvents: (projectId: string) =>
-    call<SidecarProgressEvent[]>("list_project_events", { project_id: projectId }),
+    call<SidecarProgressEvent[]>("list_project_events", { projectId }),
   getRunPreview: (payload: RunPreviewRequest) =>
     call<RunPreview>("get_run_preview", { payload }),
   createProject: (payload: CreateProjectRequest) =>
     call<ProjectDetail>("create_project", { payload }),
+  deleteProject: (payload: DeleteProjectRequest) =>
+    call<ProjectSummary[]>("delete_project", { payload }),
   createSampleProject: () => call<ProjectDetail>("create_sample_project"),
   getProject: (projectId: string) =>
-    call<ProjectDetail>("get_project", { project_id: projectId }),
+    call<ProjectDetail>("get_project", { projectId }),
   updateAudio: (payload: UpdateAudioRequest) =>
     call<ProjectDetail>("update_project_audio", { payload }),
   updateAlignment: (payload: UpdateAlignmentRequest) =>

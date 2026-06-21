@@ -384,6 +384,30 @@ export default function App() {
     if (nextTab) setActiveTab(nextTab);
   }
 
+  async function deleteSelectedProject() {
+    if (!project) return;
+
+    setBusy("delete-project");
+    setError(null);
+    try {
+      const deletedIndex = projects.findIndex((item) => item.id === project.id);
+      const nextProjects = await api.deleteProject({ project_id: project.id });
+      const nextSelectedProject =
+        nextProjects[Math.min(Math.max(deletedIndex, 0), nextProjects.length - 1)] ??
+        null;
+
+      setProjects(nextProjects);
+      setProject(null);
+      setProgressEvents([]);
+      setSelectedId(nextSelectedProject?.id ?? null);
+      setActiveTab("capture");
+    } catch (caught) {
+      setError(toFriendlyMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const hasActiveRun = Boolean(
     project?.runs.some((run) =>
       ["queued", "preparing", "running", "cancelling"].includes(run.status),
@@ -393,6 +417,11 @@ export default function App() {
     project?.exports.some((item) => ["pending", "validating"].includes(item.status)),
   );
   const progressActive = sidecarBusy || hasActiveRun || hasActiveExport;
+  const deleteDisabledReason = progressActive
+    ? "Finish or cancel the active training/export job before deleting."
+    : busy && busy !== "delete-project"
+      ? "Finish the current action before deleting this project."
+      : null;
 
   return (
     <div className="app-shell">
@@ -449,7 +478,12 @@ export default function App() {
 
         {project ? (
           <>
-            <ProjectHeader project={project} />
+            <ProjectHeader
+              project={project}
+              deleteBusy={busy === "delete-project"}
+              deleteDisabledReason={deleteDisabledReason}
+              onDelete={() => void deleteSelectedProject()}
+            />
             <StepTabs activeTab={activeTab} onChange={setActiveTab} />
             <section className="work-surface">
               {activeTab === "capture" ? (
@@ -949,9 +983,29 @@ function PackageVersion({
   );
 }
 
-function ProjectHeader({ project }: { project: ProjectDetail }) {
+function ProjectHeader({
+  project,
+  deleteBusy,
+  deleteDisabledReason,
+  onDelete,
+}: {
+  project: ProjectDetail;
+  deleteBusy: boolean;
+  deleteDisabledReason: string | null;
+  onDelete: () => void;
+}) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const latestRun = project.runs[project.runs.length - 1];
   const latestExport = project.exports[project.exports.length - 1];
+  const deleteLabel = deleteBusy
+    ? "Deleting"
+    : confirmDelete
+      ? "Confirm delete"
+      : "Delete project";
+
+  useEffect(() => {
+    setConfirmDelete(false);
+  }, [project.id]);
 
   return (
     <header className="project-header">
@@ -959,15 +1013,53 @@ function ProjectHeader({ project }: { project: ProjectDetail }) {
         <p className="eyebrow">{targetLabels[project.target_kind]} capture</p>
         <h2>{project.name}</h2>
         <p className="path-line">{project.project_dir}</p>
+        {confirmDelete ? (
+          <p className="delete-confirmation" role="status">
+            This removes the project, runs, exports, reports, and managed files.
+          </p>
+        ) : null}
       </div>
-      <div className="summary-strip">
-        <Metric label="Audio" value={project.audio?.status ?? "missing"} />
-        <Metric label="Runs" value={String(project.runs.length)} />
-        <Metric
-          label="Best ESR"
-          value={latestRun?.metrics ? latestRun.metrics.esr.toFixed(3) : "none"}
-        />
-        <Metric label="Export" value={latestExport?.status ?? "blocked"} />
+      <div className="project-header-side">
+        <div className="summary-strip">
+          <Metric label="Audio" value={project.audio?.status ?? "missing"} />
+          <Metric label="Runs" value={String(project.runs.length)} />
+          <Metric
+            label="Best ESR"
+            value={latestRun?.metrics ? latestRun.metrics.esr.toFixed(3) : "none"}
+          />
+          <Metric label="Export" value={latestExport?.status ?? "blocked"} />
+        </div>
+        <div className="project-actions" aria-live="polite">
+          {confirmDelete ? (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={deleteBusy}
+              onClick={() => setConfirmDelete(false)}
+            >
+              Cancel
+            </button>
+          ) : null}
+          <button
+            className="danger-button"
+            type="button"
+            disabled={deleteBusy || Boolean(deleteDisabledReason)}
+            title={deleteDisabledReason ?? "Delete project"}
+            onClick={() => {
+              if (!confirmDelete) {
+                setConfirmDelete(true);
+                return;
+              }
+              onDelete();
+            }}
+          >
+            {deleteBusy ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}
+            {deleteLabel}
+          </button>
+        </div>
+        {deleteDisabledReason ? (
+          <p className="project-action-hint">{deleteDisabledReason}</p>
+        ) : null}
       </div>
     </header>
   );
