@@ -9,6 +9,7 @@ import type {
   ExportRunRequest,
   ProjectDetail,
   ProjectSummary,
+  RenameProjectRequest,
   RunControlRequest,
   RunPreview,
   RunPreviewRequest,
@@ -54,6 +55,8 @@ export const api = {
     call<ProjectDetail>("create_project", { payload }),
   deleteProject: (payload: DeleteProjectRequest) =>
     call<ProjectSummary[]>("delete_project", { payload }),
+  renameProject: (payload: RenameProjectRequest) =>
+    call<ProjectDetail>("rename_project", { payload }),
   createSampleProject: () => call<ProjectDetail>("create_sample_project"),
   getProject: (projectId: string) =>
     call<ProjectDetail>("get_project", { projectId }),

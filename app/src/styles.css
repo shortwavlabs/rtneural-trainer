@@ -573,6 +573,36 @@ dd,
   gap: 12px;
 }
 
+.rename-form {
+  display: grid;
+  gap: 8px;
+  max-width: min(620px, 100%);
+  margin-bottom: 8px;
+}
+
+.rename-form input {
+  min-height: 50px;
+  font-size: 1.18rem;
+  font-weight: 800;
+}
+
+.rename-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rename-actions .secondary-button {
+  min-height: 36px;
+}
+
+.rename-error {
+  margin: 0;
+  color: #f0b0a8;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
 .path-line {
   margin-bottom: 0;
   overflow-wrap: anywhere;

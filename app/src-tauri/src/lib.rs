@@ -242,6 +242,12 @@ struct DeleteProjectRequest {
 }
 
 #[derive(Deserialize)]
+struct RenameProjectRequest {
+    project_id: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
 struct UpdateAudioRequest {
     project_id: String,
     input_path: String,
@@ -595,6 +601,18 @@ fn delete_project(
     delete_project_by_id(&db, &payload.project_id, &state.projects_dir)?;
     let projects = load_all_projects(&db)?;
     Ok(projects.iter().map(summarize_project).collect())
+}
+
+#[tauri::command]
+fn rename_project(
+    state: tauri::State<AppState>,
+    payload: RenameProjectRequest,
+) -> Result<ProjectDetail, String> {
+    let db = state.db.lock().map_err(lock_error)?;
+    ensure_no_active_project_job(&db, &payload.project_id)?;
+    let name = normalize_project_name(&payload.name)?;
+    update_project_name(&db, &payload.project_id, &name, &now())?;
+    load_project_detail(&db, &payload.project_id)
 }
 
 #[tauri::command]
@@ -1488,6 +1506,7 @@ pub fn run() {
             list_projects,
             get_project,
             delete_project,
+            rename_project,
             list_project_events,
             get_run_preview,
             create_project,
@@ -1911,6 +1930,17 @@ fn normalize_training_sequence_length(value: u32) -> u32 {
         return default_training_sequence_length();
     }
     value.clamp(32, 65_536)
+}
+
+fn normalize_project_name(value: &str) -> Result<String, String> {
+    let name = value.trim();
+    if name.is_empty() {
+        return Err("Project name is required.".to_string());
+    }
+    if name.chars().count() > 120 {
+        return Err("Project name must be 120 characters or fewer.".to_string());
+    }
+    Ok(name.to_string())
 }
 
 fn normalize_model_preset(value: &str) -> Result<&'static str, String> {
@@ -2810,6 +2840,24 @@ fn update_project_status(
         params![enum_to_string(status)?, updated_at, project_id],
     )
     .map_err(to_error)?;
+    Ok(())
+}
+
+fn update_project_name(
+    db: &Connection,
+    project_id: &str,
+    name: &str,
+    updated_at: &str,
+) -> Result<(), String> {
+    let rows_updated = db
+        .execute(
+            "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![name, updated_at, project_id],
+        )
+        .map_err(to_error)?;
+    if rows_updated == 0 {
+        return Err("Project not found.".to_string());
+    }
     Ok(())
 }
 
@@ -4173,6 +4221,38 @@ mod tests {
         assert!(!project_dir.exists());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rename_project_trims_and_persists_name() {
+        let mut db = Connection::open_in_memory().expect("open in-memory sqlite");
+        configure_database(&mut db).expect("migrate sqlite");
+
+        let timestamp = now();
+        let project = ProjectDetail {
+            id: "project_rename_test".to_string(),
+            name: "Old name".to_string(),
+            target_kind: TargetKind::Amp,
+            status: ProjectStatus::Draft,
+            created_at: timestamp.clone(),
+            updated_at: timestamp,
+            notes: String::new(),
+            project_dir: "/tmp/project_rename_test".to_string(),
+            audio: None,
+            runs: Vec::new(),
+            exports: Vec::new(),
+        };
+        insert_project(&db, &project).expect("insert project");
+
+        assert!(normalize_project_name("   ").is_err());
+        assert!(normalize_project_name(&"x".repeat(121)).is_err());
+        let name = normalize_project_name("  Deluxe pedal capture  ").expect("normalize name");
+        let updated_at = now();
+        update_project_name(&db, &project.id, &name, &updated_at).expect("rename project");
+
+        let renamed = load_project_detail(&db, &project.id).expect("load renamed project");
+        assert_eq!(renamed.name, "Deluxe pedal capture");
+        assert_eq!(renamed.updated_at, updated_at);
     }
 
     #[test]

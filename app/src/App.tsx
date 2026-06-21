@@ -12,12 +12,14 @@ import {
   Gauge,
   LoaderCircle,
   PackageCheck,
+  Pencil,
   Play,
   RotateCcw,
   Save,
   SlidersHorizontal,
   Square,
   Trash2,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -408,6 +410,25 @@ export default function App() {
     }
   }
 
+  async function renameSelectedProject(name: string) {
+    if (!project) return;
+
+    setBusy("rename-project");
+    setError(null);
+    try {
+      const nextProject = await api.renameProject({
+        project_id: project.id,
+        name,
+      });
+      await commitProject(nextProject);
+    } catch (caught) {
+      setError(toFriendlyMessage(caught));
+      throw caught;
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const hasActiveRun = Boolean(
     project?.runs.some((run) =>
       ["queued", "preparing", "running", "cancelling"].includes(run.status),
@@ -421,6 +442,11 @@ export default function App() {
     ? "Finish or cancel the active training/export job before deleting."
     : busy && busy !== "delete-project"
       ? "Finish the current action before deleting this project."
+      : null;
+  const renameDisabledReason = progressActive
+    ? "Finish or cancel the active training/export job before renaming."
+    : busy && busy !== "rename-project"
+      ? "Finish the current action before renaming this project."
       : null;
 
   return (
@@ -482,7 +508,10 @@ export default function App() {
               project={project}
               deleteBusy={busy === "delete-project"}
               deleteDisabledReason={deleteDisabledReason}
+              renameBusy={busy === "rename-project"}
+              renameDisabledReason={renameDisabledReason}
               onDelete={() => void deleteSelectedProject()}
+              onRename={renameSelectedProject}
             />
             <StepTabs activeTab={activeTab} onChange={setActiveTab} />
             <section className="work-surface">
@@ -987,31 +1016,122 @@ function ProjectHeader({
   project,
   deleteBusy,
   deleteDisabledReason,
+  renameBusy,
+  renameDisabledReason,
   onDelete,
+  onRename,
 }: {
   project: ProjectDetail;
   deleteBusy: boolean;
   deleteDisabledReason: string | null;
+  renameBusy: boolean;
+  renameDisabledReason: string | null;
   onDelete: () => void;
+  onRename: (name: string) => Promise<void>;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState(project.name);
+  const [renameTouched, setRenameTouched] = useState(false);
   const latestRun = project.runs[project.runs.length - 1];
   const latestExport = project.exports[project.exports.length - 1];
+  const trimmedDraftName = draftName.trim();
+  const canSaveName =
+    trimmedDraftName.length > 0 &&
+    trimmedDraftName.length <= 120 &&
+    trimmedDraftName !== project.name;
   const deleteLabel = deleteBusy
     ? "Deleting"
     : confirmDelete
       ? "Confirm delete"
       : "Delete project";
+  const renameError =
+    renameTouched && trimmedDraftName.length === 0
+      ? "Project name is required."
+      : renameTouched && trimmedDraftName.length > 120
+        ? "Project name must be 120 characters or fewer."
+        : null;
 
   useEffect(() => {
     setConfirmDelete(false);
-  }, [project.id]);
+    setEditingName(false);
+    setDraftName(project.name);
+    setRenameTouched(false);
+  }, [project.id, project.name]);
+
+  async function submitRename() {
+    setRenameTouched(true);
+    if (!canSaveName) {
+      if (trimmedDraftName === project.name) {
+        setEditingName(false);
+      }
+      return;
+    }
+
+    try {
+      await onRename(trimmedDraftName);
+      setEditingName(false);
+      setRenameTouched(false);
+    } catch {
+      // The app-level error notice carries the backend message.
+    }
+  }
 
   return (
     <header className="project-header">
       <div>
         <p className="eyebrow">{targetLabels[project.target_kind]} capture</p>
-        <h2>{project.name}</h2>
+        {editingName ? (
+          <form
+            className="rename-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitRename();
+            }}
+          >
+            <input
+              aria-label="Project name"
+              autoFocus
+              maxLength={140}
+              value={draftName}
+              onBlur={() => setRenameTouched(true)}
+              onChange={(event) => setDraftName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setDraftName(project.name);
+                  setEditingName(false);
+                  setRenameTouched(false);
+                }
+              }}
+            />
+            <div className="rename-actions">
+              <button
+                className="secondary-button"
+                type="submit"
+                disabled={renameBusy || !canSaveName}
+              >
+                {renameBusy ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />}
+                Save name
+              </button>
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={renameBusy}
+                onClick={() => {
+                  setDraftName(project.name);
+                  setEditingName(false);
+                  setRenameTouched(false);
+                }}
+              >
+                <X size={16} />
+                Cancel
+              </button>
+            </div>
+            {renameError ? <p className="rename-error">{renameError}</p> : null}
+          </form>
+        ) : (
+          <h2>{project.name}</h2>
+        )}
         <p className="path-line">{project.project_dir}</p>
         {confirmDelete ? (
           <p className="delete-confirmation" role="status">
@@ -1030,6 +1150,23 @@ function ProjectHeader({
           <Metric label="Export" value={latestExport?.status ?? "blocked"} />
         </div>
         <div className="project-actions" aria-live="polite">
+          {!editingName ? (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={deleteBusy || renameBusy || Boolean(renameDisabledReason)}
+              title={renameDisabledReason ?? "Rename project"}
+              onClick={() => {
+                setConfirmDelete(false);
+                setDraftName(project.name);
+                setEditingName(true);
+                setRenameTouched(false);
+              }}
+            >
+              {renameBusy ? <LoaderCircle className="spin" size={16} /> : <Pencil size={16} />}
+              Rename project
+            </button>
+          ) : null}
           {confirmDelete ? (
             <button
               className="secondary-button"
@@ -1046,6 +1183,7 @@ function ProjectHeader({
             disabled={deleteBusy || Boolean(deleteDisabledReason)}
             title={deleteDisabledReason ?? "Delete project"}
             onClick={() => {
+              setEditingName(false);
               if (!confirmDelete) {
                 setConfirmDelete(true);
                 return;
@@ -1059,6 +1197,9 @@ function ProjectHeader({
         </div>
         {deleteDisabledReason ? (
           <p className="project-action-hint">{deleteDisabledReason}</p>
+        ) : null}
+        {renameDisabledReason && !deleteDisabledReason ? (
+          <p className="project-action-hint">{renameDisabledReason}</p>
         ) : null}
       </div>
     </header>

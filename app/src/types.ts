@@ -174,6 +174,11 @@ export interface DeleteProjectRequest {
   project_id: string;
 }
 
+export interface RenameProjectRequest {
+  project_id: string;
+  name: string;
+}
+
 export interface UpdateAudioRequest {
   project_id: string;
   input_path: string;
