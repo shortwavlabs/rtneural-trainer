@@ -319,6 +319,13 @@ struct RunPreviewRequest {
 }
 
 #[derive(Deserialize)]
+struct ProjectWaveformRequest {
+    project_id: String,
+    #[serde(default = "default_waveform_bins")]
+    bins: usize,
+}
+
+#[derive(Deserialize)]
 struct ExportRunRequest {
     project_id: String,
     run_id: String,
@@ -414,6 +421,34 @@ struct RunPreviewArtifact {
     duration_seconds: Option<f64>,
     peak: Option<f64>,
     peaks: Vec<f64>,
+    waveform: Vec<WaveformBin>,
+}
+
+#[derive(Serialize)]
+struct ProjectWaveform {
+    project_id: String,
+    sample_rate: u32,
+    duration_seconds: f64,
+    input: WaveformTrack,
+    target: WaveformTrack,
+}
+
+#[derive(Serialize)]
+struct WaveformTrack {
+    kind: String,
+    label: String,
+    path: String,
+    sample_rate: u32,
+    duration_seconds: f64,
+    peak: f64,
+    waveform: Vec<WaveformBin>,
+}
+
+#[derive(Clone, Copy, Serialize)]
+struct WaveformBin {
+    min: f64,
+    max: f64,
+    peak: f64,
 }
 
 struct WavPreviewSummary {
@@ -421,6 +456,7 @@ struct WavPreviewSummary {
     duration_seconds: f64,
     peak: f64,
     peaks: Vec<f64>,
+    waveform: Vec<WaveformBin>,
 }
 
 struct FinalExportPackageInput<'a> {
@@ -549,9 +585,17 @@ fn delete_training_recipe(
 }
 
 #[tauri::command]
-fn inspect_device(
-    app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+async fn inspect_device(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    run_blocking_command("inspect-device", move || {
+        let state = app.state::<AppState>();
+        inspect_device_blocking(&app, state.inner())
+    })
+    .await
+}
+
+fn inspect_device_blocking(
+    app: &tauri::AppHandle,
+    state: &AppState,
 ) -> Result<serde_json::Value, String> {
     let context = SidecarContext {
         job_id: "runtime_inspection".to_string(),
@@ -560,22 +604,17 @@ fn inspect_device(
         run_id: None,
         export_id: None,
     };
-    emit_sidecar_line(&app, &context, "system", "rttrainer inspect-device started");
+    emit_sidecar_line(app, &context, "system", "rttrainer inspect-device started");
     let args = vec!["inspect-device".to_string(), "--json".to_string()];
-    let output = run_rttrainer_args(&app, &state, "inspect-device", &args, context.clone())?;
+    let output = run_rttrainer_args(app, state, "inspect-device", &args, context.clone())?;
     if !output.status.success() {
-        emit_sidecar_line(&app, &context, "system", "rttrainer inspect-device failed");
+        emit_sidecar_line(app, &context, "system", "rttrainer inspect-device failed");
         return Err(format!(
             "rttrainer inspect-device failed with status {}.\nstdout:\n{}\nstderr:\n{}",
             output.status, output.stdout, output.stderr
         ));
     }
-    emit_sidecar_line(
-        &app,
-        &context,
-        "system",
-        "rttrainer inspect-device finished",
-    );
+    emit_sidecar_line(app, &context, "system", "rttrainer inspect-device finished");
     parse_json_from_stdout(&output.stdout)
 }
 
@@ -666,6 +705,45 @@ fn get_run_preview(
             .then(|| report_path.display().to_string()),
         report,
         artifacts,
+    })
+}
+
+#[tauri::command]
+fn get_project_waveform(
+    state: tauri::State<AppState>,
+    payload: ProjectWaveformRequest,
+) -> Result<ProjectWaveform, String> {
+    let db = state.db.lock().map_err(lock_error)?;
+    let project = load_project_detail(&db, &payload.project_id)?;
+    let audio = project
+        .audio
+        .as_ref()
+        .ok_or_else(|| "Prepare audio before loading waveforms.".to_string())?;
+    let project_dir = PathBuf::from(&project.project_dir);
+    let input_path = prepared_audio_path(
+        &project_dir,
+        audio.prepared.as_ref(),
+        "input_path",
+        "audio/prepared/input.wav",
+    )?;
+    let target_path = prepared_audio_path(
+        &project_dir,
+        audio.prepared.as_ref(),
+        "target_path",
+        "audio/prepared/target.wav",
+    )?;
+    ensure_artifact_inside(&project_dir, &input_path)?;
+    ensure_artifact_inside(&project_dir, &target_path)?;
+
+    let bins = payload.bins.clamp(64, 600);
+    let input = waveform_track("input", "Dry input", &input_path, bins)?;
+    let target = waveform_track("target", "Processed target", &target_path, bins)?;
+    Ok(ProjectWaveform {
+        project_id: payload.project_id,
+        sample_rate: input.sample_rate,
+        duration_seconds: input.duration_seconds.min(target.duration_seconds),
+        input,
+        target,
     })
 }
 
@@ -794,12 +872,15 @@ fn ensure_managed_project_dir(project_dir: &Path, projects_dir: &Path) -> Result
 }
 
 #[tauri::command]
-fn update_project_audio(
+async fn update_project_audio(
     app: tauri::AppHandle,
-    state: tauri::State<AppState>,
     payload: UpdateAudioRequest,
 ) -> Result<ProjectDetail, String> {
-    prepare_project_audio(&app, state.inner(), &payload)
+    run_blocking_command("prepare audio", move || {
+        let state = app.state::<AppState>();
+        prepare_project_audio(&app, state.inner(), &payload)
+    })
+    .await
 }
 
 fn prepare_project_audio(
@@ -835,7 +916,7 @@ fn prepare_project_audio(
             "manual_latency_adjustment_samples": 0
         }),
     )?;
-    let job_id = create_job(&state, "prepare", Some(&payload.project_id), None, None)?;
+    let job_id = create_job(state, "prepare", Some(&payload.project_id), None, None)?;
     let prepare_result = run_rttrainer(
         app,
         state,
@@ -850,10 +931,10 @@ fn prepare_project_audio(
         },
     );
     if let Err(error) = prepare_result {
-        mark_job_failed(&state, &job_id, &error)?;
+        mark_job_failed(state, &job_id, &error)?;
         return Err(error);
     }
-    mark_job_completed(&state, &job_id)?;
+    mark_job_completed(state, &job_id)?;
 
     let prepare_report_path = prepared_dir.join("preparation-report.json");
     let prepare_report: PrepareReport = read_json(&prepare_report_path)?;
@@ -890,9 +971,20 @@ fn prepare_project_audio(
 }
 
 #[tauri::command]
-fn update_project_alignment(
+async fn update_project_alignment(
     app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+    payload: UpdateAlignmentRequest,
+) -> Result<ProjectDetail, String> {
+    run_blocking_command("update alignment", move || {
+        let state = app.state::<AppState>();
+        update_project_alignment_blocking(&app, state.inner(), payload)
+    })
+    .await
+}
+
+fn update_project_alignment_blocking(
+    app: &tauri::AppHandle,
+    state: &AppState,
     payload: UpdateAlignmentRequest,
 ) -> Result<ProjectDetail, String> {
     let manual_adjustment = payload
@@ -955,10 +1047,10 @@ fn update_project_alignment(
         }),
     )?;
 
-    let job_id = create_job(&state, "prepare", Some(&payload.project_id), None, None)?;
+    let job_id = create_job(state, "prepare", Some(&payload.project_id), None, None)?;
     let prepare_result = run_rttrainer(
-        &app,
-        &state,
+        app,
+        state,
         "prepare",
         &manifest_path,
         SidecarContext {
@@ -970,10 +1062,10 @@ fn update_project_alignment(
         },
     );
     if let Err(error) = prepare_result {
-        mark_job_failed(&state, &job_id, &error)?;
+        mark_job_failed(state, &job_id, &error)?;
         return Err(error);
     }
-    mark_job_completed(&state, &job_id)?;
+    mark_job_completed(state, &job_id)?;
 
     let prepare_report_path = prepared_dir.join("preparation-report.json");
     let prepare_report: PrepareReport = read_json(&prepare_report_path)?;
@@ -1208,9 +1300,20 @@ fn resume_training_run(
 }
 
 #[tauri::command]
-fn export_run(
+async fn export_run(
     app: tauri::AppHandle,
-    state: tauri::State<AppState>,
+    payload: ExportRunRequest,
+) -> Result<ProjectDetail, String> {
+    run_blocking_command("export run", move || {
+        let state = app.state::<AppState>();
+        export_run_blocking(&app, state.inner(), payload)
+    })
+    .await
+}
+
+fn export_run_blocking(
+    app: &tauri::AppHandle,
+    state: &AppState,
     payload: ExportRunRequest,
 ) -> Result<ProjectDetail, String> {
     let export_id = format!("export_{}", Uuid::new_v4().simple());
@@ -1294,15 +1397,15 @@ fn export_run(
     }
 
     let export_job_id = create_job(
-        &state,
+        state,
         "export",
         Some(&project_id),
         Some(&run.id),
         Some(&export_id),
     )?;
     let sidecar_result = run_rttrainer(
-        &app,
-        &state,
+        app,
+        state,
         "export",
         &manifest_path,
         SidecarContext {
@@ -1316,13 +1419,13 @@ fn export_run(
     let sidecar = match sidecar_result {
         Ok(output) => output,
         Err(error) => {
-            mark_job_failed(&state, &export_job_id, &error)?;
+            mark_job_failed(state, &export_job_id, &error)?;
             let db = state.db.lock().map_err(lock_error)?;
             update_export_status(&db, &export_id, &ExportStatus::Failed, Some(&error))?;
             return Err(error);
         }
     };
-    mark_job_completed(&state, &export_job_id)?;
+    mark_job_completed(state, &export_job_id)?;
     fs::write(export_dir.join("export-events.jsonl"), sidecar.stdout).map_err(to_error)?;
     if !sidecar.stderr.trim().is_empty() {
         fs::write(export_dir.join("stderr.log"), sidecar.stderr).map_err(to_error)?;
@@ -1334,15 +1437,15 @@ fn export_run(
     }
 
     let validate_job_id = create_job(
-        &state,
+        state,
         "native_validate",
         Some(&project_id),
         Some(&run.id),
         Some(&export_id),
     )?;
     let validate_result = run_validator(
-        &app,
-        &state,
+        app,
+        state,
         vec![
             "validate".to_string(),
             "--model".to_string(),
@@ -1365,23 +1468,23 @@ fn export_run(
         },
     );
     if let Err(error) = validate_result {
-        mark_job_failed(&state, &validate_job_id, &error)?;
+        mark_job_failed(state, &validate_job_id, &error)?;
         let db = state.db.lock().map_err(lock_error)?;
         update_export_status(&db, &export_id, &ExportStatus::Failed, Some(&error))?;
         return Err(error);
     }
-    mark_job_completed(&state, &validate_job_id)?;
+    mark_job_completed(state, &validate_job_id)?;
 
     let benchmark_job_id = create_job(
-        &state,
+        state,
         "native_benchmark",
         Some(&project_id),
         Some(&run.id),
         Some(&export_id),
     )?;
     let benchmark_result = run_validator(
-        &app,
-        &state,
+        app,
+        state,
         vec![
             "benchmark".to_string(),
             "--model".to_string(),
@@ -1402,12 +1505,12 @@ fn export_run(
         },
     );
     if let Err(error) = benchmark_result {
-        mark_job_failed(&state, &benchmark_job_id, &error)?;
+        mark_job_failed(state, &benchmark_job_id, &error)?;
         let db = state.db.lock().map_err(lock_error)?;
         update_export_status(&db, &export_id, &ExportStatus::Failed, Some(&error))?;
         return Err(error);
     }
-    mark_job_completed(&state, &benchmark_job_id)?;
+    mark_job_completed(state, &benchmark_job_id)?;
 
     write_final_export_package_metadata(FinalExportPackageInput {
         project_name: &project_name,
@@ -1509,6 +1612,7 @@ pub fn run() {
             rename_project,
             list_project_events,
             get_run_preview,
+            get_project_waveform,
             create_project,
             create_sample_project,
             update_project_audio,
@@ -1770,6 +1874,10 @@ fn default_training_learning_rate() -> f64 {
 
 fn default_training_sequence_length() -> u32 {
     1024
+}
+
+fn default_waveform_bins() -> usize {
+    220
 }
 
 fn validate_capture_wav_path(value: &str, label: &str) -> Result<PathBuf, String> {
@@ -3027,7 +3135,7 @@ fn run_preview_artifact(
 ) -> Result<RunPreviewArtifact, String> {
     let metadata = fs::metadata(path).ok();
     let summary = if metadata.is_some() {
-        Some(read_wav_preview_summary(path, 56)?)
+        Some(read_wav_preview_summary(path, 120)?)
     } else {
         None
     };
@@ -3040,7 +3148,43 @@ fn run_preview_artifact(
         sample_rate: summary.as_ref().map(|item| item.sample_rate),
         duration_seconds: summary.as_ref().map(|item| item.duration_seconds),
         peak: summary.as_ref().map(|item| item.peak),
-        peaks: summary.map(|item| item.peaks).unwrap_or_default(),
+        peaks: summary
+            .as_ref()
+            .map(|item| item.peaks.clone())
+            .unwrap_or_default(),
+        waveform: summary.map(|item| item.waveform).unwrap_or_default(),
+    })
+}
+
+fn prepared_audio_path(
+    project_dir: &Path,
+    prepared: Option<&serde_json::Value>,
+    key: &str,
+    fallback: &str,
+) -> Result<PathBuf, String> {
+    let stored_path = prepared
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback);
+    Ok(artifact_path(project_dir, stored_path))
+}
+
+fn waveform_track(
+    kind: &str,
+    label: &str,
+    path: &Path,
+    bins: usize,
+) -> Result<WaveformTrack, String> {
+    let summary = read_wav_preview_summary(path, bins)?;
+    Ok(WaveformTrack {
+        kind: kind.to_string(),
+        label: label.to_string(),
+        path: path.display().to_string(),
+        sample_rate: summary.sample_rate,
+        duration_seconds: summary.duration_seconds,
+        peak: summary.peak,
+        waveform: summary.waveform,
     })
 }
 
@@ -3124,19 +3268,37 @@ fn read_wav_preview_summary(path: &Path, bins: usize) -> Result<WavPreviewSummar
     let bytes_per_frame = usize::from(channels) * 2;
     let frame_count = (data_end - data_start) / bytes_per_frame;
     if frame_count == 0 {
+        let bin_count = bins.max(1);
         return Ok(WavPreviewSummary {
             sample_rate,
             duration_seconds: 0.0,
             peak: 0.0,
-            peaks: vec![0.0; bins],
+            peaks: vec![0.0; bin_count],
+            waveform: vec![
+                WaveformBin {
+                    min: 0.0,
+                    max: 0.0,
+                    peak: 0.0
+                };
+                bin_count
+            ],
         });
     }
 
-    let mut peaks = vec![0.0_f64; bins.max(1)];
+    let bin_count = bins.max(1);
+    let mut peaks = vec![0.0_f64; bin_count];
+    let mut waveform = vec![
+        WaveformBin {
+            min: 0.0,
+            max: 0.0,
+            peak: 0.0
+        };
+        bin_count
+    ];
     let mut peak = 0.0_f64;
     for frame_index in 0..frame_count {
         let frame_start = data_start + frame_index * bytes_per_frame;
-        let mut frame_peak = 0.0_f64;
+        let mut frame_value = 0.0_f64;
         for channel in 0..usize::from(channels) {
             let sample_start = frame_start + channel * 2;
             let sample = i16::from_le_bytes(
@@ -3144,11 +3306,16 @@ fn read_wav_preview_summary(path: &Path, bins: usize) -> Result<WavPreviewSummar
                     .try_into()
                     .map_err(to_error)?,
             );
-            frame_peak = frame_peak.max((f64::from(sample) / 32768.0).abs());
+            frame_value += f64::from(sample) / 32768.0;
         }
+        frame_value /= f64::from(channels);
+        let frame_peak = frame_value.abs();
         peak = peak.max(frame_peak);
         let bin = ((frame_index * peaks.len()) / frame_count).min(peaks.len() - 1);
         peaks[bin] = peaks[bin].max(frame_peak);
+        waveform[bin].min = waveform[bin].min.min(frame_value);
+        waveform[bin].max = waveform[bin].max.max(frame_value);
+        waveform[bin].peak = waveform[bin].peak.max(frame_peak);
     }
 
     Ok(WavPreviewSummary {
@@ -3156,6 +3323,7 @@ fn read_wav_preview_summary(path: &Path, bins: usize) -> Result<WavPreviewSummar
         duration_seconds: frame_count as f64 / f64::from(sample_rate),
         peak,
         peaks,
+        waveform,
     })
 }
 
@@ -3893,6 +4061,16 @@ fn to_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+async fn run_blocking_command<T, F>(label: &'static str, task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|error| format!("{label} worker failed: {error}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3908,8 +4086,13 @@ mod tests {
         let summary = read_wav_preview_summary(&wav_path, 4).expect("read preview summary");
         assert_eq!(summary.sample_rate, 48_000);
         assert_eq!(summary.peaks.len(), 4);
+        assert_eq!(summary.waveform.len(), 4);
         assert!((summary.duration_seconds - (4.0 / 48_000.0)).abs() < f64::EPSILON);
         assert_eq!(summary.peak, 1.0);
+        assert_eq!(summary.waveform[0].peak, 0.0);
+        assert_eq!(summary.waveform[1].max, 0.5);
+        assert_eq!(summary.waveform[2].min, -1.0);
+        assert_eq!(summary.waveform[3].max, 0.25);
     }
 
     #[test]
@@ -3939,8 +4122,12 @@ mod tests {
         assert_eq!(target_summary.sample_rate, 48_000);
         assert_eq!(input_summary.peaks.len(), 16);
         assert_eq!(target_summary.peaks.len(), 16);
+        assert_eq!(input_summary.waveform.len(), 16);
+        assert_eq!(target_summary.waveform.len(), 16);
         assert!(input_summary.peak > 0.01);
         assert!(target_summary.peak > 0.01);
+        assert!(input_summary.waveform.iter().any(|bin| bin.max > 0.0));
+        assert!(input_summary.waveform.iter().any(|bin| bin.min < 0.0));
 
         fs::remove_dir_all(root).ok();
     }

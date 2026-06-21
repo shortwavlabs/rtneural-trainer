@@ -116,19 +116,20 @@ trainer experience" while producing RTNeural-compatible output.
 Build a local desktop "RTNeural Trainer" with one primary workflow:
 
 1. Create project.
-2. Choose target: amp, pedal, line effect, or generic audio mapping.
-3. Download/generate a capture signal, or import a known dry/input file.
-4. Record or import the target/wet output.
-5. Let the app validate sample rate, bit depth, length, clipping, DC offset, and
+2. Select, rename, or delete local projects from the project sidebar/header.
+3. Choose target: amp, pedal, line effect, or generic audio mapping.
+4. Download/generate a capture signal, or import a known dry/input file.
+5. Record or import the target/wet output.
+6. Let the app validate sample rate, bit depth, length, clipping, DC offset, and
    silence.
-6. Auto-align input/output latency and let the user inspect/adjust it.
-7. Pick a model preset: light, standard, heavy.
-8. Train locally with TensorFlow/Keras by default; allow PyTorch only for
+7. Auto-align input/output latency and let the user inspect/adjust it.
+8. Pick a model preset: light, standard, heavy.
+9. Train locally with TensorFlow/Keras by default; allow PyTorch only for
    curated presets whose export parity is covered.
-9. Monitor loss, ESR, validation audio, waveform overlay, and residual error.
-10. Export RTNeural JSON.
-11. Run RTNeural C++ validation and CPU benchmark.
-12. Save model package with metadata, plots, test audio, and benchmark results.
+10. Monitor loss, ESR, validation audio, waveform overlay, and residual error.
+11. Export RTNeural JSON.
+12. Run RTNeural C++ validation and CPU benchmark.
+13. Save model package with metadata, plots, test audio, and benchmark results.
 
 The MVP should not try to support arbitrary PyTorch, ONNX, or TensorFlow/Keras
 models. That path creates an unbounded compatibility problem. Users should choose
@@ -381,7 +382,8 @@ The app should be a guided workbench, not a generic ML IDE.
 
 Main screens:
 
-- Projects: recent model projects, status, hardware, last quality score.
+- Projects: recent model projects, selection, rename/delete actions, status,
+  hardware, last quality score.
 - Capture: download test signal, record/import input and target, validate audio.
 - Align: show latency estimate, impulses, manual nudge, trim controls.
 - Train: preset picker, hardware indicator, quality/runtime estimate, progress.

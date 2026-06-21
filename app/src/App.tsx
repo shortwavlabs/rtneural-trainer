@@ -37,6 +37,8 @@ import type {
   ExportPackage,
   ProjectDetail,
   ProjectSummary,
+  ProjectWaveform,
+  ProjectWaveformTrack,
   RuntimeBackend,
   RuntimeSettings,
   RunPreview,
@@ -46,6 +48,7 @@ import type {
   TrainingMetrics,
   TrainingRecipe,
   TrainingRun,
+  WaveformBin,
 } from "./types";
 
 type TabId = "capture" | "align" | "train" | "evaluate" | "export";
@@ -1435,6 +1438,9 @@ function AlignView({
   onApply: (manualLatencyAdjustmentSamples: number) => Promise<void>;
 }) {
   const [nudge, setNudge] = useState(project.audio?.manual_latency_adjustment_samples ?? 0);
+  const [waveform, setWaveform] = useState<ProjectWaveform | null>(null);
+  const [waveformBusy, setWaveformBusy] = useState(false);
+  const [waveformError, setWaveformError] = useState<string | null>(null);
   const autoLatency =
     project.audio?.latency_auto_samples ?? project.audio?.latency_samples ?? 0;
   const effectiveLatency = autoLatency + nudge;
@@ -1449,6 +1455,33 @@ function AlignView({
   useEffect(() => {
     setNudge(project.audio?.manual_latency_adjustment_samples ?? 0);
   }, [project.audio?.manual_latency_adjustment_samples, project.id]);
+
+  useEffect(() => {
+    let mounted = true;
+    setWaveform(null);
+    setWaveformError(null);
+    if (!project.audio) {
+      setWaveformBusy(false);
+      return;
+    }
+
+    setWaveformBusy(true);
+    api
+      .getProjectWaveform({ project_id: project.id, bins: 240 })
+      .then((nextWaveform) => {
+        if (mounted) setWaveform(nextWaveform);
+      })
+      .catch((caught) => {
+        if (mounted) setWaveformError(toFriendlyMessage(caught));
+      })
+      .finally(() => {
+        if (mounted) setWaveformBusy(false);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [project.id, project.updated_at]);
 
   if (!project.audio) {
     return (
@@ -1468,7 +1501,12 @@ function AlignView({
           title="Latency Alignment"
           detail="Inspect the detected offset before committing training time."
         />
-        <WaveformOverlay latency={effectiveLatency} />
+        <WaveformOverlay
+          latency={effectiveLatency}
+          loading={waveformBusy}
+          error={waveformError}
+          waveform={waveform}
+        />
       </div>
       <div className="panel span-4">
         <div className="metric-stack">
@@ -2624,7 +2662,7 @@ function PreviewPlayer({
               <strong>{artifact.label}</strong>
               <small>{previewArtifactDetail(artifact)}</small>
             </span>
-            <PeakWave peaks={artifact.peaks} />
+            <PeakWave peaks={artifact.peaks} waveform={artifact.waveform} />
           </div>
         ))}
       </div>
@@ -2633,18 +2671,95 @@ function PreviewPlayer({
   );
 }
 
-function PeakWave({ peaks }: { peaks: number[] }) {
-  const visiblePeaks = peaks.length ? peaks : Array.from({ length: 28 }, () => 0);
+function PeakWave({
+  peaks,
+  waveform,
+}: {
+  peaks: number[];
+  waveform?: WaveformBin[];
+}) {
   return (
-    <div className="mini-wave" aria-hidden="true">
-      {visiblePeaks.map((peak, index) => (
-        <i
-          key={`${index}-${peak}`}
-          style={{ height: `${Math.max(3, Math.round(Math.min(1, peak) * 28))}px` }}
-        />
-      ))}
-    </div>
+    <SoundCloudWaveform
+      compact
+      peaks={peaks}
+      waveform={waveform ?? []}
+    />
   );
+}
+
+function SoundCloudWaveform({
+  waveform,
+  peaks = [],
+  normalizePeak,
+  compact = false,
+}: {
+  waveform: WaveformBin[];
+  peaks?: number[];
+  normalizePeak?: number;
+  compact?: boolean;
+}) {
+  const bins = waveform.length ? waveform : waveformFromPeaks(peaks);
+  const visibleBins = bins.length ? bins : waveformFromPeaks(Array.from({ length: 96 }, () => 0));
+  const barWidth = compact ? 2 : 3;
+  const gap = compact ? 1 : 2;
+  const height = compact ? 32 : 118;
+  const center = height / 2;
+  const usableHeight = center - (compact ? 3 : 7);
+  const peak =
+    normalizePeak ??
+    Math.max(...visibleBins.map((bin) => bin.peak), 0.000001);
+  const width = Math.max(1, visibleBins.length * (barWidth + gap));
+
+  return (
+    <svg
+      className={compact ? "soundcloud-wave compact" : "soundcloud-wave"}
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <line
+        className="wave-centerline"
+        x1="0"
+        x2={width}
+        y1={center}
+        y2={center}
+      />
+      {visibleBins.map((bin, index) => {
+        const positive = clamp01(Math.max(0, bin.max) / peak);
+        const negative = clamp01(Math.abs(Math.min(0, bin.min)) / peak);
+        const fallback = clamp01(bin.peak / peak) * 0.5;
+        const topAmount = Math.max(positive, fallback);
+        const bottomAmount = Math.max(negative, fallback);
+        const x = index * (barWidth + gap) + barWidth / 2;
+        const y1 = center - Math.max(compact ? 1.5 : 2.5, topAmount * usableHeight);
+        const y2 = center + Math.max(compact ? 1.5 : 2.5, bottomAmount * usableHeight);
+        return (
+          <line
+            className="wave-bar"
+            key={`${index}-${bin.min}-${bin.max}`}
+            x1={x}
+            x2={x}
+            y1={y1}
+            y2={y2}
+            strokeWidth={barWidth}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+function waveformFromPeaks(peaks: number[]) {
+  return peaks.map((peak) => ({
+    min: -Math.max(0, peak),
+    max: Math.max(0, peak),
+    peak: Math.max(0, peak),
+  }));
+}
+
+function clamp01(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
 }
 
 function WaveformComparison({ artifacts }: { artifacts: RunPreviewArtifact[] }) {
@@ -2655,10 +2770,10 @@ function WaveformComparison({ artifacts }: { artifacts: RunPreviewArtifact[] }) 
   if (ordered.length === 0) return null;
 
   return (
-    <div className="waveform-comparison" role="img" aria-label="Target, prediction, and residual waveform peak comparison">
+    <div className="waveform-comparison" role="img" aria-label="Target, prediction, and residual waveform comparison">
       <div className="waveform-comparison-head">
         <span>Waveform comparison</span>
-        <small>Peak envelope, normalized per file</small>
+        <small>Actual min/max waveform, normalized per file</small>
       </div>
       {ordered.map((artifact) => (
         <div className={`waveform-track ${artifact.kind}`} key={artifact.kind}>
@@ -2666,7 +2781,7 @@ function WaveformComparison({ artifacts }: { artifacts: RunPreviewArtifact[] }) 
             <strong>{artifact.label}</strong>
             <small>{previewArtifactDetail(artifact)}</small>
           </div>
-          <PeakWave peaks={artifact.peaks} />
+          <PeakWave peaks={artifact.peaks} waveform={artifact.waveform} />
         </div>
       ))}
     </div>
@@ -2782,20 +2897,79 @@ function ReportPill({
   );
 }
 
-function WaveformOverlay({ latency }: { latency: number }) {
+function WaveformOverlay({
+  latency,
+  loading,
+  error,
+  waveform,
+}: {
+  latency: number;
+  loading: boolean;
+  error: string | null;
+  waveform: ProjectWaveform | null;
+}) {
+  const normalizePeak = waveform
+    ? Math.max(waveform.input.peak, waveform.target.peak, 0.000001)
+    : 1;
+
   return (
-    <div className="waveform">
-      <div className="latency-marker" style={{ left: `${48 + Math.max(-20, Math.min(20, latency / 12))}%` }} />
-      <div className="wave-row input">
-        {Array.from({ length: 80 }, (_, index) => (
-          <i key={index} />
-        ))}
+    <div
+      className="waveform"
+      role="img"
+      aria-label="Prepared dry input and processed target waveforms"
+    >
+      <div className="waveform-meta">
+        <span>Prepared waveform</span>
+        <small>
+          {waveform
+            ? `${formatSeconds(waveform.duration_seconds)} · ${waveform.sample_rate.toLocaleString()} Hz`
+            : "Loading actual prepared audio"}
+        </small>
       </div>
-      <div className="wave-row target">
-        {Array.from({ length: 80 }, (_, index) => (
-          <i key={index} />
-        ))}
+      <div className="latency-marker">
+        <span>{latency} samples</span>
       </div>
+      {loading ? (
+        <div className="waveform-placeholder">Loading actual waveform.</div>
+      ) : error ? (
+        <div className="waveform-placeholder warning">Waveform unavailable: {error}</div>
+      ) : waveform ? (
+        <>
+          <AlignmentWaveformTrack
+            track={waveform.input}
+            normalizePeak={normalizePeak}
+          />
+          <AlignmentWaveformTrack
+            track={waveform.target}
+            normalizePeak={normalizePeak}
+          />
+        </>
+      ) : (
+        <div className="waveform-placeholder">Run capture preflight to render a waveform.</div>
+      )}
+    </div>
+  );
+}
+
+function AlignmentWaveformTrack({
+  track,
+  normalizePeak,
+}: {
+  track: ProjectWaveformTrack;
+  normalizePeak: number;
+}) {
+  return (
+    <div className={`alignment-wave-track ${track.kind}`}>
+      <div className="alignment-wave-label">
+        <strong>{track.label}</strong>
+        <small>
+          {formatDbfs(track.peak)} · {formatSeconds(track.duration_seconds)}
+        </small>
+      </div>
+      <SoundCloudWaveform
+        waveform={track.waveform}
+        normalizePeak={normalizePeak}
+      />
     </div>
   );
 }

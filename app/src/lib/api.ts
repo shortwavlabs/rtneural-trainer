@@ -9,6 +9,8 @@ import type {
   ExportRunRequest,
   ProjectDetail,
   ProjectSummary,
+  ProjectWaveform,
+  ProjectWaveformRequest,
   RenameProjectRequest,
   RunControlRequest,
   RunPreview,
@@ -51,6 +53,8 @@ export const api = {
     call<SidecarProgressEvent[]>("list_project_events", { projectId }),
   getRunPreview: (payload: RunPreviewRequest) =>
     call<RunPreview>("get_run_preview", { payload }),
+  getProjectWaveform: (payload: ProjectWaveformRequest) =>
+    call<ProjectWaveform>("get_project_waveform", { payload }),
   createProject: (payload: CreateProjectRequest) =>
     call<ProjectDetail>("create_project", { payload }),
   deleteProject: (payload: DeleteProjectRequest) =>

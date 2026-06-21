@@ -790,59 +790,124 @@ dd,
 .waveform {
   position: relative;
   display: grid;
-  gap: 16px;
-  min-height: 280px;
-  padding: 24px;
+  gap: 18px;
+  min-height: 300px;
+  padding: 18px;
   overflow: hidden;
   background: #101212;
   border: 1px solid #303735;
   border-radius: 8px;
 }
 
-.wave-row,
-.mini-wave {
-  display: grid;
-  grid-auto-flow: column;
-  align-items: center;
-  gap: 3px;
+.waveform-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.wave-row i,
-.mini-wave i {
+.waveform-meta span,
+.alignment-wave-label strong {
+  color: #eef2ec;
+  font-weight: 800;
+}
+
+.waveform-meta small,
+.alignment-wave-label small {
+  color: #9da9a1;
+  font-size: 0.76rem;
+}
+
+.alignment-wave-track {
+  display: grid;
+  gap: 8px;
+}
+
+.alignment-wave-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.soundcloud-wave {
   display: block;
   width: 100%;
-  min-width: 2px;
-  background: #8ee690;
-  border-radius: 2px;
+  height: 118px;
+  overflow: visible;
 }
 
-.wave-row.target i {
-  background: #87b7ff;
+.soundcloud-wave.compact {
+  height: 32px;
 }
 
-.wave-row i:nth-child(4n + 1) {
-  height: 48px;
+.wave-centerline {
+  stroke: rgba(238, 242, 236, 0.22);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
-.wave-row i:nth-child(4n + 2) {
-  height: 78px;
+.wave-bar {
+  stroke: #8ee690;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
 }
 
-.wave-row i:nth-child(4n + 3) {
-  height: 34px;
+.alignment-wave-track.target .wave-bar,
+.waveform-track.target .wave-bar {
+  stroke: #87b7ff;
 }
 
-.wave-row i:nth-child(4n + 4) {
-  height: 98px;
+.waveform-track.prediction .wave-bar {
+  stroke: #8ee690;
+}
+
+.waveform-track.residual .wave-bar {
+  stroke: #f2bf5e;
+}
+
+.waveform-placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  color: #aeb8b1;
+  background: #171a1b;
+  border: 1px solid #2a302e;
+  border-radius: 8px;
+}
+
+.waveform-placeholder.warning {
+  align-items: center;
+  justify-items: start;
+  padding: 14px;
+  color: #f5e0b8;
+  background: #332818;
+  border-color: #69502c;
 }
 
 .latency-marker {
   position: absolute;
-  top: 18px;
+  top: 50px;
   bottom: 18px;
+  left: 50%;
   width: 2px;
+  z-index: 1;
   background: #f2bf5e;
   box-shadow: 0 0 0 1px rgba(242, 191, 94, 0.3);
+}
+
+.latency-marker span {
+  position: absolute;
+  top: -26px;
+  left: 50%;
+  padding: 3px 7px;
+  color: #0e1710;
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+  background: #f2bf5e;
+  border-radius: 999px;
+  transform: translateX(-50%);
 }
 
 .range-control {
@@ -1231,24 +1296,6 @@ dd,
   font-size: 0.76rem;
 }
 
-.mini-wave {
-  height: 28px;
-  min-width: 0;
-}
-
-.mini-wave i {
-  align-self: center;
-  height: 12px;
-}
-
-.mini-wave i:nth-child(3n + 1) {
-  height: 24px;
-}
-
-.mini-wave i:nth-child(3n + 2) {
-  height: 8px;
-}
-
 .waveform-comparison {
   display: grid;
   gap: 10px;
@@ -1291,18 +1338,6 @@ dd,
 .waveform-track strong,
 .waveform-track small {
   display: block;
-}
-
-.waveform-track.target .mini-wave i {
-  background: #87b7ff;
-}
-
-.waveform-track.prediction .mini-wave i {
-  background: #8ee690;
-}
-
-.waveform-track.residual .mini-wave i {
-  background: #f2bf5e;
 }
 
 .gate {

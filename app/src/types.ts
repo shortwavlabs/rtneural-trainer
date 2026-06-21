@@ -252,6 +252,7 @@ export interface RunPreviewArtifact {
   duration_seconds: number | null;
   peak: number | null;
   peaks: number[];
+  waveform: WaveformBin[];
 }
 
 export interface RunPreview {
@@ -261,6 +262,35 @@ export interface RunPreview {
   report_path: string | null;
   report: Record<string, unknown> | null;
   artifacts: RunPreviewArtifact[];
+}
+
+export interface WaveformBin {
+  min: number;
+  max: number;
+  peak: number;
+}
+
+export interface ProjectWaveformTrack {
+  kind: "input" | "target" | string;
+  label: string;
+  path: string;
+  sample_rate: number;
+  duration_seconds: number;
+  peak: number;
+  waveform: WaveformBin[];
+}
+
+export interface ProjectWaveform {
+  project_id: string;
+  sample_rate: number;
+  duration_seconds: number;
+  input: ProjectWaveformTrack;
+  target: ProjectWaveformTrack;
+}
+
+export interface ProjectWaveformRequest {
+  project_id: string;
+  bins?: number;
 }
 
 export interface UpdateNotesRequest {

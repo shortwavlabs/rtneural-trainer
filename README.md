@@ -21,11 +21,12 @@ benchmark updates. The current train/evaluate/export CLI uses TensorFlow/Keras
 as the canonical RTNeural JSON path, with PyTorch retained as an optional
 compatibility backend for curated LSTM presets.
 
-Current local v1 coverage includes SQLite-backed project/job state, native file
-pickers, optional resampling and stereo policy, manual latency override,
-cancel/resume/recovery, validation curves, early stopping controls, runtime
-inspection, target/prediction/residual playback, golden RTNeural JSON fixtures,
-native parity checks, and debug/release smoke scripts.
+Current local v1 coverage includes SQLite-backed project/job state, project
+rename/delete actions, native file pickers, optional resampling and stereo
+policy, manual latency override, cancel/resume/recovery, validation curves,
+early stopping controls, runtime inspection, target/prediction/residual
+playback, golden RTNeural JSON fixtures, native parity checks, and
+debug/release smoke scripts.
 
 Still deferred: signed/notarized release distribution, richer waveform/spectrum
 inspection, a full tiny train/export smoke inside an installed bundle, UI smoke
@@ -103,6 +104,23 @@ Check the Rust side:
 cd app/src-tauri
 cargo test
 ```
+
+## Desktop Project Management
+
+The desktop sidebar is the project switcher. Select a project row to load its
+current capture, runs, exports, notes, and progress history from SQLite.
+
+Use the project header actions to manage the selected project:
+
+- `Rename project` opens an inline editor. Names are trimmed, must be non-empty,
+  and are limited to 120 characters. Saving refreshes the header and sidebar.
+- `Delete project` uses a two-step confirmation. It removes the SQLite project
+  record, cascades related audio reports, runs, exports, jobs, and job events,
+  and deletes the app-managed project folder from the local app data directory.
+
+Rename and delete are disabled while training/export jobs or other project
+mutations are active. Delete only removes files inside the app-managed project
+folder; it does not delete arbitrary external source WAVs elsewhere on disk.
 
 ## Package Tauri Sidecars
 

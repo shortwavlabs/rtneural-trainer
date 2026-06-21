@@ -22,9 +22,9 @@ checklist.
 
 Implemented:
 
-1. Tauri v2 + React desktop app with project creation, runtime inspection,
-   capture import, preparation, alignment, training, evaluation, export, notes,
-   and progress streaming.
+1. Tauri v2 + React desktop app with project creation, project rename/delete,
+   runtime inspection, capture import, preparation, alignment, training,
+   evaluation, export, notes, and progress streaming.
 2. `uv`-managed Python `rttrainer` sidecar with `prepare`, `train`, `evaluate`,
    `export`, and `inspect-device` commands.
 3. TensorFlow/Keras-first training and RTNeural JSON export path, with optional
@@ -33,9 +33,9 @@ Implemented:
    hybrid Keras presets with golden JSON and native RTNeural parity coverage.
 5. Native C++ `rtneural-validator` sidecar that validates exported JSON against
    WAV fixtures and benchmarks runtime cost.
-6. SQLite-backed project/job store with durable job events, status recovery,
-   cancellation, resume-from-checkpoint, failed/interrupted states, and job
-   locking.
+6. SQLite-backed project/job store with durable job events, project rename/delete,
+   status recovery, cancellation, resume-from-checkpoint, failed/interrupted
+   states, and job locking.
 7. Native file pickers, capture validation, optional resampling, stereo policy,
    manual alignment override, sampled-window handling for long captures,
    gain/headroom guidance, validation curves, early stopping controls, preset
@@ -905,6 +905,8 @@ Implementation tasks:
 4. Persist every job event.
 5. Store relative artifact paths from the project root.
 6. Hash imported source audio for traceability.
+7. Keep project lifecycle actions in Rust so SQLite rows and managed project
+   folders stay consistent.
 
 Acceptance criteria:
 
@@ -913,6 +915,11 @@ Acceptance criteria:
 - Missing artifact files are detected and surfaced as repairable errors.
 - Running jobs are marked interrupted after restart and exports with missing
   artifacts are audited into failed status.
+- Renaming a project updates SQLite, refreshes the selected detail, and refreshes
+  the sidebar list.
+- Deleting a project cascades SQLite rows for audio reports, runs, exports, jobs,
+  and events, then removes only the app-managed project folder. It must refuse
+  unmanaged folders and active jobs.
 
 ### Step 7.4 Implement Job Orchestration
 
@@ -923,6 +930,8 @@ Rust commands:
 
 ```text
 create_project
+rename_project
+delete_project
 update_project_audio
 update_project_alignment
 start_training
@@ -963,11 +972,26 @@ The app should feel like a guided audio workbench, not an ML dashboard.
 Current screen: Projects and runtime sidebar
 
 - Recent projects
+- Project selection from the sidebar
+- Create project
+- Rename project from the selected project header
+- Delete project with two-step confirmation
 - Last run status
 - Last quality score
 - Runtime source, backend, CPU/MPS/CUDA availability, package versions
 - Export readiness
 - Search/filter by tags is deferred
+
+Project lifecycle behavior:
+
+- Rename opens an inline editor in the selected project header. Names are
+  trimmed, required, limited to 120 characters, and blocked while project jobs or
+  other mutations are active.
+- Delete uses a confirmation click before the destructive action. It is blocked
+  while project jobs or other mutations are active.
+- Delete removes SQLite metadata and the managed project folder under app data.
+  It does not delete arbitrary external source WAVs outside the app-managed
+  project directory.
 
 Current screen: Capture
 
@@ -1443,8 +1467,9 @@ The original order below is now mostly complete:
    history, early stopping, and quality language: complete for local v1.
 8. SQLite project/job store, recovery, cancellation, resume, and event
    persistence: complete.
-9. Tauri/React UI for Projects, Capture, Align, Train, Evaluate, Export, notes,
-   runtime inspection, progress, and preview playback: complete.
+9. Tauri/React UI for project creation/selection/rename/delete, Capture, Align,
+   Train, Evaluate, Export, notes, runtime inspection, progress, and preview
+   playback: complete.
 10. Development and production sidecar packaging plus debug/release smoke
     scripts: complete.
 
@@ -1538,6 +1563,7 @@ Local desktop V1 is effectively done when all of the following are true:
 | Requirement | Status |
 | --- | --- |
 | A user can create a project from paired WAV files. | Implemented |
+| A user can select, rename, and delete local projects from the desktop UI. | Implemented |
 | The app validates audio and shows actionable warnings. | Implemented |
 | The app estimates, stores, and manually overrides latency. | Implemented |
 | The user can train curated Keras presets locally. | Implemented |
