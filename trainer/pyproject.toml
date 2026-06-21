@@ -11,7 +11,11 @@ dependencies = []
 
 [project.optional-dependencies]
 training = ["numpy>=2.0", "torch>=2.5"]
-tensorflow = ["numpy>=2.0", "tensorflow>=2.16"]
+tensorflow = [
+    "numpy>=2.0",
+    "tensorflow>=2.16,<2.19",
+    "tensorflow-metal>=1.2 ; platform_machine == 'arm64' and sys_platform == 'darwin'",
+]
 
 [project.scripts]
 rttrainer = "rttrainer.cli:main"

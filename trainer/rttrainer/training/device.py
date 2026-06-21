@@ -89,7 +89,15 @@ def package_versions() -> dict[str, str]:
         "rttrainer": __version__,
         "python": platform.python_version(),
     }
-    for name in ("tensorflow", "keras", "torch", "numpy", "scipy", "soundfile"):
+    for name in (
+        "tensorflow",
+        "tensorflow-metal",
+        "keras",
+        "torch",
+        "numpy",
+        "scipy",
+        "soundfile",
+    ):
         try:
             packages[name] = metadata.version(name)
         except metadata.PackageNotFoundError:
@@ -110,10 +118,34 @@ def require_torch():
 
 def choose_device(preferred: str | None = None):
     torch = require_torch()
-    if preferred:
-        return torch.device(preferred)
+    normalized = normalize_device_preference(preferred)
+    if normalized == "cpu":
+        return torch.device("cpu")
+    if normalized == "cuda":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        raise RuntimeError("CUDA was selected, but PyTorch does not report CUDA availability.")
+    if normalized == "mps":
+        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+            return torch.device("mps")
+        raise RuntimeError("MPS was selected, but PyTorch does not report MPS availability.")
     if torch.cuda.is_available():
         return torch.device("cuda")
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def normalize_device_preference(preferred: str | None) -> str:
+    if preferred is None:
+        return "auto"
+    normalized = str(preferred).strip().lower()
+    if normalized in {"", "auto"}:
+        return "auto"
+    if normalized in {"cpu", "tensorflow-cpu"}:
+        return "cpu"
+    if normalized in {"mps", "metal"}:
+        return "mps"
+    if normalized in {"cuda", "gpu", "tensorflow-gpu"} or normalized.startswith("cuda:"):
+        return "cuda"
+    raise RuntimeError("Device must be 'auto', 'cpu', 'mps', or 'cuda'.")

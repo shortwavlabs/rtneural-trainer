@@ -839,16 +839,23 @@ function RuntimeStatus({
   const [backend, setBackend] = useState<RuntimeBackend>(
     settings?.selected_backend ?? "keras",
   );
+  const [selectedDevice, setSelectedDevice] = useState(settings?.selected_device ?? "auto");
   const [externalPythonPath, setExternalPythonPath] = useState(
     settings?.external_python_path ?? "",
   );
 
   useEffect(() => {
     setBackend(settings?.selected_backend ?? "keras");
+    setSelectedDevice(settings?.selected_device ?? "auto");
     setExternalPythonPath(settings?.external_python_path ?? "");
-  }, [settings?.external_python_path, settings?.selected_backend]);
+  }, [settings?.external_python_path, settings?.selected_backend, settings?.selected_device]);
 
   const packageVersions = inspection?.package_versions ?? {};
+  const deviceOptions = useMemo(
+    () => runtimeDeviceOptions(backend, inspection),
+    [backend, inspection],
+  );
+  const selectedDeviceWarning = runtimeDeviceWarning(backend, selectedDevice, inspection);
   const runtimeSource = settings?.external_python_path
     ? "External"
     : status?.trainer_sidecar_present
@@ -856,7 +863,15 @@ function RuntimeStatus({
       : "uv dev";
   const hasChanges =
     backend !== (settings?.selected_backend ?? "keras") ||
+    selectedDevice !== (settings?.selected_device ?? "auto") ||
     externalPythonPath.trim() !== (settings?.external_python_path ?? "");
+
+  useEffect(() => {
+    const selectedOption = deviceOptions.find((option) => option.value === selectedDevice);
+    if (!selectedOption || !selectedOption.available) {
+      setSelectedDevice("auto");
+    }
+  }, [deviceOptions, selectedDevice]);
 
   return (
     <div className="runtime">
@@ -895,7 +910,7 @@ function RuntimeStatus({
         </div>
         <div>
           <dt>Device</dt>
-          <dd>{inspection?.selected_device ?? "Unknown"}</dd>
+          <dd>{runtimeDeviceLabel(selectedDevice, backend, inspection)}</dd>
         </div>
       </dl>
 
@@ -910,6 +925,7 @@ function RuntimeStatus({
         <PackageVersion label="rttrainer" value={packageVersions.rttrainer ?? inspection?.trainer_version} />
         <PackageVersion label="TensorFlow" value={packageVersions.tensorflow ?? inspection?.tensorflow_version} />
         <PackageVersion label="Keras" value={packageVersions.keras ?? inspection?.keras_version} />
+        <PackageVersion label="TF Metal" value={packageVersions["tensorflow-metal"]} />
         <PackageVersion label="PyTorch" value={packageVersions.torch ?? inspection?.torch_version} />
       </div>
 
@@ -919,6 +935,7 @@ function RuntimeStatus({
           event.preventDefault();
           onSave({
             selected_backend: backend,
+            selected_device: selectedDevice,
             external_python_path: externalPythonPath.trim() || null,
           });
         }}
@@ -933,6 +950,26 @@ function RuntimeStatus({
             <option value="pytorch">PyTorch</option>
           </select>
         </label>
+        <label>
+          Training device
+          <select
+            value={selectedDevice}
+            onChange={(event) => setSelectedDevice(event.target.value)}
+          >
+            {deviceOptions.map((option) => (
+              <option
+                key={option.value}
+                value={option.value}
+                disabled={!option.available}
+              >
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedDeviceWarning ? (
+          <small className="runtime-hint">{selectedDeviceWarning}</small>
+        ) : null}
         <label>
           External Python
           <input
@@ -3644,6 +3681,94 @@ function legacyWarnings(warnings: string[]): AudioWarning[] {
 
 function backendLabel(backend: RuntimeBackend) {
   return backend === "pytorch" ? "PyTorch" : "TensorFlow/Keras";
+}
+
+function runtimeDeviceOptions(backend: RuntimeBackend, inspection: DeviceInspection | null) {
+  const mpsAvailable = Boolean(inspection?.mps_available && inspection?.mps_built);
+  const cudaAvailable = Boolean(inspection?.cuda_available);
+  const tensorflowGpuAvailable = Boolean(inspection?.tensorflow_gpus?.length);
+  if (backend === "keras") {
+    return [
+      { value: "auto", label: "Auto", available: true },
+      { value: "cpu", label: "CPU", available: true },
+      {
+        value: "mps",
+        label:
+          mpsAvailable && tensorflowGpuAvailable
+            ? "MPS/Metal GPU"
+            : mpsAvailable
+              ? "MPS needs TF Metal"
+              : "MPS unavailable",
+        available: mpsAvailable && tensorflowGpuAvailable,
+      },
+      {
+        value: "cuda",
+        label:
+          cudaAvailable && tensorflowGpuAvailable
+            ? "CUDA GPU"
+            : cudaAvailable
+              ? "CUDA needs TF GPU"
+              : "CUDA unavailable",
+        available: cudaAvailable && tensorflowGpuAvailable,
+      },
+    ];
+  }
+
+  return [
+    { value: "auto", label: "Auto", available: true },
+    { value: "cpu", label: "CPU", available: true },
+    { value: "mps", label: mpsAvailable ? "MPS" : "MPS unavailable", available: mpsAvailable },
+    {
+      value: "cuda",
+      label: cudaAvailable ? "CUDA" : "CUDA unavailable",
+      available: cudaAvailable,
+    },
+  ];
+}
+
+function runtimeDeviceLabel(
+  device: string,
+  backend: RuntimeBackend,
+  inspection: DeviceInspection | null,
+) {
+  if (device === "auto") {
+    const inspectedDevice =
+      backend === "pytorch" ? inspection?.torch_selected_device : inspection?.selected_device;
+    return inspectedDevice ? `Auto (${inspectedDevice})` : "Auto";
+  }
+  if (device === "mps") return backend === "keras" ? "MPS/Metal GPU" : "MPS";
+  if (device === "cuda") return "CUDA";
+  if (device === "cpu") return "CPU";
+  return device;
+}
+
+function runtimeDeviceWarning(
+  backend: RuntimeBackend,
+  device: string,
+  inspection: DeviceInspection | null,
+) {
+  const tensorflowGpuAvailable = Boolean(inspection?.tensorflow_gpus?.length);
+  if (backend === "keras") {
+    if (device !== "auto" && device !== "cpu" && !tensorflowGpuAvailable) {
+      return "TensorFlow/Keras does not currently report a GPU for this runtime.";
+    }
+    if (
+      device === "auto" &&
+      Boolean(inspection?.mps_available && inspection?.mps_built) &&
+      !tensorflowGpuAvailable
+    ) {
+      return "PyTorch reports MPS, but TensorFlow/Keras does not. Switch to PyTorch for MPS, or install/configure tensorflow-metal for Keras GPU training.";
+    }
+    return null;
+  }
+  if (device === "auto" || device === "cpu") return null;
+  if (device === "mps" && !Boolean(inspection?.mps_available && inspection?.mps_built)) {
+    return "PyTorch does not currently report MPS availability.";
+  }
+  if (device === "cuda" && !Boolean(inspection?.cuda_available)) {
+    return "PyTorch does not currently report CUDA availability.";
+  }
+  return null;
 }
 
 function audioStatusLabel(status: AudioStatus) {

@@ -193,7 +193,10 @@ repo. Pinning early matters because parity failures are often version-sensitive.
      only when the local clone is absent.
 4. Record expected Python package versions:
    - `numpy`
-   - `tensorflow` for canonical Keras export fixtures and compatible presets
+   - `tensorflow>=2.16,<2.19` for canonical Keras export fixtures and
+     compatible presets
+   - `tensorflow-metal>=1.2` on Darwin arm64 for Apple Silicon Metal GPU
+     training
    - `torch` only for the optional PyTorch training/export backend
    - `pyinstaller`, injected by the packaging script when building production
      sidecars
@@ -216,6 +219,7 @@ cd trainer
 uv lock
 uv sync --extra tensorflow
 uv sync --extra training
+uv run --extra tensorflow rttrainer inspect-device --json
 ```
 
 Acceptance criteria:

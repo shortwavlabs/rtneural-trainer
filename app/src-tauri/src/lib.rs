@@ -350,12 +350,16 @@ struct UpdateNotesRequest {
 #[derive(Clone, Serialize, Deserialize)]
 struct RuntimeSettings {
     selected_backend: String,
+    #[serde(default = "default_runtime_device")]
+    selected_device: String,
     external_python_path: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct UpdateRuntimeSettingsRequest {
     selected_backend: String,
+    #[serde(default = "default_runtime_device")]
+    selected_device: String,
     external_python_path: Option<String>,
 }
 
@@ -548,6 +552,7 @@ fn update_runtime_settings(
 ) -> Result<RuntimeSettings, String> {
     let settings = RuntimeSettings {
         selected_backend: normalize_backend(&payload.selected_backend)?.to_string(),
+        selected_device: normalize_runtime_device(&payload.selected_device)?.to_string(),
         external_python_path: payload
             .external_python_path
             .and_then(|path| non_empty_string(&path)),
@@ -1123,7 +1128,13 @@ fn start_training(
     let batch_size = normalize_training_batch_size(payload.batch_size);
     let learning_rate = normalize_training_learning_rate(payload.learning_rate);
     let sequence_length = normalize_training_sequence_length(payload.sequence_length);
-    let (project_dir, selected_backend, resume_checkpoint_path, resume_source_run_id) = {
+    let (
+        project_dir,
+        selected_backend,
+        selected_device,
+        resume_checkpoint_path,
+        resume_source_run_id,
+    ) = {
         let db = state.db.lock().map_err(lock_error)?;
         let project = load_project_detail(&db, &payload.project_id)?;
         let audio_ready = project
@@ -1137,6 +1148,7 @@ fn start_training(
         ensure_no_active_project_job(&db, &payload.project_id)?;
         let settings = load_runtime_settings(&db)?;
         let selected_backend = normalize_backend(&settings.selected_backend)?.to_string();
+        let selected_device = normalize_runtime_device(&settings.selected_device)?.to_string();
         let project_dir = PathBuf::from(&project.project_dir);
         let resume_source_run_id = payload
             .resume_from_run_id
@@ -1178,6 +1190,7 @@ fn start_training(
         (
             project_dir,
             selected_backend,
+            selected_device,
             resume_checkpoint_path,
             resume_source_run_id,
         )
@@ -1192,6 +1205,7 @@ fn start_training(
             "prepared_dir": project_dir.join("audio/prepared"),
             "preset": &model_preset,
             "backend": &selected_backend,
+            "device": &selected_device,
             "epochs": epochs,
             "batch_size": batch_size,
             "learning_rate": learning_rate,
@@ -1697,8 +1711,13 @@ fn read_optional_json_value(path: &Path) -> Option<serde_json::Value> {
 fn default_runtime_settings() -> RuntimeSettings {
     RuntimeSettings {
         selected_backend: "keras".to_string(),
+        selected_device: default_runtime_device(),
         external_python_path: None,
     }
+}
+
+fn default_runtime_device() -> String {
+    "auto".to_string()
 }
 
 fn load_runtime_settings(db: &Connection) -> Result<RuntimeSettings, String> {
@@ -1715,6 +1734,7 @@ fn load_runtime_settings(db: &Connection) -> Result<RuntimeSettings, String> {
     };
     let mut settings: RuntimeSettings = serde_json::from_str(&raw).map_err(to_error)?;
     settings.selected_backend = normalize_backend(&settings.selected_backend)?.to_string();
+    settings.selected_device = normalize_runtime_device(&settings.selected_device)?.to_string();
     settings.external_python_path = settings
         .external_python_path
         .and_then(|path| non_empty_string(&path));
@@ -1724,6 +1744,7 @@ fn load_runtime_settings(db: &Connection) -> Result<RuntimeSettings, String> {
 fn save_runtime_settings(db: &Connection, settings: &RuntimeSettings) -> Result<(), String> {
     let normalized = RuntimeSettings {
         selected_backend: normalize_backend(&settings.selected_backend)?.to_string(),
+        selected_device: normalize_runtime_device(&settings.selected_device)?.to_string(),
         external_python_path: settings
             .external_python_path
             .as_deref()
@@ -1819,6 +1840,16 @@ fn normalize_backend(value: &str) -> Result<&'static str, String> {
         "" | "keras" | "tensorflow" | "tf" => Ok("keras"),
         "pytorch" | "torch" => Ok("pytorch"),
         _ => Err("Backend must be 'keras' or 'pytorch'.".to_string()),
+    }
+}
+
+fn normalize_runtime_device(value: &str) -> Result<&'static str, String> {
+    match value.trim().to_lowercase().as_str() {
+        "" | "auto" => Ok("auto"),
+        "cpu" | "tensorflow-cpu" => Ok("cpu"),
+        "mps" | "metal" => Ok("mps"),
+        "cuda" | "gpu" | "tensorflow-gpu" => Ok("cuda"),
+        _ => Err("Device must be 'auto', 'cpu', 'mps', or 'cuda'.".to_string()),
     }
 }
 
@@ -4594,12 +4625,14 @@ mod tests {
 
         let defaults = load_runtime_settings(&db).expect("load default settings");
         assert_eq!(defaults.selected_backend, "keras");
+        assert_eq!(defaults.selected_device, "auto");
         assert_eq!(defaults.external_python_path, None);
 
         save_runtime_settings(
             &db,
             &RuntimeSettings {
                 selected_backend: "torch".to_string(),
+                selected_device: "metal".to_string(),
                 external_python_path: Some("  /tmp/rttrainer-python  ".to_string()),
             },
         )
@@ -4607,10 +4640,12 @@ mod tests {
 
         let settings = load_runtime_settings(&db).expect("load saved settings");
         assert_eq!(settings.selected_backend, "pytorch");
+        assert_eq!(settings.selected_device, "mps");
         assert_eq!(
             settings.external_python_path,
             Some("/tmp/rttrainer-python".to_string())
         );
+        assert!(normalize_runtime_device("quantum").is_err());
     }
 
     #[test]

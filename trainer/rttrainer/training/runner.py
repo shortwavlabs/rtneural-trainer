@@ -9,7 +9,7 @@ from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.metrics.audio_metrics import compute_metrics
 from rttrainer.models.presets import PresetConfig, build_keras_model, build_model, get_preset
 from rttrainer.training.dataset import build_windowed_dataset
-from rttrainer.training.device import choose_device, require_torch
+from rttrainer.training.device import choose_device, normalize_device_preference, require_torch
 from rttrainer.utils import emit, mkdir, now, read_json, write_json
 
 
@@ -38,6 +38,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     preview_seconds = float(manifest.get("preview_seconds", 3.0))
     early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
     early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
+    device_preference = str(manifest.get("device", "auto"))
     input_path, target_path = resolve_audio_paths(manifest)
     if not input_path.is_file() or not target_path.is_file():
         raise FileNotFoundError("Training requires prepared input_path and target_path WAV files.")
@@ -56,12 +57,14 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     checkpoint_metadata_path = checkpoint_dir / "best-checkpoint.json"
     resume_checkpoint_path = resolve_resume_checkpoint_path(manifest, best_model_path)
     resumed_checkpoint: dict[str, Any] | None = None
-    if resume_checkpoint_path is not None:
-        model, resumed_checkpoint = load_keras_checkpoint(resume_checkpoint_path)
-    else:
-        model = build_keras_model(preset, tf.keras)
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate), loss="mse")
-    device_label = tensorflow_device_label(tf)
+    device_scope = tensorflow_device_scope(tf, device_preference)
+    with tf.device(device_scope):
+        if resume_checkpoint_path is not None:
+            model, resumed_checkpoint = load_keras_checkpoint(resume_checkpoint_path)
+        else:
+            model = build_keras_model(preset, tf.keras)
+        model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate), loss="mse")
+    device_label = tensorflow_device_label(tf, device_preference, device_scope)
     resumed_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
     target_epochs = target_epoch_count(manifest, resumed_epoch, requested_epochs)
     start_epoch = resumed_epoch + 1
@@ -106,15 +109,16 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
 
     for epoch in range(start_epoch, target_epochs + 1):
         last_epoch = epoch
-        fit_history = model.fit(
-            dataset.train_x,
-            dataset.train_y,
-            batch_size=batch_size,
-            epochs=1,
-            shuffle=True,
-            verbose=0,
-        )
-        val_prediction = model.predict(dataset.val_x, verbose=0)
+        with tf.device(device_scope):
+            fit_history = model.fit(
+                dataset.train_x,
+                dataset.train_y,
+                batch_size=batch_size,
+                epochs=1,
+                shuffle=True,
+                verbose=0,
+            )
+            val_prediction = model.predict(dataset.val_x, verbose=0)
         last_metrics = compute_metrics(flatten_array(dataset.val_y), flatten_array(val_prediction))
         train_loss = float(fit_history.history.get("loss", [0.0])[-1])
         is_best = last_metrics["esr"] < best_esr - early_stopping_min_delta
@@ -177,8 +181,9 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     if last_metrics is None:
         raise RuntimeError("Training did not produce metrics.")
 
-    model, checkpoint = load_checkpoint(best_model_path)
-    prediction = predict_keras_sequence(model, dataset.test_input)
+    with tf.device(device_scope):
+        model, checkpoint = load_checkpoint(best_model_path)
+        prediction = predict_keras_sequence(model, dataset.test_input)
     metrics = compute_metrics(dataset.test_target, prediction)
     metrics["realtime_factor"] = estimate_realtime_factor(preset)
 
@@ -658,7 +663,9 @@ def predict_loaded_sequence(
     device_preference: str | None = None,
 ) -> list[float]:
     if checkpoint.get("backend") == "keras":
-        return predict_keras_sequence(model, samples)
+        tf, _numpy = require_tensorflow()
+        with tf.device(tensorflow_device_scope(tf, device_preference)):
+            return predict_keras_sequence(model, samples)
     torch = require_torch()
     device = choose_device(device_preference)
     return predict_torch_sequence(torch, model.to(device), samples, device)
@@ -765,9 +772,34 @@ def require_tensorflow():
     return tf, numpy
 
 
-def tensorflow_device_label(tf) -> str:  # type: ignore[no-untyped-def]
+def tensorflow_device_scope(tf, preferred: str | None = None) -> str:  # type: ignore[no-untyped-def]
+    normalized = normalize_device_preference(preferred)
+    if normalized == "cpu":
+        return "/CPU:0"
+    if normalized in {"mps", "cuda"}:
+        if tf.config.list_logical_devices("GPU"):
+            return "/GPU:0"
+        raise RuntimeError(
+            f"{normalized.upper()} was selected, but TensorFlow does not report a GPU device. "
+            "On Apple Silicon, install/configure tensorflow-metal for TensorFlow GPU training "
+            "or switch to the PyTorch backend for MPS."
+        )
+    if tf.config.list_logical_devices("GPU"):
+        return "/GPU:0"
+    return "/CPU:0"
+
+
+def tensorflow_device_label(  # type: ignore[no-untyped-def]
+    tf,
+    preferred: str | None = None,
+    device_scope: str | None = None,
+) -> str:
+    normalized = normalize_device_preference(preferred)
+    scope = device_scope or tensorflow_device_scope(tf, preferred)
     gpus = tf.config.list_physical_devices("GPU")
-    if gpus:
+    if scope.upper().endswith("GPU:0") and gpus:
+        if normalized in {"mps", "cuda"}:
+            return f"tensorflow-{normalized}:{gpus[0].name}"
         return f"tensorflow-gpu:{gpus[0].name}"
     return "tensorflow-cpu"
 

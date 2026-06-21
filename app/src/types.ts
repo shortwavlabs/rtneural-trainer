@@ -23,11 +23,13 @@ export type RuntimeBackend = "keras" | "pytorch";
 
 export interface RuntimeSettings {
   selected_backend: RuntimeBackend;
+  selected_device: string;
   external_python_path: string | null;
 }
 
 export interface UpdateRuntimeSettingsRequest {
   selected_backend: RuntimeBackend;
+  selected_device: string;
   external_python_path: string | null;
 }
 

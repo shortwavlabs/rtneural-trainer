@@ -71,6 +71,16 @@ cd trainer
 UV_CACHE_DIR=../.uv-cache uv sync --extra training
 ```
 
+On Apple Silicon, the `tensorflow` extra also installs `tensorflow-metal` for
+Metal GPU training. TensorFlow is pinned below `2.19` because newer TensorFlow
+builds can fail to load Apple's current Metal plugin. Verify the active runtime
+with:
+
+```bash
+cd trainer
+UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow rttrainer inspect-device --json
+```
+
 ## Run The Desktop App
 
 For the web UI during development:

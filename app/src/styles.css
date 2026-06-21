@@ -525,6 +525,12 @@ dd,
   min-height: 36px;
 }
 
+.runtime-hint {
+  color: #f5e0b8;
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
 .runtime-error {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
