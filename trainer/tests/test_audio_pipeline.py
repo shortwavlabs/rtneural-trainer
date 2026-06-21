@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import struct
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ import wave
 from pathlib import Path
 
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
-from rttrainer.data.prepare import prepare_audio
+from rttrainer.data.prepare import analyze_latency, prepare_audio
 from rttrainer.metrics.audio_metrics import compute_metrics
 from rttrainer.training.dataset import build_windowed_dataset
 
@@ -57,6 +58,50 @@ class AudioPipelineTests(unittest.TestCase):
             aligned_target = read_wav_mono(prepared.target_path)
             self.assertEqual(len(aligned_input.samples), len(aligned_target.samples))
 
+    def test_latency_estimator_scans_active_regions_beyond_first_second(self) -> None:
+        length = 120_000
+        dry = [0.0] * length
+        target = [0.0] * length
+
+        for index in range(6_000):
+            sample = 0.12 * deterministic_sample(index)
+            dry[8_000 + 21 + index] = sample
+            target[8_000 + index] = sample
+
+        for index in range(14_000):
+            sample = 0.55 * deterministic_sample(index)
+            dry[70_000 + index] = sample
+            target[70_000 + 12 + index] = sample
+
+        analysis = analyze_latency(dry, target)
+
+        self.assertGreaterEqual(analysis.estimated_samples, 10)
+        self.assertLessEqual(analysis.estimated_samples, 13)
+        self.assertGreater(analysis.confidence, 0.65)
+        self.assertGreaterEqual(analysis.analysis_window_count, 2)
+        self.assertTrue(
+            any(
+                10 <= int(candidate["samples"]) <= 13
+                for candidate in analysis.candidates
+            )
+        )
+
+    def test_latency_estimator_handles_nonlinear_targets(self) -> None:
+        length = 20_000
+        delay = 37
+        dry = [0.0] * length
+        target = [0.0] * length
+        for index in range(1_000, 12_000):
+            sample = 0.34 * deterministic_sample(index) + 0.11 * deterministic_sample(index * 3)
+            dry[index] = sample
+            target[index + delay] = soft_clip(sample * 2.7) * 0.8
+
+        analysis = analyze_latency(dry, target)
+
+        self.assertEqual(analysis.estimated_samples, delay)
+        self.assertGreater(analysis.confidence, 0.8)
+        self.assertEqual(analysis.candidates[0]["samples"], delay)
+
     def test_prepare_applies_manual_latency_adjustment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -80,6 +125,8 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertEqual(latency["auto_estimated_samples"], 23)
         self.assertEqual(latency["manual_adjustment_samples"], 5)
         self.assertEqual(latency["effective_samples"], 28)
+        self.assertEqual(latency["method"], "active_window_correlation")
+        self.assertTrue(latency["candidates"])
 
     def test_prepare_resamples_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -194,6 +241,18 @@ class AudioPipelineTests(unittest.TestCase):
 
 def alternating_signal(length: int) -> list[float]:
     return [0.3 if index % 2 == 0 else -0.3 for index in range(length)]
+
+
+def deterministic_sample(index: int) -> float:
+    return (
+        0.62 * math.sin(index * 0.047)
+        + 0.29 * math.sin(index * 0.173)
+        + 0.09 * math.sin(index * 0.011)
+    )
+
+
+def soft_clip(value: float) -> float:
+    return math.tanh(value)
 
 
 def write_stereo_wav(path: Path, frames: list[tuple[float, float]]) -> None:
