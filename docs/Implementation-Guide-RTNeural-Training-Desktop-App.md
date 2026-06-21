@@ -633,15 +633,18 @@ Training loop requirements:
    user graphs.
 2. Save Keras model weights/config for the canonical path, or
    `model.state_dict()` for optional PyTorch runs.
-3. Save optimizer state and scheduler state for resume.
-4. Checkpoint every configured N epochs.
+3. Save optimizer state where the backend supports it.
+4. Save the best checkpoint by validation ESR.
 5. Track best checkpoint by validation ESR or selected quality metric.
 6. Support cancellation by signal and by a cancellation file in the run folder.
 7. Emit JSONL progress events after every epoch.
 8. Save exact package versions, device name, seed, and preset metadata.
 9. Support early stopping by validation ESR plateau.
-10. Save per-epoch validation history for the desktop validation curve.
-11. Save good/usable/needs-work quality assessment language for the report UI.
+10. Reduce learning rate on validation ESR plateau before early stopping,
+    emitting `learning_rate_reduced` events and persisting per-epoch learning
+    rates in `history.json`.
+11. Save per-epoch validation history for the desktop validation curve.
+12. Save good/usable/needs-work quality assessment language for the report UI.
 
 Validation/inference preview requirements:
 

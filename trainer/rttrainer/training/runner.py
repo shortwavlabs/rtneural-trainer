@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 import time
 from pathlib import Path
@@ -38,6 +39,12 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     preview_seconds = float(manifest.get("preview_seconds", 3.0))
     early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
     early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
+    lr_schedule = resolve_learning_rate_schedule(
+        manifest,
+        learning_rate,
+        early_stopping_patience,
+        early_stopping_min_delta,
+    )
     device_preference = str(manifest.get("device", "auto"))
     input_path, target_path = resolve_audio_paths(manifest)
     if not input_path.is_file() or not target_path.is_file():
@@ -64,6 +71,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
         else:
             model = build_keras_model(preset, tf.keras)
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate), loss="mse")
+        lr_scheduler = build_keras_lr_scheduler(tf, model, lr_schedule)
     device_label = tensorflow_device_label(tf, device_preference, device_scope)
     resumed_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
     target_epochs = target_epoch_count(manifest, resumed_epoch, requested_epochs)
@@ -95,6 +103,8 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "epochs": target_epochs,
             "requested_epochs": requested_epochs,
             "start_epoch": start_epoch,
+            "learning_rate": learning_rate,
+            "learning_rate_schedule": lr_schedule,
             "resumed_from_checkpoint": str(resume_checkpoint_path) if resume_checkpoint_path else None,
         }
     )
@@ -106,9 +116,12 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     stopped_early: dict[str, Any] | None = None
     epochs_without_improvement = 0
     last_epoch = start_epoch - 1
+    lr_reductions: list[dict[str, float | int]] = []
+    current_learning_rate = current_keras_learning_rate(tf, model)
 
     for epoch in range(start_epoch, target_epochs + 1):
         last_epoch = epoch
+        epoch_learning_rate = current_keras_learning_rate(tf, model)
         with tf.device(device_scope):
             fit_history = model.fit(
                 dataset.train_x,
@@ -142,6 +155,32 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
         else:
             epochs_without_improvement += 1
 
+        previous_learning_rate = epoch_learning_rate
+        current_learning_rate = step_keras_lr_scheduler(
+            tf,
+            lr_scheduler,
+            model,
+            epoch,
+            last_metrics["esr"],
+        )
+        lr_reduced = current_learning_rate < previous_learning_rate - 1e-15
+        if lr_reduced:
+            reduction = {
+                "epoch": epoch,
+                "from": previous_learning_rate,
+                "to": current_learning_rate,
+                "factor": float(lr_schedule["factor"]),
+                "patience": int(lr_schedule["patience"]),
+            }
+            lr_reductions.append(reduction)
+            emit(
+                {
+                    "type": "learning_rate_reduced",
+                    "run_id": run_id,
+                    **reduction,
+                }
+            )
+
         history.append(
             {
                 "epoch": epoch,
@@ -149,6 +188,9 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "val_esr": last_metrics["esr"],
                 "val_mae": last_metrics["mae"],
                 "val_rmse": last_metrics["rmse"],
+                "learning_rate": previous_learning_rate,
+                "next_learning_rate": current_learning_rate,
+                "learning_rate_reduced": lr_reduced,
                 "is_best": is_best,
             }
         )
@@ -163,6 +205,9 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "val_esr": last_metrics["esr"],
                 "val_mae": last_metrics["mae"],
                 "val_rmse": last_metrics["rmse"],
+                "learning_rate": previous_learning_rate,
+                "next_learning_rate": current_learning_rate,
+                "learning_rate_reduced": lr_reduced,
                 "is_best": is_best,
             }
         )
@@ -223,6 +268,12 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "min_delta": early_stopping_min_delta,
                 "best_epoch": best_epoch,
             },
+            "learning_rate_schedule": {
+                **lr_schedule,
+                "initial_learning_rate": learning_rate,
+                "final_learning_rate": current_learning_rate,
+                "reductions": lr_reductions,
+            },
             "tensorflow_version": tf.__version__,
             "keras_version": keras_version(tf),
             "created_at": now(),
@@ -255,6 +306,12 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     preview_seconds = float(manifest.get("preview_seconds", 3.0))
     early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
     early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
+    lr_schedule = resolve_learning_rate_schedule(
+        manifest,
+        learning_rate,
+        early_stopping_patience,
+        early_stopping_min_delta,
+    )
     input_path, target_path = resolve_audio_paths(manifest)
     if not input_path.is_file() or not target_path.is_file():
         raise FileNotFoundError("Training requires prepared input_path and target_path WAV files.")
@@ -272,6 +329,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     )
     model = build_model(preset).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    lr_scheduler = build_torch_lr_scheduler(torch, optimizer, lr_schedule)
     criterion = torch.nn.MSELoss()
     best_checkpoint_path = checkpoint_dir / "best-checkpoint.pt"
     resume_checkpoint_path = resolve_resume_checkpoint_path(manifest, best_checkpoint_path)
@@ -320,6 +378,8 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "epochs": target_epochs,
             "requested_epochs": requested_epochs,
             "start_epoch": start_epoch,
+            "learning_rate": learning_rate,
+            "learning_rate_schedule": lr_schedule,
             "resumed_from_checkpoint": str(resume_checkpoint_path) if resume_checkpoint_path else None,
         }
     )
@@ -330,9 +390,12 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     stopped_early: dict[str, Any] | None = None
     epochs_without_improvement = 0
     last_epoch = start_epoch - 1
+    lr_reductions: list[dict[str, float | int]] = []
+    current_learning_rate = current_torch_learning_rate(optimizer)
 
     for epoch in range(start_epoch, target_epochs + 1):
         last_epoch = epoch
+        epoch_learning_rate = current_torch_learning_rate(optimizer)
         model.train()
         losses = []
         for batch_x, batch_y in train_loader:
@@ -369,6 +432,30 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
         else:
             epochs_without_improvement += 1
 
+        previous_learning_rate = epoch_learning_rate
+        current_learning_rate = step_torch_lr_scheduler(
+            lr_scheduler,
+            optimizer,
+            last_metrics["esr"],
+        )
+        lr_reduced = current_learning_rate < previous_learning_rate - 1e-15
+        if lr_reduced:
+            reduction = {
+                "epoch": epoch,
+                "from": previous_learning_rate,
+                "to": current_learning_rate,
+                "factor": float(lr_schedule["factor"]),
+                "patience": int(lr_schedule["patience"]),
+            }
+            lr_reductions.append(reduction)
+            emit(
+                {
+                    "type": "learning_rate_reduced",
+                    "run_id": run_id,
+                    **reduction,
+                }
+            )
+
         history.append(
             {
                 "epoch": epoch,
@@ -376,6 +463,9 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "val_esr": last_metrics["esr"],
                 "val_mae": last_metrics["mae"],
                 "val_rmse": last_metrics["rmse"],
+                "learning_rate": previous_learning_rate,
+                "next_learning_rate": current_learning_rate,
+                "learning_rate_reduced": lr_reduced,
                 "is_best": is_best,
             }
         )
@@ -390,6 +480,9 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "val_esr": last_metrics["esr"],
                 "val_mae": last_metrics["mae"],
                 "val_rmse": last_metrics["rmse"],
+                "learning_rate": previous_learning_rate,
+                "next_learning_rate": current_learning_rate,
+                "learning_rate_reduced": lr_reduced,
                 "is_best": is_best,
             }
         )
@@ -448,6 +541,12 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "patience": early_stopping_patience,
                 "min_delta": early_stopping_min_delta,
                 "best_epoch": best_epoch,
+            },
+            "learning_rate_schedule": {
+                **lr_schedule,
+                "initial_learning_rate": learning_rate,
+                "final_learning_rate": current_learning_rate,
+                "reductions": lr_reductions,
             },
             "created_at": now(),
         },
@@ -625,6 +724,124 @@ def target_epoch_count(
     if bool(manifest.get("resume_epochs_are_additional", False)) and resumed_epoch > 0:
         return resumed_epoch + max(1, requested_epochs)
     return requested_epochs
+
+
+def default_learning_rate_plateau_patience(early_stopping_patience: int) -> int:
+    if early_stopping_patience > 0:
+        return max(1, min(10, early_stopping_patience // 2))
+    return 5
+
+
+def resolve_learning_rate_schedule(
+    manifest: dict[str, Any],
+    initial_learning_rate: float,
+    early_stopping_patience: int,
+    early_stopping_min_delta: float,
+) -> dict[str, bool | float | int | str]:
+    factor = finite_float(manifest.get("learning_rate_plateau_factor"), 0.5)
+    factor = min(0.99, max(0.01, factor))
+    patience = int(
+        manifest.get(
+            "learning_rate_plateau_patience",
+            default_learning_rate_plateau_patience(early_stopping_patience),
+        )
+    )
+    patience = max(1, min(100, patience))
+    min_delta = finite_float(
+        manifest.get("learning_rate_plateau_min_delta"),
+        early_stopping_min_delta,
+    )
+    min_delta = max(0.0, min_delta)
+    min_learning_rate = finite_float(manifest.get("min_learning_rate"), 1e-6)
+    min_learning_rate = max(0.0, min(min_learning_rate, initial_learning_rate))
+    cooldown = max(0, int(manifest.get("learning_rate_plateau_cooldown", 0)))
+    enabled = bool(manifest.get("learning_rate_plateau_enabled", True))
+    if initial_learning_rate <= min_learning_rate:
+        enabled = False
+    return {
+        "enabled": enabled,
+        "monitor": "val_esr",
+        "mode": "min",
+        "factor": factor,
+        "patience": patience,
+        "min_delta": min_delta,
+        "cooldown": cooldown,
+        "min_learning_rate": min_learning_rate,
+    }
+
+
+def finite_float(value: Any, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if math.isfinite(parsed) else default
+
+
+def build_keras_lr_scheduler(tf, model, schedule: dict[str, Any]):  # type: ignore[no-untyped-def]
+    if not schedule.get("enabled", True):
+        return None
+    callback = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor=str(schedule["monitor"]),
+        factor=float(schedule["factor"]),
+        patience=int(schedule["patience"]),
+        verbose=0,
+        mode=str(schedule["mode"]),
+        min_delta=float(schedule["min_delta"]),
+        cooldown=int(schedule["cooldown"]),
+        min_lr=float(schedule["min_learning_rate"]),
+    )
+    callback.set_model(model)
+    callback.on_train_begin({})
+    return callback
+
+
+def step_keras_lr_scheduler(  # type: ignore[no-untyped-def]
+    tf,
+    scheduler,
+    model,
+    epoch: int,
+    metric: float,
+) -> float:
+    if scheduler is not None:
+        scheduler.on_epoch_end(epoch - 1, {"val_esr": metric})
+    return current_keras_learning_rate(tf, model)
+
+
+def current_keras_learning_rate(tf, model) -> float:  # type: ignore[no-untyped-def]
+    learning_rate = model.optimizer.learning_rate
+    try:
+        return float(tf.keras.backend.get_value(learning_rate))
+    except Exception:
+        try:
+            return float(learning_rate.numpy())
+        except Exception:
+            return float(learning_rate)
+
+
+def build_torch_lr_scheduler(torch, optimizer, schedule: dict[str, Any]):  # type: ignore[no-untyped-def]
+    if not schedule.get("enabled", True):
+        return None
+    return torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode=str(schedule["mode"]),
+        factor=float(schedule["factor"]),
+        patience=int(schedule["patience"]),
+        threshold=float(schedule["min_delta"]),
+        threshold_mode="abs",
+        cooldown=int(schedule["cooldown"]),
+        min_lr=float(schedule["min_learning_rate"]),
+    )
+
+
+def step_torch_lr_scheduler(scheduler, optimizer, metric: float) -> float:  # type: ignore[no-untyped-def]
+    if scheduler is not None:
+        scheduler.step(metric)
+    return current_torch_learning_rate(optimizer)
+
+
+def current_torch_learning_rate(optimizer) -> float:  # type: ignore[no-untyped-def]
+    return float(optimizer.param_groups[0]["lr"])
 
 
 def numeric_metrics(value: Any) -> dict[str, float]:

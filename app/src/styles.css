@@ -1203,6 +1203,20 @@ dd,
   font-weight: 700;
 }
 
+.curve-lr-marker {
+  stroke: #7fb1ff;
+  stroke-dasharray: 5 7;
+  stroke-width: 1.4;
+  opacity: 0.74;
+  vector-effect: non-scaling-stroke;
+}
+
+.curve-lr-label {
+  fill: #9ec4ff;
+  font-size: 18px;
+  font-weight: 800;
+}
+
 .curve-card circle {
   fill: #f2bf5e;
   stroke: #101212;

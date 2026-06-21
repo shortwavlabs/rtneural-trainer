@@ -306,6 +306,12 @@ Keras runs save `checkpoints/best-model.keras` plus checkpoint metadata. To use
 the optional PyTorch path, set `"backend": "pytorch"` and install the
 `training` extra.
 
+Training monitors validation ESR. If validation ESR plateaus, the trainer lowers
+the learning rate before early stopping has a chance to stop the run. By
+default, plateau patience is half the early-stop patience, the decay factor is
+`0.5`, and the floor is `1e-6`. Progress events and `history.json` record the
+learning rate used each epoch and any reductions.
+
 Current Keras-first presets are:
 
 - `dense_only`: memoryless Dense baseline for very fast checks.

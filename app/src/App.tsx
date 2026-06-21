@@ -93,6 +93,9 @@ type TrainingHistoryPoint = {
   trainLoss: number | null;
   valEsr: number | null;
   valRmse: number | null;
+  learningRate: number | null;
+  nextLearningRate: number | null;
+  learningRateReduced: boolean;
   isBest: boolean;
 };
 
@@ -2318,6 +2321,8 @@ function ValidationCurve({
     best.valEsr !== null &&
     latest.epoch === best.epoch;
   const gridValues = [domainMax, domainMin + domainRange / 2, domainMin];
+  const lrReductions = history.filter((point) => point.learningRateReduced);
+  const currentLearningRate = latest.nextLearningRate ?? latest.learningRate;
 
   return (
     <div className="curve-card">
@@ -2329,6 +2334,7 @@ function ValidationCurve({
         <small>
           Best epoch {best.epoch}
           {improvement !== null ? ` · -${improvement.toFixed(4)} ESR` : ""}
+          {currentLearningRate !== null ? ` · lr ${formatLearningRate(currentLearningRate)}` : ""}
         </small>
       </div>
       <svg
@@ -2358,6 +2364,22 @@ function ValidationCurve({
           d={`M ${chart.left} ${chart.height - chart.bottom} L ${chart.width - chart.right} ${chart.height - chart.bottom}`}
           className="curve-baseline"
         />
+        {lrReductions.map((point) => {
+          const index = history.findIndex((item) => item.epoch === point.epoch);
+          if (index < 0) return null;
+          const x = xForIndex(index);
+          return (
+            <g key={`lr-${point.epoch}`}>
+              <path
+                d={`M ${x.toFixed(2)} ${chart.top} L ${x.toFixed(2)} ${chart.height - chart.bottom}`}
+                className="curve-lr-marker"
+              />
+              <text x={x + 6} y={chart.top + 14} className="curve-lr-label">
+                lr
+              </text>
+            </g>
+          );
+        })}
         <path d={path} className="curve-line" />
         {history.map((point, index) => {
           if (!point.isBest || point.valEsr === null) return null;
@@ -2375,6 +2397,12 @@ function ValidationCurve({
         <p className="curve-note">
           Best value landed at the final epoch. This run was still improving, so a
           longer run or more patience may be worth testing.
+        </p>
+      ) : null}
+      {lrReductions.length ? (
+        <p className="curve-note">
+          Learning rate stepped down after epoch{" "}
+          {lrReductions.map((point) => point.epoch).join(", ")}.
         </p>
       ) : null}
     </div>
@@ -3294,6 +3322,7 @@ function progressTitle(event: SidecarProgressEvent) {
     return epoch && total ? `Epoch ${epoch}/${total}` : "Epoch";
   }
   if (type === "checkpoint") return "Checkpoint saved";
+  if (type === "learning_rate_reduced") return "Learning rate reduced";
   if (type === "run_finished" || type === "train_command_finished") {
     return "Training completed";
   }
@@ -3315,11 +3344,31 @@ function progressDetail(event: SidecarProgressEvent) {
   if (type === "epoch") {
     const trainLoss = getNumber(event.json, "train_loss");
     const valEsr = getNumber(event.json, "val_esr");
+    const learningRate = getNumber(event.json, "learning_rate");
+    const nextLearningRate = getNumber(event.json, "next_learning_rate");
+    const lrReduced = getBoolean(event.json, "learning_rate_reduced");
     const isBest = getBoolean(event.json, "is_best");
     return [
       trainLoss !== null ? `loss ${formatMetric(trainLoss)}` : null,
       valEsr !== null ? `val ESR ${formatMetric(valEsr)}` : null,
+      learningRate !== null ? `lr ${formatLearningRate(learningRate)}` : null,
+      lrReduced && nextLearningRate !== null
+        ? `next ${formatLearningRate(nextLearningRate)}`
+        : null,
       isBest ? "best" : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  if (type === "learning_rate_reduced") {
+    const from = getNumber(event.json, "from");
+    const to = getNumber(event.json, "to");
+    const epoch = getNumber(event.json, "epoch");
+    return [
+      epoch !== null ? `after epoch ${epoch}` : null,
+      from !== null && to !== null
+        ? `${formatLearningRate(from)} -> ${formatLearningRate(to)}`
+        : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -3500,6 +3549,9 @@ function trainingHistoryFromEvents(
       trainLoss: getNumber(event.json, "train_loss"),
       valEsr: getNumber(event.json, "val_esr"),
       valRmse: getNumber(event.json, "val_rmse"),
+      learningRate: getNumber(event.json, "learning_rate"),
+      nextLearningRate: getNumber(event.json, "next_learning_rate"),
+      learningRateReduced: getBoolean(event.json, "learning_rate_reduced"),
       isBest: getBoolean(event.json, "is_best"),
     }))
     .filter((point) => point.epoch > 0);
@@ -3516,6 +3568,9 @@ function historyFromReport(report: Record<string, unknown> | null): TrainingHist
         trainLoss: getNumber(value, "train_loss"),
         valEsr: getNumber(value, "val_esr"),
         valRmse: getNumber(value, "val_rmse"),
+        learningRate: getNumber(value, "learning_rate"),
+        nextLearningRate: getNumber(value, "next_learning_rate"),
+        learningRateReduced: getBoolean(value, "learning_rate_reduced"),
         isBest: getBoolean(value, "is_best"),
       };
     })
@@ -3779,6 +3834,10 @@ function audioStatusLabel(status: AudioStatus) {
 
 function formatMetric(value: number) {
   return value < 0.01 ? value.toExponential(2) : value.toFixed(4);
+}
+
+function formatLearningRate(value: number) {
+  return value < 0.001 ? value.toExponential(2) : value.toFixed(4);
 }
 
 function previewArtifactDetail(artifact: RunPreviewArtifact) {
