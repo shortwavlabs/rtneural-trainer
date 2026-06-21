@@ -170,6 +170,8 @@ struct TrainingMetrics {
 struct TrainingRun {
     id: String,
     preset: String,
+    #[serde(default = "default_training_backend")]
+    backend: String,
     status: RunStatus,
     device: String,
     epochs: u32,
@@ -270,6 +272,8 @@ struct UpdateAlignmentRequest {
 struct StartTrainingRequest {
     project_id: String,
     preset: String,
+    #[serde(default)]
+    resume_from_run_id: Option<String>,
     #[serde(default = "default_training_epochs")]
     epochs: u32,
     #[serde(default = "default_early_stopping_patience")]
@@ -508,6 +512,8 @@ struct LatencyReport {
 struct TrainingReport {
     run_id: String,
     preset: String,
+    #[serde(default = "default_training_backend")]
+    backend: String,
     device: String,
     epochs: u32,
     metrics: TrainingMetrics,
@@ -1117,7 +1123,7 @@ fn start_training(
     let batch_size = normalize_training_batch_size(payload.batch_size);
     let learning_rate = normalize_training_learning_rate(payload.learning_rate);
     let sequence_length = normalize_training_sequence_length(payload.sequence_length);
-    let (project_dir, selected_backend) = {
+    let (project_dir, selected_backend, resume_checkpoint_path, resume_source_run_id) = {
         let db = state.db.lock().map_err(lock_error)?;
         let project = load_project_detail(&db, &payload.project_id)?;
         let audio_ready = project
@@ -1130,23 +1136,62 @@ fn start_training(
         }
         ensure_no_active_project_job(&db, &payload.project_id)?;
         let settings = load_runtime_settings(&db)?;
+        let selected_backend = normalize_backend(&settings.selected_backend)?.to_string();
+        let project_dir = PathBuf::from(&project.project_dir);
+        let resume_source_run_id = payload
+            .resume_from_run_id
+            .as_deref()
+            .and_then(non_empty_string);
+        let resume_checkpoint_path = if let Some(source_run_id) = resume_source_run_id.as_deref() {
+            let source_run = project
+                .runs
+                .iter()
+                .find(|run| run.id == source_run_id)
+                .ok_or_else(|| "Resume source run was not found.".to_string())?;
+            if !matches!(source_run.status, RunStatus::Completed) {
+                return Err(
+                    "Choose a completed run when starting from a previous checkpoint.".to_string(),
+                );
+            }
+            if source_run.preset != model_preset {
+                return Err(format!(
+                    "Resume source uses preset '{}'. Select the same preset before resuming.",
+                    source_run.preset
+                ));
+            }
+            if let Ok(source_backend) = normalize_backend(&source_run.backend) {
+                if source_backend != selected_backend {
+                    return Err(format!(
+                        "Resume source uses {source_backend}; selected runtime backend is {selected_backend}."
+                    ));
+                }
+            }
+            let source_run_dir =
+                artifact_path(&project_dir, &training_run_dir(&db, source_run_id)?);
+            let checkpoint_path = best_checkpoint_path(&source_run_dir)
+                .ok_or_else(|| "Selected run does not have a best checkpoint.".to_string())?;
+            validate_resume_checkpoint_backend(&checkpoint_path, &selected_backend)?;
+            Some(checkpoint_path)
+        } else {
+            None
+        };
         (
-            PathBuf::from(&project.project_dir),
-            normalize_backend(&settings.selected_backend)?.to_string(),
+            project_dir,
+            selected_backend,
+            resume_checkpoint_path,
+            resume_source_run_id,
         )
     };
 
     let run_dir = project_dir.join("runs").join(&run_id);
     fs::create_dir_all(&run_dir).map_err(to_error)?;
     let manifest_path = run_dir.join("train-manifest.json");
-    write_json(
-        &manifest_path,
-        &serde_json::json!({
+    let mut manifest = serde_json::json!({
             "run_id": &run_id,
             "run_dir": &run_dir,
             "prepared_dir": project_dir.join("audio/prepared"),
             "preset": &model_preset,
-            "backend": selected_backend,
+            "backend": &selected_backend,
             "epochs": epochs,
             "batch_size": batch_size,
             "learning_rate": learning_rate,
@@ -1155,14 +1200,24 @@ fn start_training(
             "early_stopping_patience": early_stopping_patience,
             "early_stopping_min_delta": early_stopping_min_delta,
             "seed": 1337
-        }),
-    )?;
+    });
+    if let Some(checkpoint_path) = resume_checkpoint_path {
+        manifest["resume_from_checkpoint"] = serde_json::Value::Bool(true);
+        manifest["resume_epochs_are_additional"] = serde_json::Value::Bool(true);
+        manifest["checkpoint_path"] =
+            serde_json::Value::String(checkpoint_path.display().to_string());
+    }
+    if let Some(source_run_id) = resume_source_run_id {
+        manifest["resume_source_run_id"] = serde_json::Value::String(source_run_id);
+    }
+    write_json(&manifest_path, &manifest)?;
 
     let created_at = now();
     let log_path = run_dir.join("events.jsonl");
     let run = TrainingRun {
         id: run_id.clone(),
         preset: model_preset,
+        backend: selected_backend,
         status: RunStatus::Running,
         device: "pending".to_string(),
         epochs: 0,
@@ -1876,6 +1931,10 @@ fn default_training_sequence_length() -> u32 {
     1024
 }
 
+fn default_training_backend() -> String {
+    "unknown".to_string()
+}
+
 fn default_waveform_bins() -> usize {
     220
 }
@@ -2430,7 +2489,7 @@ fn load_training_runs(
 ) -> Result<Vec<TrainingRun>, String> {
     let mut stmt = db
         .prepare(
-            "SELECT id, preset, status, device, epochs, created_at, updated_at, metrics_json, log_path
+            "SELECT id, preset, status, device, epochs, created_at, updated_at, metrics_json, log_path, run_dir
              FROM training_runs
              WHERE project_id = ?1
              ORDER BY created_at ASC",
@@ -2448,17 +2507,30 @@ fn load_training_runs(
                 row.get::<_, String>(6)?,
                 row.get::<_, Option<String>>(7)?,
                 row.get::<_, String>(8)?,
+                row.get::<_, String>(9)?,
             ))
         })
         .map_err(to_error)?;
 
     let mut runs = Vec::new();
     for row in rows {
-        let (id, preset, status, device, epochs, created_at, updated_at, metrics_json, log_path) =
-            row.map_err(to_error)?;
+        let (
+            id,
+            preset,
+            status,
+            device,
+            epochs,
+            created_at,
+            updated_at,
+            metrics_json,
+            log_path,
+            run_dir,
+        ) = row.map_err(to_error)?;
+        let run_dir = artifact_path(project_dir, &run_dir);
         runs.push(TrainingRun {
             id,
             preset,
+            backend: training_run_backend(&run_dir),
             status: enum_from_string(&status)?,
             device,
             epochs,
@@ -2777,6 +2849,56 @@ fn best_checkpoint_path(run_dir: &Path) -> Option<PathBuf> {
         return Some(torch);
     }
     None
+}
+
+fn training_run_backend(run_dir: &Path) -> String {
+    for file_name in ["training-report.json", "train-manifest.json"] {
+        if let Some(value) = read_optional_json_value(&run_dir.join(file_name)) {
+            if let Some(backend) = value
+                .get("backend")
+                .and_then(|backend| backend.as_str())
+                .and_then(|backend| normalize_backend(backend).ok())
+            {
+                return backend.to_string();
+            }
+        }
+    }
+
+    if run_dir.join("checkpoints/best-model.keras").exists() {
+        return "keras".to_string();
+    }
+    if run_dir.join("checkpoints/best-checkpoint.pt").exists() {
+        return "pytorch".to_string();
+    }
+    default_training_backend()
+}
+
+fn validate_resume_checkpoint_backend(checkpoint_path: &Path, backend: &str) -> Result<(), String> {
+    let checkpoint_backend = if checkpoint_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("keras"))
+    {
+        "keras"
+    } else if checkpoint_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pt"))
+    {
+        "pytorch"
+    } else {
+        return Err(format!(
+            "Resume checkpoint format is not supported: {}",
+            checkpoint_path.display()
+        ));
+    };
+
+    if checkpoint_backend != backend {
+        return Err(format!(
+            "Selected runtime backend is {backend}, but the chosen checkpoint is {checkpoint_backend}. Switch backend or choose a matching run."
+        ));
+    }
+    Ok(())
 }
 
 fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Result<(), String> {
@@ -3441,6 +3563,7 @@ fn spawn_training_worker(
                         let completed_run = TrainingRun {
                             id: report.run_id,
                             preset: report.preset,
+                            backend: report.backend,
                             status: RunStatus::Completed,
                             device: report.device,
                             epochs: report.epochs,
@@ -4171,6 +4294,7 @@ mod tests {
         let run = TrainingRun {
             id: "run_test".to_string(),
             preset: "lstm_light".to_string(),
+            backend: "keras".to_string(),
             status: RunStatus::Completed,
             device: "tensorflow-cpu".to_string(),
             epochs: 2,
@@ -4264,6 +4388,7 @@ mod tests {
         let run = TrainingRun {
             id: "run_test".to_string(),
             preset: "lstm_standard".to_string(),
+            backend: "keras".to_string(),
             status: RunStatus::Running,
             device: "pending".to_string(),
             epochs: 0,
@@ -4370,6 +4495,7 @@ mod tests {
         let run = TrainingRun {
             id: "run_delete_test".to_string(),
             preset: "lstm_standard".to_string(),
+            backend: "keras".to_string(),
             status: RunStatus::Completed,
             device: "cpu".to_string(),
             epochs: 1,

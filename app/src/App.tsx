@@ -63,6 +63,7 @@ type CaptureAnalyzePayload = {
 
 type TrainingOptions = {
   preset: string;
+  resumeFromRunId?: string | null;
   epochs: number;
   batchSize: number;
   learningRate: number;
@@ -581,6 +582,7 @@ export default function App() {
                       const nextProject = await api.startTraining({
                         project_id: project.id,
                         preset: options.preset,
+                        resume_from_run_id: options.resumeFromRunId ?? null,
                         epochs: options.epochs,
                         batch_size: options.batchSize,
                         learning_rate: options.learningRate,
@@ -1615,6 +1617,7 @@ function TrainView({
   const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(6);
   const [earlyStoppingMinDelta, setEarlyStoppingMinDelta] = useState(0.0001);
   const [maxWindows, setMaxWindows] = useState(2048);
+  const [resumeFromRunId, setResumeFromRunId] = useState<string | null>(null);
   const [recipeName, setRecipeName] = useState("");
   const [recipeNotice, setRecipeNotice] = useState<string | null>(null);
   const [preview, setPreview] = useState<RunPreview | null>(null);
@@ -1622,9 +1625,17 @@ function TrainView({
   const selectedRecipe = recipeOptions.find((recipe) => recipe.id === selectedRecipeId) ?? null;
   const selectedPreset = presets.find((item) => item.id === preset) ?? presets[0];
   const selectedPresetSupported = selectedPreset.backends.includes(backend);
+  const resumeCandidates = useMemo(
+    () => compatibleResumeRuns(project.runs, preset, backend),
+    [backend, preset, project.runs],
+  );
+  const selectedResumeRun =
+    resumeCandidates.find((run) => run.id === resumeFromRunId) ?? null;
+  const completedRuns = project.runs.filter((run) => run.status === "completed");
   const canTrain = project.audio?.status === "ready";
   const currentOptions: TrainingOptions = {
     preset,
+    resumeFromRunId,
     epochs,
     batchSize,
     learningRate,
@@ -1657,6 +1668,12 @@ function TrainView({
     if (selectedPresetSupported) return;
     setPreset(recommendation.presetId);
   }, [backend, preset, recommendation.presetId, selectedPresetSupported]);
+
+  useEffect(() => {
+    if (!resumeFromRunId) return;
+    if (resumeCandidates.some((run) => run.id === resumeFromRunId)) return;
+    setResumeFromRunId(null);
+  }, [resumeCandidates, resumeFromRunId]);
 
   useEffect(() => {
     if (!selectedRecipe || recipeModelSupported(selectedRecipe.modelPreset, backend)) return;
@@ -1870,6 +1887,33 @@ function TrainView({
             );
           })}
         </div>
+        <div className="resume-panel">
+          <label>
+            Start from checkpoint
+            <select
+              value={resumeFromRunId ?? ""}
+              onChange={(event) => {
+                const nextRunId = event.target.value || null;
+                setResumeFromRunId(nextRunId);
+                setRecipeNotice(null);
+              }}
+            >
+              <option value="">Start from scratch</option>
+              {resumeCandidates.map((run) => (
+                <option key={run.id} value={run.id}>
+                  {resumeRunLabel(run)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <small>
+            {selectedResumeRun
+              ? "Uses that run's best checkpoint. Epochs below are added after the selected checkpoint."
+              : completedRuns.length
+                ? "Choose a completed run with the same preset and backend to continue training."
+                : "Complete a run first to make checkpoint continuation available."}
+          </small>
+        </div>
         <div className="training-controls">
           <label>
             Epochs
@@ -1984,11 +2028,18 @@ function TrainView({
               earlyStoppingPatience,
               earlyStoppingMinDelta,
               maxWindows,
+              resumeFromRunId,
             })
           }
         >
-          {busy ? <LoaderCircle className="spin" size={16} /> : <Play size={16} />}
-          Train
+          {busy ? (
+            <LoaderCircle className="spin" size={16} />
+          ) : selectedResumeRun ? (
+            <RotateCcw size={16} />
+          ) : (
+            <Play size={16} />
+          )}
+          {selectedResumeRun ? "Continue training" : "Train"}
         </button>
         {activeRun ? (
           <button
@@ -3362,6 +3413,42 @@ function trainingRecipeFromCustom(recipe: TrainingRecipe): TrainingRecipeOption 
 
 function recipeModelSupported(modelPreset: string, backend: RuntimeBackend) {
   return Boolean(presets.find((preset) => preset.id === modelPreset)?.backends.includes(backend));
+}
+
+function compatibleResumeRuns(
+  runs: TrainingRun[],
+  preset: string,
+  backend: RuntimeBackend,
+) {
+  return [...runs]
+    .reverse()
+    .filter((run) => {
+      if (run.status !== "completed" || !run.metrics) return false;
+      if (run.preset !== preset) return false;
+      return normalizeRunBackend(run.backend) === backend;
+    });
+}
+
+function normalizeRunBackend(backend: string) {
+  const normalized = backend.trim().toLowerCase();
+  if (normalized === "tensorflow" || normalized === "tf") return "keras";
+  if (normalized === "torch") return "pytorch";
+  return normalized;
+}
+
+function resumeRunLabel(run: TrainingRun) {
+  return [
+    presetDisplayLabel(run.preset),
+    run.metrics ? `ESR ${run.metrics.esr.toFixed(3)}` : null,
+    `${run.epochs} epochs`,
+    formatReportDate(run.created_at),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function presetDisplayLabel(presetId: string) {
+  return presets.find((preset) => preset.id === presetId)?.label ?? presetId;
 }
 
 function trainingHistoryFromEvents(

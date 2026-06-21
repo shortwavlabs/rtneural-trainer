@@ -966,6 +966,21 @@ dd,
   line-height: 1.45;
 }
 
+.resume-panel {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 8px;
+}
+
+.resume-panel small {
+  color: #aeb8b1;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .recipe-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;

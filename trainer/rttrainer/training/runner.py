@@ -30,7 +30,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     preset = get_preset(str(manifest.get("preset", "lstm_light")))
     run_id = str(manifest.get("run_id", f"run_{int(time.time())}"))
     seed = int(manifest.get("seed", 1337))
-    epochs = int(manifest.get("epochs", 20))
+    requested_epochs = int(manifest.get("epochs", 20))
     batch_size = int(manifest.get("batch_size", 16))
     learning_rate = float(manifest.get("learning_rate", 1e-3))
     sequence_length = int(manifest.get("sequence_length", 1024))
@@ -62,8 +62,25 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
         model = build_keras_model(preset, tf.keras)
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate), loss="mse")
     device_label = tensorflow_device_label(tf)
-    start_epoch = int((resumed_checkpoint or {}).get("epoch", 0)) + 1
-    start_epoch = max(1, min(start_epoch, epochs + 1))
+    resumed_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
+    target_epochs = target_epoch_count(manifest, resumed_epoch, requested_epochs)
+    start_epoch = resumed_epoch + 1
+    start_epoch = max(1, min(start_epoch, target_epochs + 1))
+    resumed_metrics = numeric_metrics((resumed_checkpoint or {}).get("metrics", {}))
+    if resume_checkpoint_path is not None and not best_model_path.exists():
+        model.save(best_model_path)
+        save_keras_checkpoint_metadata(
+            checkpoint_metadata_path,
+            model_path=best_model_path,
+            preset=preset,
+            epoch=resumed_epoch,
+            metrics=resumed_metrics,
+            seed=seed,
+            sequence_length=sequence_length,
+            tensorflow_version=tf.__version__,
+            keras_version=keras_version(tf),
+            device=device_label,
+        )
 
     emit(
         {
@@ -72,22 +89,22 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "preset": preset.preset_id,
             "backend": "keras",
             "device": device_label,
-            "epochs": epochs,
+            "epochs": target_epochs,
+            "requested_epochs": requested_epochs,
             "start_epoch": start_epoch,
             "resumed_from_checkpoint": str(resume_checkpoint_path) if resume_checkpoint_path else None,
         }
     )
 
-    resumed_metrics = (resumed_checkpoint or {}).get("metrics", {})
     best_esr = float(resumed_metrics.get("esr", float("inf")))
     last_metrics: dict[str, float] | None = dict(resumed_metrics) if resumed_metrics else None
-    best_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
+    best_epoch = resumed_epoch
     history: list[dict[str, float | int | bool]] = []
     stopped_early: dict[str, Any] | None = None
     epochs_without_improvement = 0
     last_epoch = start_epoch - 1
 
-    for epoch in range(start_epoch, epochs + 1):
+    for epoch in range(start_epoch, target_epochs + 1):
         last_epoch = epoch
         fit_history = model.fit(
             dataset.train_x,
@@ -137,7 +154,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "type": "epoch",
                 "run_id": run_id,
                 "epoch": epoch,
-                "total_epochs": epochs,
+                "total_epochs": target_epochs,
                 "train_loss": train_loss,
                 "val_esr": last_metrics["esr"],
                 "val_mae": last_metrics["mae"],
@@ -185,7 +202,8 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "backend": "keras",
             "device": device_label,
             "epochs": last_epoch,
-            "requested_epochs": epochs,
+            "requested_epochs": requested_epochs,
+            "target_epochs": target_epochs,
             "best_checkpoint_path": str(best_model_path),
             "checkpoint_metadata_path": str(checkpoint_metadata_path),
             "metrics": metrics,
@@ -224,7 +242,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     preset = get_preset(str(manifest.get("preset", "lstm_light")))
     run_id = str(manifest.get("run_id", f"run_{int(time.time())}"))
     seed = int(manifest.get("seed", 1337))
-    epochs = int(manifest.get("epochs", 20))
+    requested_epochs = int(manifest.get("epochs", 20))
     batch_size = int(manifest.get("batch_size", 16))
     learning_rate = float(manifest.get("learning_rate", 1e-3))
     sequence_length = int(manifest.get("sequence_length", 1024))
@@ -269,8 +287,23 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
         batch_size=batch_size,
         shuffle=True,
     )
-    start_epoch = int((resumed_checkpoint or {}).get("epoch", 0)) + 1
-    start_epoch = max(1, min(start_epoch, epochs + 1))
+    resumed_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
+    target_epochs = target_epoch_count(manifest, resumed_epoch, requested_epochs)
+    start_epoch = resumed_epoch + 1
+    start_epoch = max(1, min(start_epoch, target_epochs + 1))
+    resumed_metrics = numeric_metrics((resumed_checkpoint or {}).get("metrics", {}))
+    if resume_checkpoint_path is not None and not best_checkpoint_path.exists():
+        save_torch_checkpoint(
+            torch,
+            best_checkpoint_path,
+            preset,
+            model,
+            optimizer,
+            resumed_epoch,
+            resumed_metrics,
+            seed,
+            sequence_length,
+        )
 
     emit(
         {
@@ -279,21 +312,21 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "preset": preset.preset_id,
             "backend": "pytorch",
             "device": str(device),
-            "epochs": epochs,
+            "epochs": target_epochs,
+            "requested_epochs": requested_epochs,
             "start_epoch": start_epoch,
             "resumed_from_checkpoint": str(resume_checkpoint_path) if resume_checkpoint_path else None,
         }
     )
-    resumed_metrics = (resumed_checkpoint or {}).get("metrics", {})
     best_esr = float(resumed_metrics.get("esr", float("inf")))
     last_metrics: dict[str, float] | None = dict(resumed_metrics) if resumed_metrics else None
-    best_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
+    best_epoch = resumed_epoch
     history: list[dict[str, float | int | bool]] = []
     stopped_early: dict[str, Any] | None = None
     epochs_without_improvement = 0
     last_epoch = start_epoch - 1
 
-    for epoch in range(start_epoch, epochs + 1):
+    for epoch in range(start_epoch, target_epochs + 1):
         last_epoch = epoch
         model.train()
         losses = []
@@ -347,7 +380,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
                 "type": "epoch",
                 "run_id": run_id,
                 "epoch": epoch,
-                "total_epochs": epochs,
+                "total_epochs": target_epochs,
                 "train_loss": train_loss,
                 "val_esr": last_metrics["esr"],
                 "val_mae": last_metrics["mae"],
@@ -396,7 +429,8 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "backend": "pytorch",
             "device": str(device),
             "epochs": last_epoch,
-            "requested_epochs": epochs,
+            "requested_epochs": requested_epochs,
+            "target_epochs": target_epochs,
             "best_checkpoint_path": str(best_checkpoint_path),
             "metrics": metrics,
             "quality_assessment": quality_assessment(metrics),
@@ -576,6 +610,26 @@ def resolve_resume_checkpoint_path(manifest: dict[str, Any], default_path: Path)
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Resume checkpoint not found: {checkpoint_path}")
     return checkpoint_path
+
+
+def target_epoch_count(
+    manifest: dict[str, Any],
+    resumed_epoch: int,
+    requested_epochs: int,
+) -> int:
+    if bool(manifest.get("resume_epochs_are_additional", False)) and resumed_epoch > 0:
+        return resumed_epoch + max(1, requested_epochs)
+    return requested_epochs
+
+
+def numeric_metrics(value: Any) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    metrics: dict[str, float] = {}
+    for key, metric in value.items():
+        if isinstance(metric, (int, float)):
+            metrics[str(key)] = float(metric)
+    return metrics
 
 
 def resolve_audio_paths(

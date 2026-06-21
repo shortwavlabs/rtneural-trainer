@@ -112,6 +112,7 @@ export interface TrainingMetrics {
 export interface TrainingRun {
   id: string;
   preset: string;
+  backend: RuntimeBackend | "unknown" | string;
   status: RunStatus;
   device: string;
   epochs: number;
@@ -191,6 +192,7 @@ export interface UpdateAudioRequest {
 export interface StartTrainingRequest {
   project_id: string;
   preset: string;
+  resume_from_run_id?: string | null;
   epochs: number;
   batch_size: number;
   learning_rate: number;
