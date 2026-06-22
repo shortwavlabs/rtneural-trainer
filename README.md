@@ -579,6 +579,7 @@ Tauri bundle outputs, staged sidecars, and
 - [Research note](docs/Research-RTNeural-Training-Desktop-App.md)
 - [PANAMA / WaveNet findings](docs/Research-PANAMA-WaveNet-Active-Learning.md)
 - [NAM / WaveNet performance findings](docs/Research-NAM-Performance-And-WaveNet.md)
+- [Clean/crunch/rhythm capture baseline](docs/Research-Clean-Crunch-Rhythm-Capture-Baseline.md)
 - [Implementation guide](docs/Implementation-Guide-RTNeural-Training-Desktop-App.md)
 - [Audio capture guidelines](docs/Audio-Capture-Guidelines.md)
 - [RTNeural upstream](https://github.com/jatinchowdhury18/RTNeural)
