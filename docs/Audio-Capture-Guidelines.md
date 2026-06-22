@@ -25,6 +25,12 @@ The two files should:
 For v1, 48 kHz mono WAV is the safest target format. The app supports PCM WAV
 and 32-bit float WAV captures.
 
+Stereo dual-mono files are acceptable, but true mono is preferred. The app can
+mix stereo files to mono, and this was harmless in the current DI2 experiments
+because both channels were identical. If the left and right channels differ,
+mixdown can change the effective tone, phase, or gain, so record mono whenever
+repeatability matters.
+
 ## Recommended Levels
 
 Aim for repeatable headroom, not maximum loudness.
@@ -37,6 +43,12 @@ Recommended starting targets:
 - Avoid clipped samples.
 - Keep average level high enough that the active material is well above the
   noise floor.
+
+The DI2 capture family that produced the best results used a dry input around
+`-5.3 dBFS` peak and `-24.1 dBFS` RMS. Successful targets ranged from roughly
+`-22.5 dBFS` RMS for clean to roughly `-15 dBFS` RMS for lead and overdrive
+pedal. That range is usable when intentional; the important thing is avoiding
+clipping and keeping the capture gain consistent.
 
 The app warns when either file has less than 1 dB of peak headroom. That warning
 does not mean the file is unusable, but it does mean clipped transients or
@@ -71,6 +83,10 @@ Clean tones can have much lower RMS than distorted tones because they are more
 dynamic. Treat that as a review signal, not an automatic failure. A clean target
 that is 6-8 dB quieter by RMS may be correct, but it should be intentional.
 
+Dense lead and pedal captures may be 9 dB or more louder than the dry DI by RMS.
+That is not automatically bad, but it usually means the model needs the WaveNet
+quality lane and careful listening to the residual.
+
 ## Latency And Alignment
 
 The prepare step estimates target latency with cross-correlation. Check the
@@ -81,11 +97,27 @@ Guidelines:
 - Use the automatic latency estimate as a starting point.
 - For moderate or low confidence, sweep manual latency around the estimate and
   compare residuals.
+- When the app shows candidate offsets in Align, try those exact candidates
+  before committing to a long WaveNet run.
 - Do not assume every profile in a family has the same latency.
 - Heavier processing paths may report different latency than clean or crunch
   paths.
 - If the model predicts the right tone but residual peaks stay high, alignment
   should be one of the first things to check.
+
+Current calibration:
+
+- High-confidence captures around `0.85` and above have been reliable enough to
+  trust for long runs.
+- Around `0.75` is usable, but listen carefully.
+- Around `0.60` or below should trigger a candidate sweep before long training.
+
+For the DI2 family, rhythm confidence was `0.60` with candidates `10`, `2`, and
+`18` samples, and lead confidence was `0.59` with candidates `9`, `1`, and `17`
+samples. In both cases, post-training preview shift checks still preferred
+shift `0`, so the final residual was not a simple evaluation offset. Even so,
+trying candidate offsets before long training is worthwhile because alignment
+can affect how easily the model learns.
 
 ## Capture Length
 
@@ -101,6 +133,10 @@ Recommended minimums:
 For long captures, the app samples training windows across the file. Increase
 the window budget when you want more coverage of a long performance.
 
+For 90-180 second captures, `2048` windows is a good first pass and `4096` to
+`8192` windows is more appropriate for final WaveNet balanced/quality runs,
+especially for high-gain rhythm or dense lead captures.
+
 ## Source Material
 
 Use material that excites the behavior you want the model to learn.
@@ -113,6 +149,8 @@ Include:
 - Sustained notes for compression and decay.
 - Dynamics from soft to hard picking.
 - Silence or near-silence only when noise behavior matters.
+- A few transitions between muted, open, single-note, and chordal playing so
+  sampled training windows see more than one behavior.
 
 Avoid:
 
@@ -123,6 +161,31 @@ Avoid:
   unsupported behavior.
 - Changing knobs, pickup selection, input gain, or output gain mid-capture
   unless that variation is part of the intended model.
+
+Lead captures need extra discipline. If possible, capture an amp/cab-only lead
+target first: no delay, reverb, modulation, post-amp compressor, gate, or
+limiter. The current lead capture trained to a usable model, but it had the
+lowest crest factor and weakest latency confidence in the set. Time-varying
+post effects can make this harder because the model is trying to learn one
+fixed nonlinear system, not a whole mix-ready lead chain.
+
+## Preset Expectations From Current Captures
+
+The current clean/crunch/rhythm/edge/lead/overdrive-pedal experiments all used
+the same 151.6 second DI2 performance. The practical training rule is now:
+
+- Start amp and pedal captures with `wavenet_tcn_balanced`.
+- Use `wavenet_tcn_quality` when maximum fidelity matters, when balanced leaves
+  audible residual detail, or for dense crunch/rhythm/pedal tones.
+- Treat `conv1d_stack_prelu` as a fast CPU fallback and sanity check, not the
+  main quality lane.
+- Use `wavenet_tcn_fast` as a quick WaveNet probe, not as the final model for
+  hard captures.
+
+Balanced and quality were both excellent on clean, edge-of-breakup, and
+overdrive pedal captures. Quality clearly won crunch and rhythm. Lead was the
+outlier: balanced and quality tied, and balanced was the practical winner
+because it had better runtime margin.
 
 ## Interpreting Warnings
 
@@ -138,11 +201,40 @@ floor.
 The dry and processed average levels are far apart. This may be intentional for
 some rigs, but it should be reviewed before training.
 
+`latency_estimate_review`:
+The top latency candidates are close. Try the candidate offsets shown in Align
+before long runs, especially for rhythm and lead tones.
+
 `long_capture`:
 The capture is long enough that the trainer will sample windows across it. Use a
 larger window budget for better coverage.
 
-## Current 2025 Profile Family Notes
+## Current DI2 Calibration Notes
+
+The latest calibration family used one DI with six outputs:
+
+| Target | Target peak | Target RMS | RMS delta vs DI | Estimated latency | Confidence | Training read |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| CLEAN2 | n/a | `-22.48 dBFS` | `+1.58 dB` | `12 samples` | `0.92` | WaveNet balanced/quality both excellent. |
+| CRUNCH2 | n/a | `-17.27 dBFS` | `+6.79 dB` | `6 samples` | `0.76` | WaveNet quality clearly preferred. |
+| RHYTHM2 | n/a | `-16.40 dBFS` | `+7.66 dB` | `10 samples` | `0.60` | Hardest amp capture; try latency candidates before long runs. |
+| EDGE2 | `-5.59 dBFS` | `-18.26 dBFS` | `+5.80 dB` | `11 samples` | `0.88` | Healthy edge-of-breakup case; WaveNet quality best, balanced excellent. |
+| LEAD2 | `-9.74 dBFS` | `-14.95 dBFS` | `+9.11 dB` | `9 samples` | `0.59` | Dense lead outlier; balanced tied quality, review latency/chain. |
+| DRIVE2 | `-5.00 dBFS` | `-15.09 dBFS` | `+8.97 dB` | `3 samples` | `0.85` | Strong overdrive pedal capture; quality best, balanced excellent. |
+
+Takeaways:
+
+- A dry DI around `-5.3 dBFS` peak and `-24.1 dBFS` RMS worked well.
+- Processed target RMS from `-22.5` to `-15 dBFS` can be valid when it reflects
+  the real rig behavior.
+- Low confidence around `0.60` is not a failure, but it should trigger latency
+  candidate checks.
+- Lead tones are the most likely to hide non-modelable chain behavior. Capture a
+  dry amp/cab-only lead target first when possible.
+- Pedal captures can train extremely well with the same rules as amp captures
+  when latency confidence is good.
+
+## Historical 2025 Profile Family Notes
 
 The first real profile-family check used one DI with four outputs:
 
