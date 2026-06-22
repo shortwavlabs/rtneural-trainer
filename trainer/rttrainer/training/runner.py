@@ -1722,15 +1722,40 @@ def quality_assessment(
     rmse = float(metrics.get("rmse", 1.0))
     peak_residual = float(metrics.get("peak_residual", 1.0))
     realtime_factor = float(metrics.get("realtime_factor", 0.0))
+    correlation = float(
+        metrics.get(
+            "state_continuous_correlation",
+            metrics.get("correlation", float("nan")),
+        )
+    )
+    correlation_known = math.isfinite(correlation)
+    runtime_ok = realtime_factor >= 1.0
 
-    if esr <= 0.03 and rmse <= 0.03 and realtime_factor >= 40:
+    if (
+        runtime_ok
+        and esr <= 0.12
+        and rmse <= 0.06
+        and (not correlation_known or correlation >= 0.93)
+    ):
         verdict = "good"
         summary = "Good candidate for export."
-        action = "Listen to the residual and export if the preview matches the target."
-    elif esr <= 0.10 and rmse <= 0.08 and realtime_factor >= 20:
+        action = (
+            "Listen for the remaining residual and export if the native benchmark "
+            "has enough realtime margin."
+        )
+    elif (
+        runtime_ok
+        and esr <= 0.18
+        and rmse <= 0.08
+        and peak_residual <= 0.70
+        and (not correlation_known or correlation >= 0.88)
+    ):
         verdict = "usable"
         summary = "Usable, but inspect before shipping."
-        action = "Compare target and prediction. Try a richer preset if the residual is audible."
+        action = (
+            "Compare target, prediction, and residual. Try a quality preset if the "
+            "remaining high-band detail is audible."
+        )
     else:
         verdict = "needs_work"
         summary = "Needs more work before export."
@@ -1738,10 +1763,17 @@ def quality_assessment(
             "Check alignment and gain staging, then train longer or choose a stronger preset."
         )
 
-    if peak_residual > 0.5:
+    if peak_residual > 0.70:
         verdict = "needs_work"
         summary = "Residual peaks are high."
         action = "Look for alignment slips, clipping, or missing capture dynamics."
+    elif peak_residual > 0.55 and verdict == "good":
+        verdict = "usable"
+        summary = "Usable with residual peaks to inspect."
+        action = (
+            "The overall match is strong, but residual peaks are still noticeable. "
+            "Listen before treating the export as final."
+        )
 
     if (state_diagnostic or {}).get("verdict") == "state_drift_suspected":
         verdict = "needs_work"
@@ -1759,6 +1791,7 @@ def quality_assessment(
         "rmse": rmse,
         "peak_residual": peak_residual,
         "realtime_factor": realtime_factor,
+        "correlation": correlation if correlation_known else 0.0,
     }
 
 

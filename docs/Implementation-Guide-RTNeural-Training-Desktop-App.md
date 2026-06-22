@@ -427,6 +427,11 @@ rtneural-validator benchmark \
   --model model.rtneural.json \
   --sample-rate 48000 \
   --seconds 30 \
+  --block-sizes 16,32,64,128,256,512 \
+  --channels 1,2 \
+  --passes 3 \
+  --warmup-blocks 4 \
+  --min-realtime-factor 1.0 \
   --report benchmark-report.json
 ```
 
@@ -437,19 +442,51 @@ Current responsibilities:
 3. Load JSON with RTNeural's dynamic parser.
 4. Feed deterministic sample buffers.
 5. Compare output to reference audio or `.npy` fixtures.
-6. Measure real-time factor at 48 kHz.
-7. Emit machine-readable JSON reports.
+6. Measure real-time factor at 48 kHz across realistic host block sizes and
+   mono/stereo channel counts.
+7. Report the conservative worst-case result while preserving per-case timing
+   details.
+8. Emit machine-readable JSON reports.
 
 Benchmark report fields:
 
 ```json
 {
-  "schema_version": 1,
-  "backend": "eigen",
+  "schema_version": 2,
+  "backend": "rtneural-stl",
   "sample_rate": 48000,
-  "frames_processed": 1440000,
-  "elapsed_ms": 100.0,
-  "realtime_factor": 300.0,
+  "block_sizes": [16, 32, 64, 128, 256, 512],
+  "channels": [1, 2],
+  "passes": 3,
+  "frames_processed": 576000,
+  "model_evaluations": 864000,
+  "elapsed_ms": 701.8,
+  "realtime_factor": 1.42,
+  "summary": {
+    "realtime_factor_worst": 1.42,
+    "realtime_factor_best": 2.88,
+    "worst_case": {
+      "block_size": 512,
+      "channels": 2,
+      "realtime_factor": 1.42
+    }
+  },
+  "model_info": {
+    "architecture": "wavenet_tcn_balanced",
+    "size_bytes": 211460,
+    "latency_samples": 10,
+    "latency_ms": 0.208,
+    "receptive_field_samples": 511,
+    "receptive_field_ms": 10.646,
+    "conv1d_layers": 8
+  },
+  "runs": [
+    {
+      "block_size": 512,
+      "channels": 2,
+      "realtime_factor_worst": 1.42
+    }
+  ],
   "max_abs_output": 0.98,
   "status": "pass"
 }

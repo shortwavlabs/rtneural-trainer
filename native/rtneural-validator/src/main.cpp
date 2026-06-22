@@ -1,6 +1,7 @@
 #include <RTNeural/RTNeural.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -9,11 +10,20 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+#ifndef RTNEURAL_VALIDATOR_BACKEND
+#define RTNEURAL_VALIDATOR_BACKEND "rtneural-unknown"
+#endif
+
+#ifndef RTNEURAL_VALIDATOR_BUILD_TYPE
+#define RTNEURAL_VALIDATOR_BUILD_TYPE "unknown"
+#endif
 
 namespace {
 
@@ -308,6 +318,262 @@ ValidationResult compareSignals(
     return result;
 }
 
+std::vector<std::string> splitCsv(const std::string& value)
+{
+    std::vector<std::string> items;
+    std::stringstream stream(value);
+    std::string item;
+    while(std::getline(stream, item, ','))
+    {
+        item.erase(std::remove_if(item.begin(), item.end(), [](unsigned char ch) {
+            return std::isspace(ch) != 0;
+        }), item.end());
+        if(!item.empty())
+            items.push_back(item);
+    }
+    return items;
+}
+
+std::vector<int> parsePositiveIntList(
+    const std::map<std::string, std::string>& args,
+    const std::string& key,
+    const std::vector<int>& defaults)
+{
+    const auto it = args.find(key);
+    if(it == args.end() || it->second.empty())
+        return defaults;
+
+    std::vector<int> values;
+    for(const auto& item : splitCsv(it->second))
+    {
+        const auto value = std::stoi(item);
+        if(value <= 0)
+            throw std::runtime_error("--" + key + " values must be positive");
+        values.push_back(value);
+    }
+    return values.empty() ? defaults : values;
+}
+
+int parseBoundedInt(
+    const std::map<std::string, std::string>& args,
+    const std::string& key,
+    int defaultValue,
+    int minValue,
+    int maxValue)
+{
+    const auto it = args.find(key);
+    const auto value = it == args.end() ? defaultValue : std::stoi(it->second);
+    return std::max(minValue, std::min(maxValue, value));
+}
+
+double parseBoundedDouble(
+    const std::map<std::string, std::string>& args,
+    const std::string& key,
+    double defaultValue,
+    double minValue,
+    double maxValue)
+{
+    const auto it = args.find(key);
+    const auto value = it == args.end() ? defaultValue : std::stod(it->second);
+    return std::max(minValue, std::min(maxValue, value));
+}
+
+double median(std::vector<double> values)
+{
+    if(values.empty())
+        return 0.0;
+    std::sort(values.begin(), values.end());
+    const auto middle = values.size() / 2;
+    if(values.size() % 2 == 1)
+        return values[middle];
+    return (values[middle - 1] + values[middle]) * 0.5;
+}
+
+std::uintmax_t fileSizeBytes(const std::string& path)
+{
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if(!file)
+        return 0;
+    return static_cast<std::uintmax_t>(std::max<std::streamoff>(0, file.tellg()));
+}
+
+nlohmann::json readJsonFile(const std::string& path)
+{
+    std::ifstream file(path);
+    if(!file)
+        throw std::runtime_error("Could not open JSON file: " + path);
+    nlohmann::json value;
+    file >> value;
+    return value;
+}
+
+int firstJsonInt(const nlohmann::json& value, const std::string& key, int defaultValue)
+{
+    if(!value.contains(key))
+        return defaultValue;
+    const auto& item = value.at(key);
+    if(item.is_number_integer())
+        return item.get<int>();
+    if(item.is_array() && !item.empty() && item.at(0).is_number_integer())
+        return item.at(0).get<int>();
+    return defaultValue;
+}
+
+nlohmann::json modelInfo(const std::string& modelPath, int sampleRate)
+{
+    nlohmann::json info {
+        { "size_bytes", fileSizeBytes(modelPath) },
+        { "receptive_field_samples", nullptr },
+        { "receptive_field_ms", nullptr },
+        { "conv1d_layers", 0 },
+        { "latency_samples", nullptr },
+        { "latency_ms", nullptr },
+        { "architecture", nullptr },
+        { "schema", nullptr },
+    };
+
+    try
+    {
+        const auto modelJson = readJsonFile(modelPath);
+        const auto metadata = modelJson.value("metadata", nlohmann::json::object());
+        if(metadata.contains("latency_samples") && metadata["latency_samples"].is_number())
+        {
+            const auto latencySamples = metadata["latency_samples"].get<double>();
+            info["latency_samples"] = latencySamples;
+            if(sampleRate > 0)
+                info["latency_ms"] = latencySamples * 1000.0 / sampleRate;
+        }
+        if(metadata.contains("architecture") && metadata["architecture"].is_string())
+            info["architecture"] = metadata["architecture"];
+        if(metadata.contains("schema") && metadata["schema"].is_string())
+            info["schema"] = metadata["schema"];
+
+        int receptiveField = 1;
+        int conv1dLayers = 0;
+        for(const auto& layer : modelJson.value("layers", nlohmann::json::array()))
+        {
+            if(layer.value("type", "") != "conv1d")
+                continue;
+            const auto kernelSize = firstJsonInt(layer, "kernel_size", 1);
+            const auto dilation = firstJsonInt(layer, "dilation", 1);
+            receptiveField += std::max(0, kernelSize - 1) * std::max(1, dilation);
+            ++conv1dLayers;
+        }
+        info["conv1d_layers"] = conv1dLayers;
+        if(conv1dLayers > 0)
+        {
+            info["receptive_field_samples"] = receptiveField;
+            info["receptive_field_ms"] = sampleRate > 0
+                ? static_cast<double>(receptiveField) * 1000.0 / sampleRate
+                : 0.0;
+        }
+    }
+    catch(const std::exception& e)
+    {
+        info["metadata_error"] = e.what();
+    }
+
+    return info;
+}
+
+void resetModels(std::vector<std::unique_ptr<RTNeural::Model<float>>>& models)
+{
+    for(auto& model : models)
+        model->reset();
+}
+
+float runBenchmarkFrames(
+    std::vector<std::unique_ptr<RTNeural::Model<float>>>& models,
+    std::size_t frames,
+    int blockSize)
+{
+    float input[1] {};
+    float peakOutput = 0.0f;
+    std::size_t processed = 0;
+    while(processed < frames)
+    {
+        const auto blockFrames = std::min<std::size_t>(
+            static_cast<std::size_t>(blockSize),
+            frames - processed);
+        for(std::size_t frame = 0; frame < blockFrames; ++frame)
+        {
+            input[0] = 0.0f;
+            for(auto& model : models)
+            {
+                const auto value = model->forward(input);
+                if(!std::isfinite(value))
+                    throw std::runtime_error("RTNeural model produced NaN or Inf output during benchmark");
+                peakOutput = std::max(peakOutput, std::abs(value));
+            }
+        }
+        processed += blockFrames;
+    }
+    return peakOutput;
+}
+
+nlohmann::json benchmarkCase(
+    const std::string& modelPath,
+    bool debug,
+    int blockSize,
+    int channels,
+    int passes,
+    int warmupBlocks,
+    std::size_t frames,
+    double seconds,
+    double minRealtimeFactor)
+{
+    std::vector<std::unique_ptr<RTNeural::Model<float>>> models;
+    models.reserve(static_cast<std::size_t>(channels));
+    for(int channel = 0; channel < channels; ++channel)
+        models.push_back(loadModel(modelPath, debug));
+
+    const auto warmupFrames = static_cast<std::size_t>(std::max(0, warmupBlocks))
+        * static_cast<std::size_t>(blockSize);
+    std::vector<double> elapsedMs;
+    std::vector<double> realtimeFactors;
+    float peakOutput = 0.0f;
+
+    for(int pass = 0; pass < passes; ++pass)
+    {
+        resetModels(models);
+        if(warmupFrames > 0)
+            peakOutput = std::max(peakOutput, runBenchmarkFrames(models, warmupFrames, blockSize));
+
+        const auto start = std::chrono::steady_clock::now();
+        peakOutput = std::max(peakOutput, runBenchmarkFrames(models, frames, blockSize));
+        const auto end = std::chrono::steady_clock::now();
+
+        const auto elapsed = std::chrono::duration<double, std::milli>(end - start).count();
+        const auto elapsedSeconds = elapsed / 1000.0;
+        elapsedMs.push_back(elapsed);
+        realtimeFactors.push_back(elapsedSeconds > 0.0 ? seconds / elapsedSeconds : 0.0);
+    }
+
+    const auto minElapsed = *std::min_element(elapsedMs.begin(), elapsedMs.end());
+    const auto maxElapsed = *std::max_element(elapsedMs.begin(), elapsedMs.end());
+    const auto minRealtime = *std::min_element(realtimeFactors.begin(), realtimeFactors.end());
+    const auto maxRealtime = *std::max_element(realtimeFactors.begin(), realtimeFactors.end());
+    const auto medianElapsed = median(elapsedMs);
+    const auto medianRealtime = median(realtimeFactors);
+
+    return {
+        { "status", minRealtime >= minRealtimeFactor ? "pass" : "fail" },
+        { "block_size", blockSize },
+        { "channels", channels },
+        { "passes", passes },
+        { "warmup_blocks", warmupBlocks },
+        { "frames_per_pass", frames },
+        { "model_evaluations_per_pass", frames * static_cast<std::size_t>(channels) },
+        { "elapsed_ms_min", minElapsed },
+        { "elapsed_ms_median", medianElapsed },
+        { "elapsed_ms_worst", maxElapsed },
+        { "realtime_factor_best", maxRealtime },
+        { "realtime_factor_median", medianRealtime },
+        { "realtime_factor_worst", minRealtime },
+        { "max_abs_output", peakOutput },
+    };
+}
+
 void writeJsonReport(const std::string& path, const nlohmann::json& report)
 {
     std::ofstream file(path);
@@ -367,40 +633,93 @@ int benchmark(const std::map<std::string, std::string>& args)
     const auto seconds = args.count("seconds") > 0 ? std::stod(args.at("seconds")) : 30.0;
     const auto frames = static_cast<std::size_t>(std::max(1.0, seconds * static_cast<double>(sampleRate)));
     const auto debug = args.count("debug") > 0;
+    const auto blockSizes = parsePositiveIntList(args, "block-sizes", { 64 });
+    const auto channelCounts = parsePositiveIntList(args, "channels", { 1 });
+    const auto passes = parseBoundedInt(args, "passes", 1, 1, 20);
+    const auto warmupBlocks = parseBoundedInt(args, "warmup-blocks", 0, 0, 1000);
+    const auto minRealtimeFactor = parseBoundedDouble(args, "min-realtime-factor", 1.0, 0.01, 1000.0);
 
-    auto model = loadModel(modelPath, debug);
-    model->reset();
-
-    float input[1] {};
+    nlohmann::json runs = nlohmann::json::array();
+    double worstRealtimeFactor = std::numeric_limits<double>::infinity();
+    double bestRealtimeFactor = 0.0;
+    double worstElapsedMs = 0.0;
     float peakOutput = 0.0f;
-    const auto start = std::chrono::steady_clock::now();
-    for(std::size_t i = 0; i < frames; ++i)
-    {
-        input[0] = 0.0f;
-        const auto value = model->forward(input);
-        if(!std::isfinite(value))
-            throw std::runtime_error("RTNeural model produced NaN or Inf output during benchmark");
-        peakOutput = std::max(peakOutput, std::abs(value));
-    }
-    const auto end = std::chrono::steady_clock::now();
+    std::size_t totalModelEvaluations = 0;
+    std::size_t totalFramesProcessed = 0;
+    nlohmann::json worstCase = nullptr;
 
-    const auto elapsedMs = std::chrono::duration<double, std::milli>(end - start).count();
-    const auto elapsedSeconds = elapsedMs / 1000.0;
-    const auto realtimeFactor = elapsedSeconds > 0.0 ? seconds / elapsedSeconds : 0.0;
-    const auto status = realtimeFactor >= 1.0 ? "pass" : "fail";
+    for(const auto blockSize : blockSizes)
+    {
+        for(const auto channels : channelCounts)
+        {
+            auto run = benchmarkCase(
+                modelPath,
+                debug,
+                blockSize,
+                channels,
+                passes,
+                warmupBlocks,
+                frames,
+                seconds,
+                minRealtimeFactor);
+            const auto runWorstRealtime = run.at("realtime_factor_worst").get<double>();
+            const auto runBestRealtime = run.at("realtime_factor_best").get<double>();
+            const auto runWorstElapsed = run.at("elapsed_ms_worst").get<double>();
+            if(runWorstRealtime < worstRealtimeFactor)
+            {
+                worstRealtimeFactor = runWorstRealtime;
+                worstElapsedMs = runWorstElapsed;
+                worstCase = {
+                    { "block_size", blockSize },
+                    { "channels", channels },
+                    { "realtime_factor", runWorstRealtime },
+                    { "elapsed_ms", runWorstElapsed },
+                };
+            }
+            bestRealtimeFactor = std::max(bestRealtimeFactor, runBestRealtime);
+            peakOutput = std::max(peakOutput, run.at("max_abs_output").get<float>());
+            totalFramesProcessed += frames * static_cast<std::size_t>(passes);
+            totalModelEvaluations += frames
+                * static_cast<std::size_t>(channels)
+                * static_cast<std::size_t>(passes);
+            runs.push_back(std::move(run));
+        }
+    }
+
+    if(!std::isfinite(worstRealtimeFactor))
+        worstRealtimeFactor = 0.0;
+    const auto status = worstRealtimeFactor >= minRealtimeFactor ? "pass" : "fail";
 
     nlohmann::json report {
-        { "schema_version", 1 },
+        { "schema_version", 2 },
         { "status", status },
         { "validator", "rtneural-validator" },
         { "model", modelPath },
-        { "backend", "rtneural-stl" },
+        { "backend", RTNEURAL_VALIDATOR_BACKEND },
+        { "build_type", RTNEURAL_VALIDATOR_BUILD_TYPE },
         { "sample_rate", sampleRate },
         { "seconds", seconds },
-        { "frames_processed", frames },
-        { "elapsed_ms", elapsedMs },
-        { "realtime_factor", realtimeFactor },
+        { "seconds_per_pass", seconds },
+        { "passes", passes },
+        { "warmup_blocks", warmupBlocks },
+        { "block_sizes", blockSizes },
+        { "channels", channelCounts },
+        { "frames_per_pass", frames },
+        { "frames_processed", totalFramesProcessed },
+        { "model_evaluations", totalModelEvaluations },
+        { "elapsed_ms", worstElapsedMs },
+        { "realtime_factor", worstRealtimeFactor },
         { "max_abs_output", peakOutput },
+        { "thresholds", {
+            { "min_realtime_factor", minRealtimeFactor },
+        } },
+        { "summary", {
+            { "realtime_factor_worst", worstRealtimeFactor },
+            { "realtime_factor_best", bestRealtimeFactor },
+            { "worst_case", worstCase },
+        } },
+        { "model_info", modelInfo(modelPath, sampleRate) },
+        { "runs", runs },
         { "timestamp", nowTimestamp() },
     };
 
@@ -414,7 +733,7 @@ void printUsage()
     std::cerr
         << "Usage:\n"
         << "  rtneural-validator validate --model model.rtneural.json --input input.wav --reference ref.wav --report validation-report.json [--tolerance 0.0001]\n"
-        << "  rtneural-validator benchmark --model model.rtneural.json --sample-rate 48000 --seconds 30 --report benchmark-report.json\n";
+        << "  rtneural-validator benchmark --model model.rtneural.json --sample-rate 48000 --seconds 30 --report benchmark-report.json [--block-sizes 16,32,64,128,256,512] [--channels 1,2] [--passes 3] [--warmup-blocks 4]\n";
 }
 
 } // namespace

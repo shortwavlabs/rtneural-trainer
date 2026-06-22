@@ -3164,8 +3164,8 @@ function GateList({
     { label: "Metrics saved", ok: Boolean(selectedRun?.metrics) },
     { label: "Native validation", ok: Boolean(selectedRun?.metrics) },
     {
-      label: "Benchmark safe",
-      ok: (selectedRun?.metrics?.realtime_factor ?? 0) >= 20,
+      label: "Runtime estimate",
+      ok: (selectedRun?.metrics?.realtime_factor ?? 0) >= 1,
     },
   ];
 
@@ -3891,18 +3891,37 @@ function qualityVerdict(
       action: "Run training to generate validation metrics and preview audio.",
     };
   }
-  if (metrics.esr <= 0.03 && metrics.rmse <= 0.03 && metrics.realtime_factor >= 40) {
+  if (
+    metrics.esr <= 0.12 &&
+    metrics.rmse <= 0.06 &&
+    metrics.realtime_factor >= 1
+  ) {
+    if (metrics.peak_residual > 0.55) {
+      return {
+        verdict: "usable",
+        summary: "Usable with residual peaks to inspect.",
+        action:
+          "The overall match is strong, but residual peaks are still noticeable. Listen before treating the export as final.",
+      };
+    }
     return {
       verdict: "good",
       summary: "Good candidate for export.",
-      action: "Listen to the residual and export if the preview matches the target.",
+      action:
+        "Listen for the remaining residual and export if the native benchmark has enough realtime margin.",
     };
   }
-  if (metrics.esr <= 0.1 && metrics.rmse <= 0.08 && metrics.realtime_factor >= 20) {
+  if (
+    metrics.esr <= 0.18 &&
+    metrics.rmse <= 0.08 &&
+    metrics.peak_residual <= 0.7 &&
+    metrics.realtime_factor >= 1
+  ) {
     return {
       verdict: "usable",
       summary: "Usable, but inspect before shipping.",
-      action: "Compare target and prediction. Try a richer preset if the residual is audible.",
+      action:
+        "Compare target, prediction, and residual. Try a quality preset if the remaining high-band detail is audible.",
     };
   }
   return {
@@ -4161,12 +4180,20 @@ function validationSummary(report: Record<string, unknown> | null) {
 function benchmarkSummary(report: Record<string, unknown> | null) {
   if (!report) return "waiting for report";
   const realtimeFactor = getNumber(report, "realtime_factor");
-  const elapsedMs = getNumber(report, "elapsed_ms");
-  const frames = getNumber(report, "frames_processed");
+  const summary = getNestedObject(report, ["summary"]);
+  const worstCase = getNestedObject(summary, ["worst_case"]);
+  const blockSize = getNumber(worstCase, "block_size");
+  const channels = getNumber(worstCase, "channels");
+  const modelInfo = getNestedObject(report, ["model_info"]);
+  const receptiveField = getNumber(modelInfo, "receptive_field_samples");
+  const modelBytes = getNumber(modelInfo, "size_bytes");
   return [
-    realtimeFactor !== null ? `${realtimeFactor.toFixed(0)}x realtime` : null,
-    elapsedMs !== null ? `${elapsedMs.toFixed(1)} ms` : null,
-    frames !== null ? `${frames.toLocaleString()} frames` : null,
+    realtimeFactor !== null ? `worst ${realtimeFactor.toFixed(2)}x realtime` : null,
+    blockSize !== null && channels !== null
+      ? `${blockSize} samples, ${channels} ch`
+      : null,
+    receptiveField !== null ? `${Math.round(receptiveField)} sample receptive field` : null,
+    modelBytes !== null ? `${formatBytes(modelBytes)} model` : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -4184,6 +4211,12 @@ function formatSeconds(value: number) {
 function formatDbfs(value: number) {
   if (value <= 0) return "-inf dBFS";
   return `${(20 * Math.log10(value)).toFixed(1)} dBFS`;
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value.toFixed(0)} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatReportDate(value: string | null) {

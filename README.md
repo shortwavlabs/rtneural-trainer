@@ -27,7 +27,8 @@ policy, manual latency override, cancel/resume/recovery, validation curves,
 streaming validation checkpoints, early stopping controls, learning-rate
 plateau decay, recurrent state-drift diagnostics, runtime inspection,
 target/prediction/residual playback, golden RTNeural JSON fixtures, native
-parity checks, and debug/release smoke scripts.
+parity checks, block-size/channel native benchmark reports, and debug/release
+smoke scripts.
 
 Still deferred: signed/notarized release distribution, richer waveform/spectrum
 inspection, a full tiny train/export smoke inside an installed bundle, UI smoke
@@ -222,13 +223,20 @@ native/rtneural-validator/build/rtneural-validator validate \
 native/rtneural-validator/build/rtneural-validator benchmark \
   --model projects/demo/exports/export_001/model.rtneural.json \
   --sample-rate 48000 \
-  --seconds 30 \
+  --seconds 2 \
+  --block-sizes 16,32,64,128,256,512 \
+  --channels 1,2 \
+  --passes 3 \
+  --warmup-blocks 4 \
+  --min-realtime-factor 1.0 \
   --report projects/demo/exports/export_001/native-benchmark-report.json
 ```
 
 The native validator loads RTNeural dynamic JSON, runs mono WAV input through the
 model, compares against mono reference audio, and writes structured validation
-and benchmark reports.
+and benchmark reports. The benchmark report includes a worst-case real-time
+factor across the requested block-size/channel matrix, per-case timings, model
+size, architecture metadata, latency, and inferred Conv1D receptive field.
 
 ## Use The Trainer CLI
 

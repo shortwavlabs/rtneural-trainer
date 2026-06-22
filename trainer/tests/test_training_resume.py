@@ -6,6 +6,7 @@ from rttrainer.training.runner import (
     correlation_coefficient,
     default_learning_rate_plateau_patience,
     numeric_metrics,
+    quality_assessment,
     recurrent_context_training_enabled,
     recurrent_context_training_multiplier,
     resolve_learning_rate_schedule,
@@ -115,6 +116,33 @@ class TrainingResumeTests(unittest.TestCase):
     def test_training_loss_rejects_unknown_values(self) -> None:
         with self.assertRaises(ValueError):
             resolve_training_loss_name({"loss": "magic"})
+
+    def test_quality_assessment_marks_strong_wavenet_preview_good(self) -> None:
+        assessment = quality_assessment(
+            {
+                "esr": 0.10999667649285066,
+                "rmse": 0.05289894331541059,
+                "peak_residual": 0.48017823696136475,
+                "realtime_factor": 3.0,
+                "state_continuous_correlation": 0.9437950975584438,
+            }
+        )
+
+        self.assertEqual(assessment["verdict"], "good")
+
+    def test_quality_assessment_downgrades_high_residual_peaks(self) -> None:
+        assessment = quality_assessment(
+            {
+                "esr": 0.09,
+                "rmse": 0.04,
+                "peak_residual": 0.6,
+                "realtime_factor": 3.0,
+                "state_continuous_correlation": 0.95,
+            }
+        )
+
+        self.assertEqual(assessment["verdict"], "usable")
+        self.assertIn("residual peaks", str(assessment["summary"]).lower())
 
     def test_recurrent_context_training_defaults_to_recurrent_presets(self) -> None:
         self.assertTrue(

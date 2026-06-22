@@ -45,7 +45,18 @@ endif()
 
 add_executable(rtneural-validator src/main.cpp)
 target_compile_features(rtneural-validator PRIVATE cxx_std_17)
-target_compile_definitions(rtneural-validator PRIVATE RTNEURAL_NO_DEBUG=1)
+if(CMAKE_BUILD_TYPE)
+  set(RTNEURAL_VALIDATOR_BUILD_TYPE "${CMAKE_BUILD_TYPE}")
+else()
+  set(RTNEURAL_VALIDATOR_BUILD_TYPE "unknown")
+endif()
+target_compile_definitions(
+  rtneural-validator
+  PRIVATE
+    RTNEURAL_NO_DEBUG=1
+    RTNEURAL_VALIDATOR_BACKEND="rtneural-stl"
+    RTNEURAL_VALIDATOR_BUILD_TYPE="${RTNEURAL_VALIDATOR_BUILD_TYPE}"
+)
 target_include_directories(rtneural-validator SYSTEM PRIVATE "${RTNEURAL_SOURCE_PATH}")
 target_link_libraries(rtneural-validator PRIVATE RTNeural)
 

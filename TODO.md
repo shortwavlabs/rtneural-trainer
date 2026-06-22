@@ -21,6 +21,9 @@ Recommended next move:
    `wavenet_tcn_quality` when the baseline underfits harmonic detail.
    This is the highest-value next step because it calibrates preset
    recommendations, gain warnings, report language, and export confidence.
+   The first high-gain WaveNet report calibration and native benchmark matrix
+   are now in place; clean, crunch, and edge-of-breakup captures are the next
+   useful evidence.
 2. `Codex` Add the real Tauri UI smoke suite after the first real-capture pass.
    This protects the workflow while the UI and reports are still being tuned.
 3. `You` Decide the release/signing policy before we spend more time on release
@@ -45,7 +48,8 @@ Recommended next move:
     roughly `0.120`, while stacked Conv still missed upper-band energy.
   - Track which warnings fired, which preset was recommended, final ESR/RMSE,
     residual audibility, recurrent state-drift diagnostic, native validation
-    status, and benchmark status.
+    status, native benchmark worst-case real-time factor, and benchmark matrix
+    weak spots by block size/channel count.
 
 - [ ] Add a real Tauri UI smoke suite.
   - Owner: Codex.
@@ -156,6 +160,10 @@ Recommended next move:
 
 - [ ] Tune report language with real captures.
   - Owner: Shared.
+  - Initial high-gain WaveNet thresholds landed: strong WaveNet previews can now
+    report `good`, moderate residual peaks downgrade to `usable`, severe peaks
+    remain `needs_work`, and native runtime viability starts at `>= 1x`
+    real-time.
   - You: judge whether good/usable/needs-work matches listening results.
   - Codex: calibrate thresholds against listening notes.
   - Codex: make report actions specific to failure mode: alignment, gain,

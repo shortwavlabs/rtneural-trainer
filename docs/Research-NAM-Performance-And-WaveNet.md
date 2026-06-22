@@ -6,7 +6,9 @@ Implementation status: the app now exposes `wavenet_tcn_fast`,
 `wavenet_tcn_balanced`, and `wavenet_tcn_quality`; keeps legacy `wavenet_tcn`
 for existing checkpoints; recommends WaveNet for long/high-confidence amp and
 pedal captures; and includes a one-click "Continue best WaveNet" refinement
-helper.
+helper. Export now runs a native RTNeural benchmark matrix across realistic
+block sizes and mono/stereo channel counts, and the report language has an
+initial high-gain WaveNet calibration from the current listening/metric results.
 
 This note captures what we can learn from the Neural Amp Modeler ecosystem after the continued
 `wavenet_tcn` run on the current high-gain capture. It focuses on product and engineering choices
@@ -169,8 +171,11 @@ For every WaveNet export we should show:
 - receptive field
 - export latency
 
-The existing `rtneural-validator` should grow into the equivalent of NAM Core's `benchmodel` for our
-JSON export path.
+The existing `rtneural-validator` now covers the first version of this gate: it writes a
+block-size/channel matrix, preserves the conservative worst-case real-time factor, and includes
+model size, latency, architecture, and inferred Conv1D receptive-field metadata. The next layer is to
+calibrate preset-specific pass/fail language from more captures rather than relying on one universal
+runtime threshold.
 
 ### 4. Keep Stacked Conv as the medium/low-gain working default
 
@@ -193,39 +198,44 @@ RTNeural JSON. We should learn from the metadata and testing discipline, not swi
 Deferred idea: a future `.aidax` envelope can carry RTNeural JSON plus reports, snapshots, and
 license metadata after format and licensing review.
 
-## Proposed Implementation Plan
+## Implementation Plan And Status
 
-1. Add WaveNet recommendation logic
+1. Add WaveNet recommendation logic: implemented.
 
    Promote `wavenet_tcn` when the capture is high gain or when the user chooses "quality". Add clear
    UI copy that it is slower but better for dense distortion.
 
-2. Add WaveNet recipe variants
+2. Add WaveNet recipe variants: implemented.
 
    Add `wavenet_tcn_fast`, `wavenet_tcn_balanced`, and `wavenet_tcn_quality`. Keep the current preset
    as balanced unless benchmark results suggest otherwise.
 
-3. Add a "continue quality run" action
+3. Add a "continue quality run" action: implemented.
 
    Let the user resume from the best checkpoint with a lower learning rate and more epochs without
    manually reconstructing settings.
 
-4. Expand native validator benchmarking
+4. Expand native validator benchmarking: implemented for local v1.
 
    Add a benchmark mode that runs the exported RTNeural JSON at realistic sample rates and block sizes,
-   then writes results into the export package.
+   then writes results into the export package. The current report includes worst-case and per-case
+   timing across block-size/channel combinations, plus model size, latency, architecture, and
+   receptive-field metadata.
 
-5. Add parity snapshots to exports
+5. Add parity snapshots to exports: still open.
 
    Save a deterministic short input/output pair for each export. Use it to compare Python/Keras output
    against native RTNeural output.
 
-6. Make export quality gates architecture-aware
+6. Make export quality gates architecture-aware: partially implemented.
 
    Dense/GRU/LSTM/Stacked Conv/WaveNet should have different benchmark expectations. A small Dense
-   model and a WaveNet quality model should not be judged with identical runtime language.
+   model and a WaveNet quality model should not be judged with identical runtime language. The first
+   runtime gate now uses `>= 1x` native real-time factor for exported models, and the WaveNet report
+   language is calibrated around the current high-gain result. Clean, crunch, and edge-of-breakup
+   captures should drive the next threshold pass.
 
-7. Track slimmable models as a later research item
+7. Track slimmable models as a later research item: deferred.
 
    Do not build this now. First prove separate fast/balanced/quality WaveNet presets and native
    benchmark reporting.
