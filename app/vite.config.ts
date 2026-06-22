@@ -1,3 +1,5 @@
+/// <reference types="vitest/config" />
+
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -14,5 +16,10 @@ export default defineConfig({
     target: "es2020",
     minify: false,
     sourcemap: true,
+  },
+  test: {
+    clearMocks: true,
+    css: true,
+    environment: "jsdom",
   },
 });

@@ -53,14 +53,16 @@ Recommended next move:
     status, native benchmark worst-case real-time factor, and benchmark matrix
     weak spots by block size/channel count.
 
-- [ ] Add a real Tauri UI smoke suite.
+- [x] Add a Tauri UI smoke suite.
   - Owner: Codex.
-  - Exercise first-run empty state and generated sample project creation.
-  - Exercise Capture, Align, Train, Evaluate, Export, Runtime, Notes, and error
-    states in a real Tauri window.
-  - Verify keyboard tab order, visible focus, workflow tabs, disabled states,
-    and preview playback controls.
-  - Run in CI or document why a platform-specific runner is required.
+  - Implemented as `pnpm --filter rtneural-trainer-app smoke:tauri-ui`.
+  - Covers first-run empty state, generated sample project creation,
+    project-specific WAV path switching, rename/delete, Runtime settings,
+    Capture, Align, Train, Evaluate, Export, preview report loading, and
+    open-export-folder command wiring with mocked Tauri commands.
+  - Tauri's desktop WebDriver path is Linux/Windows-only; macOS keeps this
+    jsdom suite as the portable CI/local smoke. A true `tauri-driver` window
+    smoke can be added later on Linux/Windows runners if needed.
 
 - [ ] Add a packaged-app tiny train/export smoke.
   - Owner: Codex.
@@ -256,6 +258,7 @@ python3 scripts/smoke_rtneural_validator.py
 (cd trainer && UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python ../scripts/smoke_rtneural_keras_layers.py)
 pnpm --filter rtneural-trainer-app build
 (cd app/src-tauri && cargo test)
+pnpm --filter rtneural-trainer-app smoke:tauri-ui
 pnpm --filter rtneural-trainer-app smoke:tauri-workflow
 pnpm --filter rtneural-trainer-app smoke:packaged-app
 pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles app,dmg

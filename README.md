@@ -549,6 +549,18 @@ Tauri sidecar workflow smoke:
 pnpm --filter rtneural-trainer-app smoke:tauri-workflow
 ```
 
+Tauri UI smoke:
+
+```bash
+pnpm --filter rtneural-trainer-app smoke:tauri-ui
+```
+
+This Vitest/jsdom smoke runs the full React app with mocked Tauri commands. It
+covers first-run onboarding, generated sample projects, project switching,
+Capture, Align, Train, Evaluate, Export, Runtime, rename/delete, and a
+regression for per-project WAV path state. Tauri's desktop WebDriver path is
+limited to Linux/Windows; macOS uses this mocked UI smoke instead.
+
 Packaged-app smoke:
 
 ```bash
@@ -570,7 +582,7 @@ pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles app,dmg
 `.github/workflows/ci.yml` runs the fast desktop gate on Ubuntu: dependency
 setup, TensorFlow trainer sync, native validator build/smoke, Python tests,
 golden fixture freshness, frontend build, development sidecar staging, Rust
-tests, Tauri workflow smoke, and debug packaged-app smoke.
+tests, Tauri UI smoke, Tauri workflow smoke, and debug packaged-app smoke.
 
 GitHub Actions has a separate `Release Packaging` workflow for the slow path. It
 runs the release package smoke on Linux, macOS, and Windows, then uploads the

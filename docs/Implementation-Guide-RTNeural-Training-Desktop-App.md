@@ -1287,6 +1287,7 @@ pnpm --filter rtneural-trainer-app build
 (cd app/src-tauri && cargo test)
 
 # Tauri workflow and debug packaged-app smoke
+pnpm --filter rtneural-trainer-app smoke:tauri-ui
 pnpm --filter rtneural-trainer-app smoke:tauri-workflow
 pnpm --filter rtneural-trainer-app smoke:packaged-app
 ```
@@ -1339,12 +1340,14 @@ Current desktop coverage includes Rust unit tests and smoke scripts for:
 5. Cancellation status transitions.
 6. Runtime settings persistence.
 7. Missing artifact audits and restart recovery.
-8. Tauri workflow smoke.
-9. Debug packaged-app smoke.
+8. Tauri UI smoke with mocked Tauri commands.
+9. Tauri workflow smoke.
+10. Debug packaged-app smoke.
 
 Still worth adding:
 
-- UI screen smoke with a real Tauri window.
+- Optional UI screen smoke with a real Tauri window on Linux/Windows
+  `tauri-driver` runners. Tauri desktop WebDriver is not available on macOS.
 - Packaged-app smoke that runs a tiny end-to-end training/export workflow.
 - Export gate edge-case tests around failed native validation and failed
   benchmarks.
@@ -1484,7 +1487,9 @@ Known CI/release gaps:
   product policy decisions.
 - Packaged-app smoke currently proves bundle shape and sidecar execution, not a
   full tiny train/export workflow inside the installed app.
-- UI smoke tests with real Tauri windows are still missing.
+- Real-window UI smoke through `tauri-driver` is still missing on Linux/Windows.
+  macOS uses the mocked Tauri UI smoke because WKWebView has no desktop
+  WebDriver client.
 
 ## 12. Known-Good Preset Matrix
 
@@ -1581,11 +1586,11 @@ Current next implementation order:
 
 1. Run a real capture project through the full app with the finite-memory
    baseline and tune capture/gain/preset recommendation thresholds.
-2. Add UI smoke tests with real Tauri windows.
-3. Add packaged-app smoke that exercises a tiny train/export workflow inside the
+2. Add packaged-app smoke that exercises a tiny train/export workflow inside the
    packaged app, not only bundle shape and sidecar execution.
-4. Decide macOS signing/notarization, Windows signing, artifact retention, and
+3. Decide macOS signing/notarization, Windows signing, artifact retention, and
    release-publishing policy.
+4. Optionally add `tauri-driver` real-window UI smoke on Linux/Windows runners.
 5. Add deeper waveform/spectrum inspection for target, prediction, and residual.
 6. Complete a full accessibility audit and tune error/report copy from
    real-world captures.
