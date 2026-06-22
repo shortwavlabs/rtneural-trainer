@@ -441,7 +441,7 @@
       ]
     },
     {
-      "activation": "",
+      "activation": "tanh",
       "input_size": 10,
       "output_size": 1,
       "shape": [

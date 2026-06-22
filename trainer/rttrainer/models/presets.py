@@ -16,6 +16,9 @@ class PresetConfig:
     dense_units: int | None = None
     batchnorm: bool = False
     prelu: bool = False
+    output_activation: str | None = "tanh"
+    conv_dilations: tuple[int, ...] = ()
+    default_loss: str = "mse"
 
 
 PRESETS: dict[str, PresetConfig] = {
@@ -74,6 +77,31 @@ PRESETS: dict[str, PresetConfig] = {
         batchnorm=True,
         prelu=True,
     ),
+    "conv1d_stack_prelu": PresetConfig(
+        preset_id="conv1d_stack_prelu",
+        architecture="conv1d",
+        input_size=1,
+        hidden_size=16,
+        output_size=1,
+        num_layers=4,
+        kernel_size=5,
+        conv_filters=16,
+        prelu=True,
+        conv_dilations=(1, 2, 4, 8),
+        default_loss="preemphasis_mse",
+    ),
+    "wavenet_tcn": PresetConfig(
+        preset_id="wavenet_tcn",
+        architecture="conv1d",
+        input_size=1,
+        hidden_size=16,
+        output_size=1,
+        num_layers=8,
+        kernel_size=3,
+        conv_filters=16,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128),
+        default_loss="mrstft_preemphasis",
+    ),
     "conv_gru_hybrid": PresetConfig(
         preset_id="conv_gru_hybrid",
         architecture="conv_gru",
@@ -117,7 +145,10 @@ def build_model(config: PresetConfig):
 
         def forward(self, x):  # type: ignore[no-untyped-def]
             output, _state = self.lstm(x)
-            return self.dense(output)
+            output = self.dense(output)
+            if config.output_activation == "tanh":
+                return torch.tanh(output)
+            return output
 
     return LstmAudioModel()
 
@@ -134,7 +165,11 @@ def build_keras_model(config: PresetConfig, keras):
                     activation="tanh",
                     name="dense_hidden",
                 ),
-                layers.Dense(config.output_size, name="dense_out"),
+                layers.Dense(
+                    config.output_size,
+                    activation=config.output_activation,
+                    name="dense_out",
+                ),
             ]
         )
     elif config.architecture == "gru":
@@ -148,7 +183,11 @@ def build_keras_model(config: PresetConfig, keras):
                     reset_after=True,
                     name="gru",
                 ),
-                layers.Dense(config.output_size, name="dense_out"),
+                layers.Dense(
+                    config.output_size,
+                    activation=config.output_activation,
+                    name="dense_out",
+                ),
             ]
         )
     elif config.architecture == "lstm":
@@ -159,24 +198,41 @@ def build_keras_model(config: PresetConfig, keras):
                     return_sequences=True,
                     name="lstm",
                 ),
-                layers.Dense(config.output_size, name="dense_out"),
+                layers.Dense(
+                    config.output_size,
+                    activation=config.output_activation,
+                    name="dense_out",
+                ),
             ]
         )
     elif config.architecture == "conv1d":
+        block_count = max(1, config.num_layers)
+        dilations = config.conv_dilations or tuple(1 for _index in range(block_count))
+        for block_index in range(block_count):
+            suffix = "" if block_count == 1 else f"_{block_index + 1}"
+            model_layers.append(
+                layers.Conv1D(
+                    config.conv_filters or config.hidden_size,
+                    kernel_size=config.kernel_size,
+                    dilation_rate=dilations[min(block_index, len(dilations) - 1)],
+                    padding="causal",
+                    activation=None if config.batchnorm or config.prelu else "tanh",
+                    name=f"conv1d{suffix}",
+                )
+            )
+            if config.batchnorm:
+                model_layers.append(
+                    layers.BatchNormalization(epsilon=0.01, name=f"batchnorm{suffix}")
+                )
+            if config.prelu:
+                model_layers.append(layers.PReLU(shared_axes=[1], name=f"prelu{suffix}"))
         model_layers.append(
-            layers.Conv1D(
-                config.conv_filters or config.hidden_size,
-                kernel_size=config.kernel_size,
-                padding="causal",
-                activation=None if config.batchnorm or config.prelu else "tanh",
-                name="conv1d",
+            layers.Dense(
+                config.output_size,
+                activation=config.output_activation,
+                name="dense_out",
             )
         )
-        if config.batchnorm:
-            model_layers.append(layers.BatchNormalization(epsilon=0.01, name="batchnorm"))
-        if config.prelu:
-            model_layers.append(layers.PReLU(shared_axes=[1], name="prelu"))
-        model_layers.append(layers.Dense(config.output_size, name="dense_out"))
     elif config.architecture == "conv_gru":
         model_layers.extend(
             [
@@ -195,7 +251,11 @@ def build_keras_model(config: PresetConfig, keras):
                     reset_after=True,
                     name="gru",
                 ),
-                layers.Dense(config.output_size, name="dense_out"),
+                layers.Dense(
+                    config.output_size,
+                    activation=config.output_activation,
+                    name="dense_out",
+                ),
             ]
         )
     else:

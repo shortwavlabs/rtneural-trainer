@@ -211,7 +211,11 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertEqual(dataset.summary["selected_windows"], 8)
         available_windows = int(dataset.summary["available_windows"])
         self.assertGreater(available_windows, 8)
-        self.assertEqual(dataset.summary["selection"], "sampled_across_capture")
+        self.assertEqual(
+            dataset.summary["selection"],
+            "energy_stratified_sampled_across_capture",
+        )
+        self.assertGreaterEqual(int(dataset.summary["energy_selected_windows"]), 1)
 
     def test_dataset_preview_defaults_to_three_seconds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -232,7 +236,11 @@ class AudioPipelineTests(unittest.TestCase):
             )
 
         self.assertEqual(len(dataset.test_target), 144_000)
+        self.assertEqual(len(dataset.stream_val_target), 144_000)
+        self.assertEqual(len(dataset.context_train_target), 2_048)
         self.assertEqual(int(dataset.summary["test_samples"]), 144_000)
+        self.assertEqual(int(dataset.summary["stream_validation_samples"]), 144_000)
+        self.assertEqual(int(dataset.summary["context_training_samples"]), 2_048)
         self.assertAlmostEqual(float(dataset.summary["preview_seconds"]), 3.0)
 
     def test_dataset_preview_prefers_active_target_excerpt(self) -> None:

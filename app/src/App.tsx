@@ -93,6 +93,8 @@ type TrainingHistoryPoint = {
   trainLoss: number | null;
   valEsr: number | null;
   valRmse: number | null;
+  validationScore: number | null;
+  predictionRmsRatio: number | null;
   learningRate: number | null;
   nextLearningRate: number | null;
   learningRateReduced: boolean;
@@ -171,6 +173,20 @@ const presets = [
     backends: ["keras"],
   },
   {
+    id: "conv1d_stack_prelu",
+    label: "Stacked Conv",
+    detail: "4x causal Conv1D, PReLU",
+    cpu: "Moderate",
+    backends: ["keras"],
+  },
+  {
+    id: "wavenet_tcn",
+    label: "WaveNet TCN",
+    detail: "8x dilated causal Conv1D",
+    cpu: "Heavy",
+    backends: ["keras"],
+  },
+  {
     id: "conv_gru_hybrid",
     label: "Hybrid",
     detail: "Conv1D front-end + GRU",
@@ -195,7 +211,7 @@ const builtInTrainingRecipes = [
     epochs: 4,
     batchSize: 16,
     learningRate: 0.001,
-    sequenceLength: 1024,
+    sequenceLength: 4096,
     maxWindows: 512,
     earlyStoppingPatience: 0,
     earlyStoppingMinDelta: 0.0001,
@@ -204,12 +220,12 @@ const builtInTrainingRecipes = [
     id: "builtin_balanced",
     source: "built_in",
     name: "Balanced",
-    description: "Default local training pass for usable long captures.",
-    modelPreset: "lstm_standard",
+    description: "Finite-memory baseline before trying recurrent models.",
+    modelPreset: "conv1d_bn_prelu",
     epochs: 40,
     batchSize: 16,
     learningRate: 0.001,
-    sequenceLength: 1024,
+    sequenceLength: 8192,
     maxWindows: 2048,
     earlyStoppingPatience: 6,
     earlyStoppingMinDelta: 0.0001,
@@ -218,12 +234,12 @@ const builtInTrainingRecipes = [
     id: "builtin_production",
     source: "built_in",
     name: "Production",
-    description: "Longer run with more windows and patient early stopping.",
-    modelPreset: "conv_gru_hybrid",
+    description: "WaveNet-style TCN for quality experiments; benchmark before export.",
+    modelPreset: "wavenet_tcn",
     epochs: 120,
     batchSize: 16,
     learningRate: 0.0007,
-    sequenceLength: 1024,
+    sequenceLength: 8192,
     maxWindows: 4096,
     earlyStoppingPatience: 12,
     earlyStoppingMinDelta: 0.00005,
@@ -232,12 +248,12 @@ const builtInTrainingRecipes = [
     id: "builtin_long_capture",
     source: "built_in",
     name: "Long capture",
-    description: "Broader window coverage for multi-minute captures.",
-    modelPreset: "conv_gru_hybrid",
+    description: "Broader window coverage with the stacked finite-memory model.",
+    modelPreset: "conv1d_stack_prelu",
     epochs: 80,
     batchSize: 16,
     learningRate: 0.001,
-    sequenceLength: 1024,
+    sequenceLength: 8192,
     maxWindows: 4096,
     earlyStoppingPatience: 10,
     earlyStoppingMinDelta: 0.0001,
@@ -1653,7 +1669,7 @@ function TrainView({
   const [epochs, setEpochs] = useState(40);
   const [batchSize, setBatchSize] = useState(16);
   const [learningRate, setLearningRate] = useState(0.001);
-  const [sequenceLength, setSequenceLength] = useState(1024);
+  const [sequenceLength, setSequenceLength] = useState(8192);
   const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(6);
   const [earlyStoppingMinDelta, setEarlyStoppingMinDelta] = useState(0.0001);
   const [maxWindows, setMaxWindows] = useState(2048);
@@ -1723,7 +1739,7 @@ function TrainView({
 
   useEffect(() => {
     if (selectedRecipeId !== "builtin_balanced") return;
-    setMaxWindows(Math.max(recommendedWindowBudget(project), 1024));
+    setMaxWindows(Math.max(recommendedWindowBudget(project), 2048));
   }, [project.audio?.capture_profile, project.id, selectedRecipeId]);
 
   useEffect(() => {
@@ -2303,6 +2319,7 @@ function ValidationCurve({
     })
     .join(" ");
   const latest = history[history.length - 1];
+  const latestScore = latest.validationScore;
   const best = history.reduce(
     (current, point) =>
       point.valEsr !== null && (current.valEsr === null || point.valEsr < current.valEsr)
@@ -2310,6 +2327,8 @@ function ValidationCurve({
         : current,
     history[0],
   );
+  const selectedPoints = history.filter((point) => point.isBest);
+  const bestSelected = selectedPoints[selectedPoints.length - 1] ?? best;
   const first = history.find((point) => point.valEsr !== null);
   const improvement =
     first?.valEsr !== null && first?.valEsr !== undefined && latest.valEsr !== null
@@ -2332,8 +2351,12 @@ function ValidationCurve({
           <strong>{latest.valEsr !== null ? latest.valEsr.toFixed(4) : "waiting"}</strong>
         </div>
         <small>
-          Best epoch {best.epoch}
+          Selected epoch {bestSelected.epoch}
           {improvement !== null ? ` · -${improvement.toFixed(4)} ESR` : ""}
+          {latestScore !== null ? ` · score ${latestScore.toFixed(4)}` : ""}
+          {latest.predictionRmsRatio !== null
+            ? ` · level ${(latest.predictionRmsRatio * 100).toFixed(0)}%`
+            : ""}
           {currentLearningRate !== null ? ` · lr ${formatLearningRate(currentLearningRate)}` : ""}
         </small>
       </div>
@@ -2405,6 +2428,10 @@ function ValidationCurve({
           {lrReductions.map((point) => point.epoch).join(", ")}.
         </p>
       ) : null}
+      <p className="curve-note">
+        Checkpoints use validation score: stream ESR plus a short-window diagnostic and
+        an underpowered-output penalty.
+      </p>
     </div>
   );
 }
@@ -2734,12 +2761,14 @@ function RunReport({
   }
   const decision = qualityVerdict(null, getNestedObject(report, ["quality_assessment"]));
   const earlyStopping = getNestedObject(report, ["early_stopping"]);
+  const stateDiagnostic = getNestedObject(report, ["state_diagnostic"]);
   const stopped = getBoolean(earlyStopping, "stopped");
 
   return (
     <div className="report-block">
       <p className="section-label">Training Report</p>
       <QualityCallout decision={decision} />
+      <StateDiagnosticPanel diagnostic={stateDiagnostic} />
       <div className="report-grid">
         <Metric label="Backend" value={getString(report, "backend") ?? "unknown"} />
         <Metric label="Epochs" value={String(getNumber(report, "epochs") ?? "unknown")} />
@@ -2758,6 +2787,59 @@ function RunReport({
         />
       </div>
       {preview.report_path ? <p className="artifact-path">{preview.report_path}</p> : null}
+    </div>
+  );
+}
+
+function StateDiagnosticPanel({
+  diagnostic,
+}: {
+  diagnostic: Record<string, unknown> | null;
+}) {
+  if (!diagnostic) return null;
+  const verdict = getString(diagnostic, "verdict");
+  if (!verdict || verdict === "finite_memory") return null;
+
+  const isDrift = verdict === "state_drift_suspected";
+  const continuousEsr = getNumber(diagnostic, "continuous_esr");
+  const chunkEsr = getNumber(diagnostic, "chunk_reset_esr");
+  const continuousCorrelation = getNumber(diagnostic, "continuous_correlation");
+  const chunkCorrelation = getNumber(diagnostic, "chunk_reset_correlation");
+  const chunkSize = getNumber(diagnostic, "chunk_size");
+  const chunkSeconds = getNumber(diagnostic, "chunk_seconds");
+
+  return (
+    <div className={isDrift ? "state-diagnostic warning" : "state-diagnostic"}>
+      <div>
+        <strong>{getString(diagnostic, "summary") ?? "State diagnostic complete."}</strong>
+        <span>{getString(diagnostic, "action") ?? "Inspect the continuous preview before export."}</span>
+      </div>
+      <div className="state-diagnostic-grid">
+        <Metric
+          label="Continuous ESR"
+          value={continuousEsr !== null ? continuousEsr.toFixed(3) : "unknown"}
+        />
+        <Metric
+          label="Reset ESR"
+          value={chunkEsr !== null ? chunkEsr.toFixed(3) : "unknown"}
+        />
+        <Metric
+          label="Correlation"
+          value={
+            continuousCorrelation !== null && chunkCorrelation !== null
+              ? `${continuousCorrelation.toFixed(2)} / ${chunkCorrelation.toFixed(2)}`
+              : "unknown"
+          }
+        />
+        <Metric
+          label="Reset window"
+          value={
+            chunkSize !== null && chunkSeconds !== null
+              ? `${chunkSize} samples · ${chunkSeconds.toFixed(2)} s`
+              : "unknown"
+          }
+        />
+      </div>
     </div>
   );
 }
@@ -3344,6 +3426,7 @@ function progressDetail(event: SidecarProgressEvent) {
   if (type === "epoch") {
     const trainLoss = getNumber(event.json, "train_loss");
     const valEsr = getNumber(event.json, "val_esr");
+    const validationScore = getNumber(event.json, "validation_score");
     const learningRate = getNumber(event.json, "learning_rate");
     const nextLearningRate = getNumber(event.json, "next_learning_rate");
     const lrReduced = getBoolean(event.json, "learning_rate_reduced");
@@ -3351,6 +3434,7 @@ function progressDetail(event: SidecarProgressEvent) {
     return [
       trainLoss !== null ? `loss ${formatMetric(trainLoss)}` : null,
       valEsr !== null ? `val ESR ${formatMetric(valEsr)}` : null,
+      validationScore !== null ? `score ${formatMetric(validationScore)}` : null,
       learningRate !== null ? `lr ${formatLearningRate(learningRate)}` : null,
       lrReduced && nextLearningRate !== null
         ? `next ${formatLearningRate(nextLearningRate)}`
@@ -3439,13 +3523,31 @@ function recommendPreset(
     };
   }
 
-  if (duration !== null && duration >= 90 && confidence >= 0.75) {
-    reasons.push("The capture is long enough for a richer temporal model.");
+  if (duration !== null && duration >= 60 && confidence < 0.75) {
+    reasons.push(
+      "Long captures with review-level alignment should start with a finite-memory baseline.",
+    );
     return {
-      presetId: "conv_gru_hybrid",
-      label: "Hybrid",
+      presetId: "conv1d_bn_prelu",
+      label: "Conv + PReLU",
+      confidence: confidence >= 0.55 ? "medium" : "low",
+      reasons: [
+        ...reasons,
+        "This avoids recurrent hidden-state drift while checking whether the capture can be learned.",
+      ],
+    };
+  }
+
+  if (duration !== null && duration >= 90 && confidence >= 0.75) {
+    reasons.push("The capture is long enough for the WaveNet-style finite-memory model.");
+    return {
+      presetId: "wavenet_tcn",
+      label: "WaveNet TCN",
       confidence: "high",
-      reasons,
+      reasons: [
+        ...reasons,
+        "This keeps inference finite-memory while adding more dilated-convolution receptive field; check benchmark results before export.",
+      ],
     };
   }
 
@@ -3475,8 +3577,8 @@ function recommendedWindowBudget(project: ProjectDetail) {
   const recommended = getNumber(project.audio?.capture_profile ?? null, "recommended_max_windows");
   if (recommended !== null) return Math.round(recommended);
   const duration = project.audio?.input.duration_seconds ?? 0;
-  if (duration >= 120) return 2048;
-  if (duration >= 45) return 1024;
+  if (duration >= 120) return 4096;
+  if (duration >= 45) return 2048;
   return 512;
 }
 
@@ -3549,6 +3651,8 @@ function trainingHistoryFromEvents(
       trainLoss: getNumber(event.json, "train_loss"),
       valEsr: getNumber(event.json, "val_esr"),
       valRmse: getNumber(event.json, "val_rmse"),
+      validationScore: getNumber(event.json, "validation_score"),
+      predictionRmsRatio: getNumber(event.json, "prediction_rms_ratio"),
       learningRate: getNumber(event.json, "learning_rate"),
       nextLearningRate: getNumber(event.json, "next_learning_rate"),
       learningRateReduced: getBoolean(event.json, "learning_rate_reduced"),
@@ -3568,6 +3672,8 @@ function historyFromReport(report: Record<string, unknown> | null): TrainingHist
         trainLoss: getNumber(value, "train_loss"),
         valEsr: getNumber(value, "val_esr"),
         valRmse: getNumber(value, "val_rmse"),
+        validationScore: getNumber(value, "validation_score"),
+        predictionRmsRatio: getNumber(value, "prediction_rms_ratio"),
         learningRate: getNumber(value, "learning_rate"),
         nextLearningRate: getNumber(value, "next_learning_rate"),
         learningRateReduced: getBoolean(value, "learning_rate_reduced"),

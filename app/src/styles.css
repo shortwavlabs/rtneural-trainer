@@ -773,6 +773,46 @@ dd,
   border: 1px solid #314761;
 }
 
+.state-diagnostic {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  color: #d7e8ff;
+  background: #182331;
+  border: 1px solid #314761;
+  border-radius: 8px;
+}
+
+.state-diagnostic.warning {
+  color: #f5e0b8;
+  background: #332818;
+  border-color: #69502c;
+}
+
+.state-diagnostic strong,
+.state-diagnostic span {
+  display: block;
+}
+
+.state-diagnostic strong {
+  color: #eef2ec;
+  font-weight: 900;
+}
+
+.state-diagnostic span {
+  margin-top: 3px;
+  color: inherit;
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.state-diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .warning-list {
   display: grid;
   gap: 10px;
@@ -1762,7 +1802,8 @@ dd,
   .recipe-actions,
   .training-guidance,
   .guidance-grid,
-  .evidence-grid {
+  .evidence-grid,
+  .state-diagnostic-grid {
     grid-template-columns: 1fr;
   }
 

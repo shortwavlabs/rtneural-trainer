@@ -17,6 +17,18 @@ sys.path.insert(0, str(TRAINER))
 from rttrainer.export_rtneural.json_exporter import build_keras_rtneural_json  # noqa: E402
 from rttrainer.models.presets import PRESETS, build_keras_model  # noqa: E402
 
+GOLDEN_FIXTURE_SEEDS = {
+    "conv1d_bn_prelu": 10,
+    "conv1d_light": 11,
+    "conv_gru_hybrid": 12,
+    "dense_only": 13,
+    "gru_light": 14,
+    "lstm_light": 15,
+    "lstm_standard": 16,
+    "conv1d_stack_prelu": 17,
+    "wavenet_tcn": 18,
+}
+
 
 @dataclass(frozen=True)
 class GoldenFixture:
@@ -81,7 +93,10 @@ def build_fixture_models() -> dict[str, GoldenFixture]:
     for index, preset_id in enumerate(sorted(PRESETS)):
         model = build_keras_model(PRESETS[preset_id], tf.keras)
         initialize_model(model)
-        assign_deterministic_weights(model, seed=10 + index)
+        assign_deterministic_weights(
+            model,
+            seed=GOLDEN_FIXTURE_SEEDS.get(preset_id, 10 + index),
+        )
         payload = build_keras_rtneural_json(
             model=model,
             preset_id=preset_id,

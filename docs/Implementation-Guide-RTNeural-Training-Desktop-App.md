@@ -41,8 +41,8 @@ Implemented:
    gain/headroom guidance, validation curves, early stopping controls, preset
    recommendations, good/usable/needs-work report language, and focused error
    recovery copy.
-8. Offline preview playback for target, prediction, and residual WAVs, plus
-   peak-envelope waveform comparison.
+8. Offline preview playback for target, prediction, residual, and recurrent
+   chunk-reset diagnostic WAVs, plus peak-envelope waveform comparison.
 9. Rich export package metadata, validation/benchmark report display, and
    open-export-folder support.
 10. Development sidecar shims, production sidecar packaging, release sidecar
@@ -282,13 +282,15 @@ Implemented presets:
 
 | Preset ID | Architecture | Use |
 | --- | --- | --- |
-| `dense_only` | Dense stack | Fast memoryless baseline |
-| `gru_light` | 1 GRU, hidden 10, dense output | Compact recurrent model |
-| `lstm_light` | 1 LSTM, hidden 12, dense output | Lowest-risk recurrent export |
-| `lstm_standard` | 1 LSTM, hidden 16, dense output | Default recurrent target |
-| `conv1d_light` | Causal Conv1D | Fast temporal front-end |
-| `conv1d_bn_prelu` | Causal Conv1D with BatchNorm/PReLU | Safe BatchNorm/PReLU coverage |
-| `conv_gru_hybrid` | Conv1D front-end + GRU | Richer Keras temporal preset |
+| `dense_only` | Dense stack with bounded `tanh` output | Fast memoryless baseline |
+| `gru_light` | 1 GRU, hidden 10, bounded dense output | Compact recurrent model |
+| `lstm_light` | 1 LSTM, hidden 12, bounded dense output | Lowest-risk recurrent export |
+| `lstm_standard` | 1 LSTM, hidden 16, bounded dense output | Default recurrent target |
+| `conv1d_light` | Causal Conv1D with bounded dense output | Fast temporal front-end |
+| `conv1d_bn_prelu` | Causal Conv1D with BatchNorm/PReLU and bounded output | Safe BatchNorm/PReLU coverage |
+| `conv1d_stack_prelu` | Stacked dilated causal Conv1D/PReLU with bounded output and pre-emphasis MSE default loss | Higher-detail finite-memory amp/pedal preset |
+| `wavenet_tcn` | Deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Highest-detail finite-memory amp/pedal preset; benchmark before export |
+| `conv_gru_hybrid` | Conv1D front-end + GRU with bounded dense output | Richer Keras temporal preset |
 
 Model rules:
 
@@ -605,12 +607,18 @@ Recommended first approach:
 5. Avoid training on long silence-dominated regions.
 6. Save split metadata and random seed.
 7. Sample windows across long captures instead of only taking the first windows.
+8. Reserve separate long excerpts for streaming validation, recurrent context
+   training, and final preview.
+9. Bias a fixed quota of training windows toward high-energy target regions,
+   then fill the rest with deterministic random coverage.
 
 Acceptance criteria:
 
 - Re-running training with the same seed produces stable sampled windows.
 - Dataset summaries record available windows, selected windows, train/validation
-  counts, stride, sample rate, duration, and selection mode.
+  counts, stride, sample rate, duration, recurrent context excerpt,
+  streaming-validation excerpt, preview excerpt, energy-selected count,
+  random-selected count, and selection mode.
 - Unit tests cover WAV IO, resampling, stereo policy, manual alignment metadata,
   and long-capture window sampling.
 
@@ -634,17 +642,28 @@ Training loop requirements:
 2. Save Keras model weights/config for the canonical path, or
    `model.state_dict()` for optional PyTorch runs.
 3. Save optimizer state where the backend supports it.
-4. Save the best checkpoint by validation ESR.
-5. Track best checkpoint by validation ESR or selected quality metric.
+4. Save the best checkpoint by validation score: streaming validation ESR plus
+   a short-window diagnostic term and an underpowered-output penalty.
+5. Store raw streaming ESR and short-window ESR in history for diagnosis.
 6. Support cancellation by signal and by a cancellation file in the run folder.
 7. Emit JSONL progress events after every epoch.
 8. Save exact package versions, device name, seed, and preset metadata.
-9. Support early stopping by validation ESR plateau.
-10. Reduce learning rate on validation ESR plateau before early stopping,
+9. Support early stopping by validation-score plateau.
+10. Reduce learning rate on validation-score plateau before early stopping,
     emitting `learning_rate_reduced` events and persisting per-epoch learning
     rates in `history.json`.
-11. Save per-epoch validation history for the desktop validation curve.
-12. Save good/usable/needs-work quality assessment language for the report UI.
+11. Save per-epoch streaming ESR, short-window ESR, validation score, output
+    level ratio, context-training loss, and learning-rate history for the
+    desktop curve and diagnostics.
+12. Preserve the lower checkpoint learning rate when resuming from previous
+    training unless the manifest explicitly allows a resume LR increase.
+13. Save good/usable/needs-work quality assessment language for the report UI.
+14. For recurrent presets, add one longer active context update per epoch so
+    the model sees hidden-state behavior over more than one short sampled
+    window.
+15. For recurrent presets, compare final continuous inference against
+    reset-per-chunk inference and flag state drift when chunk-reset ESR and
+    correlation are materially better.
 
 Validation/inference preview requirements:
 
@@ -654,6 +673,8 @@ Validation/inference preview requirements:
 3. Restore training mode only if the training loop continues afterward.
 4. Render target, prediction, and residual WAV files.
 5. Compute metrics on the same aligned test segment used for preview audio.
+6. Keep the continuous prediction as the export truth. Chunk-reset prediction
+   and residual WAVs are diagnostic artifacts only.
 
 Acceptance criteria:
 
@@ -663,6 +684,12 @@ Acceptance criteria:
 - Run metadata is sufficient to reproduce the run.
 - Desktop controls now expose epochs, early-stop patience, minimum ESR
   improvement, and training window budget.
+- Recurrent built-in recipes default to longer 8192-sample windows plus a
+  bounded active context update so training better matches continuous RTNeural
+  playback.
+- The balanced Keras recipe starts with the finite-memory Conv1D BatchNorm/PReLU
+  preset; richer recurrent presets remain available after the baseline confirms
+  the capture is learnable.
 
 ### Step 6.5 Implement Losses And Metrics
 
@@ -1277,6 +1304,8 @@ fixtures/rtneural-json/golden/
   lstm_standard.rtneural.json
   conv1d_light.rtneural.json
   conv1d_bn_prelu.rtneural.json
+  conv1d_stack_prelu.rtneural.json
+  wavenet_tcn.rtneural.json
   conv_gru_hybrid.rtneural.json
 ```
 
@@ -1409,9 +1438,11 @@ PyTorch, or export logic changes.
 | `lstm_standard` | Required | Optional | Required | Required | Required | Required | v1 |
 | `conv1d_light` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `conv1d_bn_prelu` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `conv1d_stack_prelu` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `wavenet_tcn` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `conv_gru_hybrid` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `heavy_recurrent` | Later | Later | Required before exposure | Required | Required | Required | Warned v1 or later |
-| `conv1d_tcn` | Later | Later | Later | Later | Later | Later | Defer |
+| `parametric_active_learning` | Later | Later | Later | Later | Later | Later | Defer |
 
 Do not expose a preset in the UI unless its row is green for the target release.
 
@@ -1471,7 +1502,8 @@ The original order below is now mostly complete:
 6. WAV preparation, resampling, stereo policy, latency estimation, manual
    alignment override, and preparation reports: complete.
 7. Paired-WAV training with metrics, checkpoints, preview WAVs, validation
-   history, early stopping, and quality language: complete for local v1.
+   history, early stopping, recurrent context updates, recurrent state-drift
+   diagnostics, and quality language: complete for local v1.
 8. SQLite project/job store, recovery, cancellation, resume, and event
    persistence: complete.
 9. Tauri/React UI for project creation/selection/rename/delete, Capture, Align,
@@ -1482,8 +1514,8 @@ The original order below is now mostly complete:
 
 Current next implementation order:
 
-1. Run a real capture project through the full app and tune capture/gain/preset
-   recommendation thresholds.
+1. Run a real capture project through the full app with the finite-memory
+   baseline and tune capture/gain/preset recommendation thresholds.
 2. Add UI smoke tests with real Tauri windows.
 3. Add packaged-app smoke that exercises a tiny train/export workflow inside the
    packaged app, not only bundle shape and sidecar execution.
@@ -1592,12 +1624,14 @@ Current documents:
 
 1. `README.md`
 2. `docs/Research-RTNeural-Training-Desktop-App.md`
-3. `docs/Implementation-Guide-RTNeural-Training-Desktop-App.md`
+3. `docs/Research-PANAMA-WaveNet-Active-Learning.md`
+4. `docs/Implementation-Guide-RTNeural-Training-Desktop-App.md`
 
-The README should stay task-oriented for users and developers. The research note
-should preserve source findings and RTNeural reference context. This
-implementation guide should remain the engineering map: what is built, what is
-deferred, and which smoke/CI gates define confidence today.
+The README should stay task-oriented for users and developers. Research notes
+should preserve source findings, RTNeural reference context, and any paper-to-
+product decisions. This implementation guide should remain the engineering map:
+what is built, what is deferred, and which smoke/CI gates define confidence
+today.
 
 Deferred documents worth splitting out when the project hardens:
 

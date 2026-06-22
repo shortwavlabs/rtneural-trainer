@@ -28,6 +28,8 @@ const MODEL_PRESETS: &[&str] = &[
     "lstm_standard",
     "conv1d_light",
     "conv1d_bn_prelu",
+    "conv1d_stack_prelu",
+    "wavenet_tcn",
     "conv_gru_hybrid",
 ];
 
@@ -702,9 +704,27 @@ fn get_run_preview(
         ("target", "Target", "target.wav"),
         ("prediction", "Prediction", "prediction.wav"),
         ("residual", "Residual", "residual.wav"),
+        (
+            "chunk_prediction",
+            "Chunk-reset prediction",
+            "chunk-reset-prediction.wav",
+        ),
+        (
+            "chunk_residual",
+            "Chunk-reset residual",
+            "chunk-reset-residual.wav",
+        ),
     ]
     .iter()
-    .map(|(kind, label, file_name)| run_preview_artifact(kind, label, &preview_dir.join(file_name)))
+    .filter(|(_kind, _label, file_name)| {
+        *file_name == "target.wav"
+            || *file_name == "prediction.wav"
+            || *file_name == "residual.wav"
+            || preview_dir.join(*file_name).exists()
+    })
+    .map(|(kind, label, file_name)| {
+        run_preview_artifact(kind, label, &preview_dir.join(*file_name))
+    })
     .collect::<Result<Vec<_>, _>>()?;
 
     Ok(RunPreview {
@@ -1959,7 +1979,7 @@ fn default_training_learning_rate() -> f64 {
 }
 
 fn default_training_sequence_length() -> u32 {
-    1024
+    8192
 }
 
 fn default_training_backend() -> String {

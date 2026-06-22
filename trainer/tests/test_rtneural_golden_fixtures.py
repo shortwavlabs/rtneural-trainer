@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
+from rttrainer.export_rtneural.json_exporter import default_parity_tolerance
 from rttrainer.models.presets import PRESETS
 from rttrainer.validation.parity import run_exported_json
 
@@ -138,7 +139,10 @@ class RTNeuralGoldenFixtureTests(unittest.TestCase):
                     expected = predict_keras(fixture.model, input_samples)
                     actual = run_exported_json(model_path, input_samples)
                     self.assertEqual(len(expected), len(actual))
-                    self.assertLessEqual(max_abs_error(expected, actual), 1.0e-5)
+                    self.assertLessEqual(
+                        max_abs_error(expected, actual),
+                        default_parity_tolerance(preset_id),
+                    )
 
     @unittest.skipUnless(
         native_validator_available(),

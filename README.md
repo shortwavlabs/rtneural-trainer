@@ -24,9 +24,10 @@ compatibility backend for curated LSTM presets.
 Current local v1 coverage includes SQLite-backed project/job state, project
 rename/delete actions, native file pickers, optional resampling and stereo
 policy, manual latency override, cancel/resume/recovery, validation curves,
-early stopping controls, runtime inspection, target/prediction/residual
-playback, golden RTNeural JSON fixtures, native parity checks, and
-debug/release smoke scripts.
+streaming validation checkpoints, early stopping controls, learning-rate
+plateau decay, recurrent state-drift diagnostics, runtime inspection,
+target/prediction/residual playback, golden RTNeural JSON fixtures, native
+parity checks, and debug/release smoke scripts.
 
 Still deferred: signed/notarized release distribution, richer waveform/spectrum
 inspection, a full tiny train/export smoke inside an installed bundle, UI smoke
@@ -282,13 +283,13 @@ Create `projects/demo/train.json`:
   "run_id": "run_001",
   "run_dir": "projects/demo/runs/run_001",
   "prepared_dir": "projects/demo/audio/prepared",
-  "preset": "lstm_light",
+  "preset": "lstm_standard",
   "backend": "keras",
   "epochs": 20,
   "batch_size": 16,
   "learning_rate": 0.001,
-  "sequence_length": 1024,
-  "max_windows": 512,
+  "sequence_length": 8192,
+  "max_windows": 2048,
   "seed": 1337
 }
 ```
@@ -306,11 +307,26 @@ Keras runs save `checkpoints/best-model.keras` plus checkpoint metadata. To use
 the optional PyTorch path, set `"backend": "pytorch"` and install the
 `training` extra.
 
-Training monitors validation ESR. If validation ESR plateaus, the trainer lowers
-the learning rate before early stopping has a chance to stop the run. By
-default, plateau patience is half the early-stop patience, the decay factor is
-`0.5`, and the floor is `1e-6`. Progress events and `history.json` record the
-learning rate used each epoch and any reductions.
+Training samples windows with an energy-stratified pass and reserves long
+excerpts for streaming validation and preview audio. Recurrent presets also get
+one longer active context excerpt per epoch so hidden state sees more continuous
+audio than a single short window. Checkpoints use a validation score that is
+anchored by streaming ESR, with short-window ESR and an underpowered-output
+penalty to avoid selecting near-silent early checkpoints. If that validation
+score plateaus, the trainer lowers the learning rate before early stopping has a
+chance to stop the run. By default, plateau patience is half the early-stop
+patience, the decay factor is `0.5`, and the floor is `1e-6`. Progress events
+and `history.json` record streaming ESR, short-window diagnostics, validation
+score, output level ratio, learning rate, context-training loss, and any
+reductions.
+
+Final reports compare normal continuous inference against a reset-per-chunk
+diagnostic render for recurrent presets. If the reset render has much better ESR
+and correlation, the report flags recurrent state drift and writes extra
+`chunk-reset-prediction.wav` / `chunk-reset-residual.wav` previews. Treat the
+normal continuous prediction as the export truth; the chunk-reset audio is a
+debugging aid that usually means the next run should try a finite-memory Conv1D
+baseline or longer recurrent context.
 
 Current Keras-first presets are:
 
@@ -319,10 +335,26 @@ Current Keras-first presets are:
 - `lstm_light`: low-CPU LSTM recurrent model.
 - `lstm_standard`: default LSTM recurrent model.
 - `conv1d_light`: causal Conv1D model.
-- `conv1d_bn_prelu`: causal Conv1D with safe BatchNorm/PReLU.
+- `conv1d_bn_prelu`: causal Conv1D with safe BatchNorm/PReLU; this is the
+  balanced finite-memory baseline for long captures with review-level alignment.
+- `conv1d_stack_prelu`: stacked causal Conv1D/PReLU with dilations and a
+  pre-emphasis MSE default loss for distorted amp/pedal captures that need more
+  harmonic detail without recurrent state.
+- `wavenet_tcn`: RTNeural-safe WaveNet-style TCN using a deeper dilated causal
+  Conv1D stack and a multi-resolution STFT + pre-emphasis default loss for the
+  hardest high-gain captures. This is heavier than the smaller Conv presets;
+  use it to test quality first, then inspect native benchmark results before
+  treating it as export-ready.
 - `conv_gru_hybrid`: causal Conv1D front-end feeding a compact GRU.
 
+Newly initialized presets use a bounded `tanh` output layer so long streaming
+previews cannot run away into clipped full-scale prediction WAVs.
+
 The PyTorch compatibility backend is currently limited to the LSTM presets.
+
+Research notes from the PANAMA paper and related WaveNet amp-modeling work are
+captured in
+[docs/Research-PANAMA-WaveNet-Active-Learning.md](docs/Research-PANAMA-WaveNet-Active-Learning.md).
 
 ### 3. Evaluate
 
@@ -533,6 +565,7 @@ Tauri bundle outputs, staged sidecars, and
 ## Useful Docs
 
 - [Research note](docs/Research-RTNeural-Training-Desktop-App.md)
+- [PANAMA / WaveNet findings](docs/Research-PANAMA-WaveNet-Active-Learning.md)
 - [Implementation guide](docs/Implementation-Guide-RTNeural-Training-Desktop-App.md)
 - [Audio capture guidelines](docs/Audio-Capture-Guidelines.md)
 - [RTNeural upstream](https://github.com/jatinchowdhury18/RTNeural)

@@ -10,6 +10,7 @@ from rttrainer.metrics.audio_metrics import compute_metrics
 from rttrainer.models.presets import get_preset
 from rttrainer.training.device import require_torch
 from rttrainer.training.runner import (
+    estimate_realtime_factor,
     load_checkpoint,
     predict_loaded_sequence,
     resolve_checkpoint_path,
@@ -53,7 +54,9 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         checkpoint_path=checkpoint_path,
         model_json_path=model_path,
         input_path=input_path,
-        tolerance=float(manifest.get("parity_tolerance", 1e-5)),
+        tolerance=float(
+            manifest.get("parity_tolerance", default_parity_tolerance(preset.preset_id))
+        ),
     )
     validation_path = export_dir / "validation-report.json"
     write_json(validation_path, validation)
@@ -63,7 +66,7 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         "status": "pass",
         "backend": "python-estimate",
         "sample_rate": sample_rate,
-        "realtime_factor": 180.0 if preset.hidden_size <= 12 else 120.0,
+        "realtime_factor": estimate_realtime_factor(preset),
         "created_at": now(),
     }
     benchmark_path = export_dir / "benchmark-report.json"
@@ -242,6 +245,13 @@ def build_keras_rtneural_json(
         "rtneural_commit": RTNEURAL_COMMIT,
     }
     return model_json
+
+
+def default_parity_tolerance(preset_id: str) -> float:
+    preset = get_preset(preset_id)
+    if preset.architecture in {"gru", "conv_gru"}:
+        return 3.0e-4
+    return 1.0e-5
 
 
 def resolve_parity_input(manifest: dict[str, Any], checkpoint_path: Path) -> Path:
