@@ -138,6 +138,18 @@ whose dynamics are not evenly represented by the current training windows.
 - Export and native-benchmark both `wavenet_tcn_balanced` and
   `wavenet_tcn_quality` on clean/crunch when runtime margin matters.
 
+## Follow-Up Implemented
+
+- The default built-in training recipe now uses `wavenet_tcn_balanced`.
+- `wavenet_tcn_quality` is the high-gain/refinement recipe, while
+  `conv1d_stack_prelu` is labeled as a fast fallback.
+- The Align view now extracts and surfaces top latency candidates from the
+  prepare warning so low-confidence captures can be checked before long runs.
+- Training reports now include an `excellent` tier and weigh residual RMS plus
+  correlation more heavily than isolated peak residuals.
+- Export packages now include parity snapshot WAVs and `parity-snapshot.json`
+  alongside validation and benchmark reports.
+
 ## Next Tests
 
 1. Continue rhythm `wavenet_tcn_quality` from best checkpoint with a lower

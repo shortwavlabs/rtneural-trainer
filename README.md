@@ -346,15 +346,15 @@ Current Keras-first presets are:
 - `conv1d_bn_prelu`: causal Conv1D with safe BatchNorm/PReLU; this is the
   compact finite-memory baseline for capture sanity checks.
 - `conv1d_stack_prelu`: stacked causal Conv1D/PReLU with dilations and a
-  pre-emphasis MSE default loss. This is the balanced medium/low-gain amp and
-  pedal path when recurrent state is not needed.
+  pre-emphasis MSE default loss. This is now the fast CPU fallback and sanity
+  check for amp/pedal captures.
 - `wavenet_tcn_fast`: smaller RTNeural-safe WaveNet-style TCN for a faster
-  high-gain probe.
-- `wavenet_tcn_balanced`: the current recommended high-gain quality path,
-  matching the proven legacy `wavenet_tcn` architecture.
+  quality probe.
+- `wavenet_tcn_balanced`: the current default amp quality path, matching the
+  proven legacy `wavenet_tcn` architecture.
 - `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement
-  runs when the balanced model is promising. Benchmark before treating quality
-  exports as plugin-ready.
+  runs, especially crunch/rhythm/high-gain tones. Benchmark before treating
+  quality exports as plugin-ready.
 - `wavenet_tcn`: legacy balanced WaveNet preset kept for existing runs and
   checkpoint compatibility.
 - `conv_gru_hybrid`: causal Conv1D front-end feeding a compact GRU.
@@ -415,6 +415,9 @@ The export folder receives:
 - `model.rtneural.json`
 - `validation-report.json`
 - `benchmark-report.json`
+- `parity-snapshot.json`
+- `parity-snapshot-input.wav`
+- `parity-snapshot-expected.wav`
 - `package.json`
 
 ## RTNeural Support Scripts

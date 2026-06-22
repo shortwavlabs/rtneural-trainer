@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from rttrainer.data.audio_io import read_wav_mono
+from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.export_rtneural.keras_exporter import ArrayEncoder, save_keras_model_json
 from rttrainer.metrics.audio_metrics import compute_metrics
 from rttrainer.models.presets import get_preset
@@ -61,6 +61,15 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
     validation_path = export_dir / "validation-report.json"
     write_json(validation_path, validation)
 
+    parity_snapshot = write_parity_snapshot(
+        export_dir=export_dir,
+        model=model,
+        checkpoint=checkpoint,
+        checkpoint_path=checkpoint_path,
+        input_path=input_path,
+        manifest=manifest,
+    )
+
     benchmark = {
         "schema_version": 1,
         "status": "pass",
@@ -94,10 +103,29 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
             artifact_metadata(export_dir, "model", model_path, "application/json"),
             artifact_metadata(export_dir, "validation_report", validation_path, "application/json"),
             artifact_metadata(export_dir, "benchmark_report", benchmark_path, "application/json"),
+            artifact_metadata(
+                export_dir,
+                "parity_snapshot_manifest",
+                export_dir / str(parity_snapshot["manifest_path"]),
+                "application/json",
+            ),
+            artifact_metadata(
+                export_dir,
+                "parity_snapshot_input",
+                export_dir / str(parity_snapshot["input_path"]),
+                "audio/wav",
+            ),
+            artifact_metadata(
+                export_dir,
+                "parity_snapshot_expected",
+                export_dir / str(parity_snapshot["expected_output_path"]),
+                "audio/wav",
+            ),
         ],
         "model_path": model_path.name,
         "validation_path": validation_path.name,
         "benchmark_path": benchmark_path.name,
+        "parity_snapshot": parity_snapshot,
         "package_path": "package.json",
         "quality": checkpoint.get("metrics", {}),
         "validation": validation,
@@ -134,6 +162,7 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         "benchmark_path": str(benchmark_path),
         "package_path": str(package_path),
         "validation": validation,
+        "parity_snapshot": parity_snapshot,
     }
 
 
@@ -146,6 +175,53 @@ def artifact_metadata(export_dir: Path, role: str, path: Path, media_type: str) 
         "exists": exists,
         "size_bytes": path.stat().st_size if exists else None,
     }
+
+
+def write_parity_snapshot(
+    *,
+    export_dir: Path,
+    model,
+    checkpoint: dict[str, Any],
+    checkpoint_path: Path,
+    input_path: Path,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    input_audio = read_wav_mono(input_path)
+    if not input_audio.samples:
+        raise ValueError(f"Parity snapshot input is empty: {input_path}")
+    requested_samples = int(manifest.get("parity_snapshot_samples", 8192))
+    sample_count = min(max(1, requested_samples), len(input_audio.samples))
+    samples = input_audio.samples[:sample_count]
+    expected_output = predict_loaded_sequence(
+        model,
+        checkpoint,
+        samples,
+        manifest.get("device"),
+    )
+
+    snapshot_input_path = export_dir / "parity-snapshot-input.wav"
+    snapshot_expected_path = export_dir / "parity-snapshot-expected.wav"
+    snapshot_manifest_path = export_dir / "parity-snapshot.json"
+    write_wav_mono(snapshot_input_path, samples, input_audio.sample_rate)
+    write_wav_mono(snapshot_expected_path, expected_output, input_audio.sample_rate)
+
+    snapshot = {
+        "schema_version": 1,
+        "sample_rate": input_audio.sample_rate,
+        "sample_count": sample_count,
+        "input_path": snapshot_input_path.name,
+        "expected_output_path": snapshot_expected_path.name,
+        "manifest_path": snapshot_manifest_path.name,
+        "source_input_path": str(input_path),
+        "checkpoint_path": str(checkpoint_path),
+        "backend": checkpoint.get("backend", "unknown"),
+        "preset": checkpoint.get("preset", "unknown"),
+        "input_samples": samples,
+        "expected_output_samples": expected_output,
+        "created_at": now(),
+    }
+    write_json(snapshot_manifest_path, snapshot)
+    return snapshot
 
 
 def build_rtneural_json(

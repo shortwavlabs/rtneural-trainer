@@ -1730,12 +1730,39 @@ def quality_assessment(
     )
     correlation_known = math.isfinite(correlation)
     runtime_ok = realtime_factor >= 1.0
+    correlation_ok = not correlation_known or correlation >= 0.93
+    correlation_strong = not correlation_known or correlation >= 0.99
+    isolated_peak = (
+        peak_residual > 0.55
+        and esr <= 0.03
+        and rmse <= 0.03
+        and (not correlation_known or correlation >= 0.98)
+    )
 
     if (
         runtime_ok
+        and esr <= 0.015
+        and rmse <= 0.02
+        and correlation_strong
+    ):
+        verdict = "excellent"
+        if isolated_peak:
+            summary = "Excellent candidate with isolated peaks."
+            action = (
+                "Residual energy and correlation are strong. Listen for the peak events, "
+                "then export if the native benchmark passes."
+            )
+        else:
+            summary = "Excellent candidate for export."
+            action = (
+                "This is a preferred model. Export if the native benchmark has enough "
+                "realtime margin."
+            )
+    elif (
+        runtime_ok
         and esr <= 0.12
         and rmse <= 0.06
-        and (not correlation_known or correlation >= 0.93)
+        and correlation_ok
     ):
         verdict = "good"
         summary = "Good candidate for export."
@@ -1747,7 +1774,7 @@ def quality_assessment(
         runtime_ok
         and esr <= 0.18
         and rmse <= 0.08
-        and peak_residual <= 0.70
+        and peak_residual <= 0.80
         and (not correlation_known or correlation >= 0.88)
     ):
         verdict = "usable"
@@ -1763,11 +1790,11 @@ def quality_assessment(
             "Check alignment and gain staging, then train longer or choose a stronger preset."
         )
 
-    if peak_residual > 0.70:
+    if peak_residual > 0.70 and verdict not in {"excellent", "good"}:
         verdict = "needs_work"
         summary = "Residual peaks are high."
         action = "Look for alignment slips, clipping, or missing capture dynamics."
-    elif peak_residual > 0.55 and verdict == "good":
+    elif peak_residual > 0.55 and verdict == "good" and not isolated_peak:
         verdict = "usable"
         summary = "Usable with residual peaks to inspect."
         action = (

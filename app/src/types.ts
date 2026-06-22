@@ -109,6 +109,8 @@ export interface TrainingMetrics {
   peak_residual: number;
   rms_residual: number;
   realtime_factor: number;
+  state_continuous_correlation?: number;
+  correlation?: number;
 }
 
 export interface TrainingRun {

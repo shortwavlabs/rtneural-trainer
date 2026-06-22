@@ -4,11 +4,12 @@ Reviewed: 2026-06-22
 
 Implementation status: the app now exposes `wavenet_tcn_fast`,
 `wavenet_tcn_balanced`, and `wavenet_tcn_quality`; keeps legacy `wavenet_tcn`
-for existing checkpoints; recommends WaveNet for long/high-confidence amp and
-pedal captures; and includes a one-click "Continue best WaveNet" refinement
-helper. Export now runs a native RTNeural benchmark matrix across realistic
-block sizes and mono/stereo channel counts, and the report language has an
-initial high-gain WaveNet calibration from the current listening/metric results.
+for existing checkpoints; recommends WaveNet as the amp quality lane; includes
+a one-click "Continue best WaveNet" refinement helper; and surfaces candidate
+latency offsets for low-confidence captures. Export now runs a native RTNeural
+benchmark matrix across realistic block sizes and mono/stereo channel counts,
+writes parity snapshot input/output artifacts, and uses report language
+calibrated from the clean/crunch/rhythm listening and metric results.
 
 This note captures what we can learn from the Neural Amp Modeler ecosystem after the continued
 `wavenet_tcn` run on the current high-gain capture. It focuses on product and engineering choices
@@ -39,8 +40,9 @@ are justified for high-gain captures.
 For product defaults, this suggests:
 
 - High gain: default to WaveNet/TCN quality presets.
-- Medium and low gain: keep Stacked Conv as the faster default candidate, but validate this with
-  clean, crunch, and edge-of-breakup captures before treating it as settled.
+- Medium and low gain amp captures: start with WaveNet balanced; use Stacked
+  Conv as the fast CPU fallback until a different capture family proves it can
+  serve as the quality default.
 - Fast CPU preview/export checks: keep Dense, GRU, and smaller Conv presets as sanity and baseline
   paths, not as the main high-gain quality lane.
 
@@ -177,18 +179,20 @@ model size, latency, architecture, and inferred Conv1D receptive-field metadata.
 calibrate preset-specific pass/fail language from more captures rather than relying on one universal
 runtime threshold.
 
-### 4. Keep Stacked Conv as the medium/low-gain working default
+### 4. Keep Stacked Conv as the fast fallback
 
-On the high-gain test set, Stacked Conv improved over the baseline Conv preset but lagged WaveNet
-substantially. That does not make it a bad preset. It likely remains valuable when:
+On the clean/crunch/rhythm test set, Stacked Conv improved over the baseline
+Conv preset but lagged WaveNet on every amp capture. That does not make it a bad
+preset. It remains valuable when:
 
 - the tone is cleaner or less saturated
 - training speed matters
 - CPU budget is limited
 - user wants a quick first model before a quality run
 
-We should validate this with the clean/crunch/rhythm/lead capture set rather than infer too much from
-one high-gain target.
+We should keep validating this with lead, edge-of-breakup, pedal, and line-level
+captures, but the current app should not describe it as the default amp-quality
+path.
 
 ### 5. Improve package compatibility rather than adopt `.nam`
 
@@ -222,18 +226,20 @@ license metadata after format and licensing review.
    timing across block-size/channel combinations, plus model size, latency, architecture, and
    receptive-field metadata.
 
-5. Add parity snapshots to exports: still open.
+5. Add parity snapshots to exports: implemented.
 
-   Save a deterministic short input/output pair for each export. Use it to compare Python/Keras output
-   against native RTNeural output.
+   Each export now saves a deterministic short input/output pair plus
+   `parity-snapshot.json`. The final package preserves these artifacts after
+   native validation and benchmark reports are written.
 
 6. Make export quality gates architecture-aware: partially implemented.
 
    Dense/GRU/LSTM/Stacked Conv/WaveNet should have different benchmark expectations. A small Dense
    model and a WaveNet quality model should not be judged with identical runtime language. The first
    runtime gate now uses `>= 1x` native real-time factor for exported models, and the WaveNet report
-   language is calibrated around the current high-gain result. Clean, crunch, and edge-of-breakup
-   captures should drive the next threshold pass.
+   language is calibrated around the clean/crunch/rhythm baseline. Those captures
+   drove the current `excellent`/`good`/`usable` pass; edge-of-breakup, lead,
+   pedal, and bad-capture fixtures should drive the next threshold pass.
 
 7. Track slimmable models as a later research item: deferred.
 

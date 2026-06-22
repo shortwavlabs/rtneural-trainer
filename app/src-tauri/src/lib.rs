@@ -2194,8 +2194,7 @@ fn resume_presets_compatible(source_preset: &str, target_preset: &str) -> bool {
     }
     matches!(
         (source_preset, target_preset),
-        ("wavenet_tcn", "wavenet_tcn_balanced")
-            | ("wavenet_tcn_balanced", "wavenet_tcn")
+        ("wavenet_tcn", "wavenet_tcn_balanced") | ("wavenet_tcn_balanced", "wavenet_tcn")
     )
 }
 
@@ -3012,6 +3011,41 @@ fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Re
         .map(str::to_string)
         .unwrap_or_else(now);
     let updated_at = now();
+    let parity_snapshot = existing_package.get("parity_snapshot").cloned();
+    let mut artifacts = vec![
+        export_artifact_metadata(
+            input.export_dir,
+            "model",
+            input.model_path,
+            "application/json",
+        ),
+        export_artifact_metadata(
+            input.export_dir,
+            "validation_report",
+            input.validation_path,
+            "application/json",
+        ),
+        export_artifact_metadata(
+            input.export_dir,
+            "benchmark_report",
+            input.benchmark_path,
+            "application/json",
+        ),
+    ];
+    if let Some(existing_artifacts) = existing_package
+        .get("artifacts")
+        .and_then(serde_json::Value::as_array)
+    {
+        for artifact in existing_artifacts {
+            if artifact
+                .get("role")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|role| role.starts_with("parity_snapshot"))
+            {
+                artifacts.push(artifact.clone());
+            }
+        }
+    }
     let package = serde_json::json!({
         "schema_version": 2,
         "package_format": "rtneural-trainer-export",
@@ -3043,14 +3077,11 @@ fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Re
             "backend": backend,
             "metadata": model_metadata
         },
-        "artifacts": [
-            export_artifact_metadata(input.export_dir, "model", input.model_path, "application/json"),
-            export_artifact_metadata(input.export_dir, "validation_report", input.validation_path, "application/json"),
-            export_artifact_metadata(input.export_dir, "benchmark_report", input.benchmark_path, "application/json")
-        ],
+        "artifacts": artifacts,
         "model_path": relative_path_string(input.export_dir, input.model_path),
         "validation_path": relative_path_string(input.export_dir, input.validation_path),
         "benchmark_path": relative_path_string(input.export_dir, input.benchmark_path),
+        "parity_snapshot": parity_snapshot,
         "package_path": relative_path_string(input.export_dir, input.package_path),
         "quality": input.run.metrics,
         "validation": validation_report,
@@ -4366,6 +4397,28 @@ mod tests {
             }),
         )
         .expect("write benchmark report");
+        fs::write(export_dir.join("parity-snapshot.json"), "{}").expect("write snapshot");
+        write_json(
+            &package_path,
+            &serde_json::json!({
+                "created_at": now(),
+                "parity_snapshot": {
+                    "schema_version": 1,
+                    "manifest_path": "parity-snapshot.json",
+                    "sample_count": 8192
+                },
+                "artifacts": [
+                    {
+                        "role": "parity_snapshot_manifest",
+                        "path": "parity-snapshot.json",
+                        "media_type": "application/json",
+                        "exists": true,
+                        "size_bytes": 2
+                    }
+                ]
+            }),
+        )
+        .expect("write initial package");
         let run = TrainingRun {
             id: "run_test".to_string(),
             preset: "lstm_light".to_string(),
@@ -4399,6 +4452,12 @@ mod tests {
         assert_eq!(package["backend"], "keras");
         assert_eq!(package["validation"]["status"], "pass");
         assert_eq!(package["benchmark"]["realtime_factor"], 42.0);
+        assert_eq!(package["parity_snapshot"]["sample_count"], 8192);
+        assert!(package["artifacts"]
+            .as_array()
+            .expect("artifacts array")
+            .iter()
+            .any(|artifact| artifact["role"] == "parity_snapshot_manifest"));
         assert_eq!(package["compatibility"]["aidax"]["status"], "deferred");
     }
 

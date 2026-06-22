@@ -16,14 +16,15 @@ Ownership labels:
 Recommended next move:
 
 1. `Shared` Run 2-3 real capture projects through the app and record outcomes,
-   starting each long amp/pedal capture with the Conv1D finite-memory baseline
-   and then comparing `conv1d_stack_prelu`, `wavenet_tcn_balanced`, and
-   `wavenet_tcn_quality` when the baseline underfits harmonic detail.
+   starting long amp/pedal captures with `wavenet_tcn_balanced`, using
+   `wavenet_tcn_quality` for crunch/rhythm/high-gain refinement, and keeping
+   `conv1d_stack_prelu` as the fast CPU fallback.
    This is the highest-value next step because it calibrates preset
    recommendations, gain warnings, report language, and export confidence.
-   The first high-gain WaveNet report calibration and native benchmark matrix
-   are now in place; clean, crunch, and edge-of-breakup captures are the next
-   useful evidence.
+   WaveNet defaults, excellent/good/usable/needs-work report language, latency
+   candidate review, export parity snapshots, and the native benchmark matrix
+   are now in place; edge-of-breakup, lead, pedal, quiet, clipped, and stereo
+   captures are the next useful evidence.
 2. `Codex` Add the real Tauri UI smoke suite after the first real-capture pass.
    This protects the workflow while the UI and reports are still being tuned.
 3. `You` Decide the release/signing policy before we spend more time on release
@@ -38,14 +39,14 @@ Recommended next move:
     high-latency capture cases.
   - You: do the listening judgment for target/prediction/residual and mark
     whether each report verdict feels right.
+  - You: for low-confidence latency warnings, try the candidate sample offsets
+    shown in Align before committing to long WaveNet runs.
   - Codex: create or maintain a repeatable capture-results template if needed.
   - Codex: tune capture/gain/preset recommendation thresholds from the results.
-  - Codex: tune the stacked Conv1D/pre-emphasis preset against captures where
-    the baseline predicts low output energy or misses upper harmonics.
-  - Codex: compare `wavenet_tcn_fast`, `wavenet_tcn_balanced`, and
-    `wavenet_tcn_quality` against `conv1d_stack_prelu` on the DI2/RHYTHM2
-    capture family; the latest WaveNet continuation improved preview ESR to
-    roughly `0.120`, while stacked Conv still missed upper-band energy.
+  - Codex: keep WaveNet balanced/quality as the amp quality lane unless new
+    captures show a repeatable exception.
+  - Codex: keep `conv1d_stack_prelu` tuned as the fast fallback and sanity
+    check, not the default amp-quality recommendation.
   - Track which warnings fired, which preset was recommended, final ESR/RMSE,
     residual audibility, recurrent state-drift diagnostic, native validation
     status, native benchmark worst-case real-time factor, and benchmark matrix
@@ -128,6 +129,7 @@ Recommended next move:
   - Failed benchmark.
   - Missing best checkpoint.
   - Missing preview artifacts.
+  - Missing parity snapshot artifacts.
   - Missing or stale package metadata.
 
 - [ ] Expand real-world audio edge-case tests.
@@ -160,11 +162,11 @@ Recommended next move:
 
 - [ ] Tune report language with real captures.
   - Owner: Shared.
-  - Initial high-gain WaveNet thresholds landed: strong WaveNet previews can now
-    report `good`, moderate residual peaks downgrade to `usable`, severe peaks
-    remain `needs_work`, and native runtime viability starts at `>= 1x`
-    real-time.
-  - You: judge whether good/usable/needs-work matches listening results.
+  - Current WaveNet thresholds landed: very strong previews can now report
+    `excellent`, strong previews report `good`, non-isolated residual peaks can
+    still downgrade to `usable`, severe sustained residual problems remain
+    `needs_work`, and native runtime viability starts at `>= 1x` real-time.
+  - You: judge whether excellent/good/usable/needs-work matches listening results.
   - Codex: calibrate thresholds against listening notes.
   - Codex: make report actions specific to failure mode: alignment, gain,
     capture length, recurrent state drift, preset capacity, or runtime cost.

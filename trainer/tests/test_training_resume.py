@@ -144,6 +144,20 @@ class TrainingResumeTests(unittest.TestCase):
         self.assertEqual(assessment["verdict"], "usable")
         self.assertIn("residual peaks", str(assessment["summary"]).lower())
 
+    def test_quality_assessment_prefers_low_residual_energy_over_isolated_peak(self) -> None:
+        assessment = quality_assessment(
+            {
+                "esr": 0.0115,
+                "rmse": 0.0190,
+                "peak_residual": 0.625,
+                "realtime_factor": 1.5,
+                "state_continuous_correlation": 0.9943,
+            }
+        )
+
+        self.assertEqual(assessment["verdict"], "excellent")
+        self.assertIn("isolated peaks", str(assessment["summary"]).lower())
+
     def test_recurrent_context_training_defaults_to_recurrent_presets(self) -> None:
         self.assertTrue(
             recurrent_context_training_enabled({}, get_preset("conv_gru_hybrid"))

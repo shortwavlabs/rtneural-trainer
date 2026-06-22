@@ -39,8 +39,8 @@ Implemented:
 7. Native file pickers, capture validation, optional resampling, stereo policy,
    manual alignment override, sampled-window handling for long captures,
    gain/headroom guidance, validation curves, early stopping controls, preset
-   recommendations, good/usable/needs-work report language, and focused error
-   recovery copy.
+   recommendations, excellent/good/usable/needs-work report language, latency
+   candidate review, and focused error recovery copy.
 8. Offline preview playback for target, prediction, residual, and recurrent
    chunk-reset diagnostic WAVs, plus peak-envelope waveform comparison.
 9. Rich export package metadata, validation/benchmark report display, and
@@ -288,10 +288,10 @@ Implemented presets:
 | `lstm_standard` | 1 LSTM, hidden 16, bounded dense output | Default recurrent target |
 | `conv1d_light` | Causal Conv1D with bounded dense output | Fast temporal front-end |
 | `conv1d_bn_prelu` | Causal Conv1D with BatchNorm/PReLU and bounded output | Safe BatchNorm/PReLU coverage |
-| `conv1d_stack_prelu` | Stacked dilated causal Conv1D/PReLU with bounded output and pre-emphasis MSE default loss | Higher-detail finite-memory amp/pedal preset |
+| `conv1d_stack_prelu` | Stacked dilated causal Conv1D/PReLU with bounded output and pre-emphasis MSE default loss | Fast finite-memory fallback and sanity check |
 | `wavenet_tcn_fast` | Smaller WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Faster high-gain probe |
-| `wavenet_tcn_balanced` | Proven WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Recommended high-gain quality path; benchmark before export |
-| `wavenet_tcn_quality` | Wider/deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Slower high-gain refinement path; benchmark before export |
+| `wavenet_tcn_balanced` | Proven WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Default amp quality path; benchmark before export |
+| `wavenet_tcn_quality` | Wider/deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Slower crunch/rhythm/refinement path; benchmark before export |
 | `wavenet_tcn` | Legacy balanced WaveNet-style preset | Existing run/checkpoint compatibility |
 | `conv_gru_hybrid` | Conv1D front-end + GRU with bounded dense output | Richer Keras temporal preset |
 
@@ -1161,8 +1161,8 @@ Before an export is marked ready, the app verifies:
 5. Python parity passed.
 6. Native RTNeural validator passed.
 7. Benchmark passed the selected CPU tier.
-8. Package metadata includes sample rate, latency, architecture, metrics, and
-   RTNeural commit.
+8. Package metadata includes sample rate, latency, architecture, metrics,
+   parity snapshot artifacts, and RTNeural commit.
 
 Acceptance criteria:
 
@@ -1658,7 +1658,7 @@ Local desktop V1 is effectively done when all of the following are true:
 | Python/export parity passes. | Implemented in tests and golden fixtures |
 | Native RTNeural validation passes. | Implemented in validator and CI smoke |
 | Benchmark results are shown before export is marked ready. | Implemented |
-| The package contains metadata, reports, previews, and model JSON. | Implemented |
+| The package contains metadata, reports, parity snapshots, previews, and model JSON. | Implemented |
 | The debug packaged desktop app can complete sidecar discovery and launch checks without a terminal. | Implemented |
 | Signed/notarized release packages are ready for end users. | Deferred |
 | Packaged-app smoke runs a tiny full train/export workflow inside the installed bundle. | Deferred |

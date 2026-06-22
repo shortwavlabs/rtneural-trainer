@@ -109,7 +109,7 @@ type PresetRecommendation = {
 };
 
 type QualityDecision = {
-  verdict: "good" | "usable" | "needs_work" | "unknown";
+  verdict: "excellent" | "good" | "usable" | "needs_work" | "unknown";
   summary: string;
   action: string;
 };
@@ -246,8 +246,50 @@ const builtInTrainingRecipes = [
   {
     id: "builtin_balanced",
     source: "built_in",
-    name: "Balanced",
-    description: "Stacked Conv baseline for medium/low-gain amp and pedal captures.",
+    name: "WaveNet balanced",
+    description: "Default first quality run for amp captures; benchmark before export.",
+    modelPreset: "wavenet_tcn_balanced",
+    epochs: 120,
+    batchSize: 16,
+    learningRate: 0.0007,
+    sequenceLength: 8192,
+    maxWindows: 4096,
+    earlyStoppingPatience: 12,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_quality",
+    source: "built_in",
+    name: "WaveNet quality",
+    description: "Slower high-gain refinement when balanced is still audible.",
+    modelPreset: "wavenet_tcn_quality",
+    epochs: 180,
+    batchSize: 16,
+    learningRate: 0.0005,
+    sequenceLength: 8192,
+    maxWindows: 8192,
+    earlyStoppingPatience: 20,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_fast",
+    source: "built_in",
+    name: "WaveNet fast",
+    description: "Faster high-gain probe before a deeper quality run.",
+    modelPreset: "wavenet_tcn_fast",
+    epochs: 80,
+    batchSize: 16,
+    learningRate: 0.0008,
+    sequenceLength: 8192,
+    maxWindows: 2048,
+    earlyStoppingPatience: 10,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_stacked_conv_fallback",
+    source: "built_in",
+    name: "Stacked Conv fallback",
+    description: "Fast CPU sanity check when WaveNet runtime cost is too high.",
     modelPreset: "conv1d_stack_prelu",
     epochs: 80,
     batchSize: 16,
@@ -271,49 +313,11 @@ const builtInTrainingRecipes = [
     earlyStoppingPatience: 6,
     earlyStoppingMinDelta: 0.0001,
   },
-  {
-    id: "builtin_wavenet_fast",
-    source: "built_in",
-    name: "WaveNet fast",
-    description: "Faster high-gain probe before a deeper quality run.",
-    modelPreset: "wavenet_tcn_fast",
-    epochs: 80,
-    batchSize: 16,
-    learningRate: 0.0008,
-    sequenceLength: 8192,
-    maxWindows: 2048,
-    earlyStoppingPatience: 10,
-    earlyStoppingMinDelta: 0.00005,
-  },
-  {
-    id: "builtin_production",
-    source: "built_in",
-    name: "WaveNet balanced",
-    description: "Recommended high-gain quality path; benchmark before export.",
-    modelPreset: "wavenet_tcn_balanced",
-    epochs: 120,
-    batchSize: 16,
-    learningRate: 0.0007,
-    sequenceLength: 8192,
-    maxWindows: 4096,
-    earlyStoppingPatience: 12,
-    earlyStoppingMinDelta: 0.00005,
-  },
-  {
-    id: "builtin_wavenet_quality",
-    source: "built_in",
-    name: "WaveNet quality",
-    description: "Slower high-gain refinement when the balanced model is promising.",
-    modelPreset: "wavenet_tcn_quality",
-    epochs: 180,
-    batchSize: 16,
-    learningRate: 0.0005,
-    sequenceLength: 8192,
-    maxWindows: 8192,
-    earlyStoppingPatience: 20,
-    earlyStoppingMinDelta: 0.00005,
-  },
 ] satisfies TrainingRecipeOption[];
+
+const defaultTrainingRecipe =
+  builtInTrainingRecipes.find((recipe) => recipe.id === "builtin_balanced") ??
+  builtInTrainingRecipes[0];
 
 export default function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -1564,6 +1568,7 @@ function AlignView({
     48_000;
   const savedNudge = project.audio?.manual_latency_adjustment_samples ?? 0;
   const hasUnsavedNudge = nudge !== savedNudge;
+  const latencyCandidates = latencyCandidateSamples(project.audio);
 
   useEffect(() => {
     setNudge(project.audio?.manual_latency_adjustment_samples ?? 0);
@@ -1643,6 +1648,32 @@ function AlignView({
           />
           <span>{nudge} samples</span>
         </label>
+        {latencyCandidates.length ? (
+          <div className="candidate-offsets">
+            <span>Try detected candidates</span>
+            <div>
+              {latencyCandidates.map((candidate) => {
+                const candidateNudge = candidate - autoLatency;
+                const clampedNudge = clampNumber(candidateNudge, -256, 256);
+                const isActive = effectiveLatency === candidate;
+                return (
+                  <button
+                    className={isActive ? "chip active" : "chip"}
+                    key={candidate}
+                    type="button"
+                    title={`Set training latency to ${candidate} samples`}
+                    onClick={() => setNudge(clampedNudge)}
+                  >
+                    {candidate} samples
+                  </button>
+                );
+              })}
+            </div>
+            <small>
+              Low-confidence estimates are worth auditioning before a long WaveNet run.
+            </small>
+          </div>
+        ) : null}
         <button
           className="primary-button wide"
           type="button"
@@ -1716,18 +1747,22 @@ function TrainView({
     () => [...builtInTrainingRecipes, ...customRecipeOptions],
     [customRecipeOptions],
   );
-  const [selectedRecipeId, setSelectedRecipeId] = useState("builtin_balanced");
+  const [selectedRecipeId, setSelectedRecipeId] = useState(defaultTrainingRecipe.id);
   const [preset, setPreset] = useState(
-    recipeOptions.find((recipe) => recipe.id === "builtin_balanced")?.modelPreset ??
+    recipeOptions.find((recipe) => recipe.id === defaultTrainingRecipe.id)?.modelPreset ??
       recommendation.presetId,
   );
-  const [epochs, setEpochs] = useState(40);
-  const [batchSize, setBatchSize] = useState(16);
-  const [learningRate, setLearningRate] = useState(0.001);
-  const [sequenceLength, setSequenceLength] = useState(8192);
-  const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(6);
-  const [earlyStoppingMinDelta, setEarlyStoppingMinDelta] = useState(0.0001);
-  const [maxWindows, setMaxWindows] = useState(2048);
+  const [epochs, setEpochs] = useState(defaultTrainingRecipe.epochs);
+  const [batchSize, setBatchSize] = useState(defaultTrainingRecipe.batchSize);
+  const [learningRate, setLearningRate] = useState(defaultTrainingRecipe.learningRate);
+  const [sequenceLength, setSequenceLength] = useState(defaultTrainingRecipe.sequenceLength);
+  const [earlyStoppingPatience, setEarlyStoppingPatience] = useState(
+    defaultTrainingRecipe.earlyStoppingPatience,
+  );
+  const [earlyStoppingMinDelta, setEarlyStoppingMinDelta] = useState(
+    defaultTrainingRecipe.earlyStoppingMinDelta,
+  );
+  const [maxWindows, setMaxWindows] = useState(defaultTrainingRecipe.maxWindows);
   const [resumeFromRunId, setResumeFromRunId] = useState<string | null>(null);
   const [recipeName, setRecipeName] = useState("");
   const [recipeNotice, setRecipeNotice] = useState<string | null>(null);
@@ -1797,8 +1832,8 @@ function TrainView({
   }, [backend, selectedRecipe]);
 
   useEffect(() => {
-    if (selectedRecipeId !== "builtin_balanced") return;
-    setMaxWindows(Math.max(recommendedWindowBudget(project), 2048));
+    if (selectedRecipeId !== defaultTrainingRecipe.id) return;
+    setMaxWindows(Math.max(recommendedWindowBudget(project), defaultTrainingRecipe.maxWindows));
   }, [project.audio?.capture_profile, project.id, selectedRecipeId]);
 
   useEffect(() => {
@@ -1896,8 +1931,7 @@ function TrainView({
     const deletedName = selectedCustomRecipe.name;
     try {
       await onDeleteRecipe(selectedCustomRecipe.id);
-      const fallback = builtInTrainingRecipes.find((recipe) => recipe.id === "builtin_balanced");
-      if (fallback) applyRecipe(fallback);
+      applyRecipe(defaultTrainingRecipe);
       setRecipeNotice(`Deleted ${deletedName}.`);
     } catch {
       setRecipeNotice(null);
@@ -2270,6 +2304,8 @@ function CaptureTrainingGuidance({ project }: { project: ProjectDetail }) {
   const gainVerdict = getString(gain, "verdict");
   const headroom = getNumber(gain, "headroom_db");
   const rmsDelta = getNumber(gain, "rms_delta_db");
+  const latencyConfidence = project.audio?.latency_confidence ?? null;
+  const candidates = latencyCandidateSamples(project.audio);
 
   if (!project.audio) return null;
 
@@ -2293,6 +2329,17 @@ function CaptureTrainingGuidance({ project }: { project: ProjectDetail }) {
         <span>Level delta</span>
         <strong>{rmsDelta !== null ? `${rmsDelta.toFixed(1)} dB RMS` : "unknown"}</strong>
         <small>{headroom !== null ? `${headroom.toFixed(1)} dB peak headroom` : ""}</small>
+      </div>
+      <div>
+        <span>Latency review</span>
+        <strong>
+          {latencyConfidence !== null ? `${Math.round(latencyConfidence * 100)}%` : "unknown"}
+        </strong>
+        <small>
+          {candidates.length
+            ? `Try ${candidates.join(", ")} samples before long runs.`
+            : "Use the Align view before long WaveNet training."}
+        </small>
       </div>
     </div>
   );
@@ -3578,8 +3625,14 @@ function recommendPreset(
   const gainVerdict = getString(gain, "verdict");
   const targetRms = getNumber(gain, "target_rms_dbfs");
   const headroom = getNumber(gain, "headroom_db");
+  const rmsDelta = getNumber(gain, "rms_delta_db");
   const warningCodes = new Set(project.audio?.warning_details.map((warning) => warning.code) ?? []);
   const reasons: string[] = [];
+  const ampLike = project.target_kind === "amp" || project.target_kind === "pedal";
+  const denseOrDriven =
+    (targetRms !== null && targetRms > -19) ||
+    (rmsDelta !== null && rmsDelta >= 5) ||
+    (headroom !== null && headroom < 6);
 
   if (backend === "pytorch") {
     reasons.push("PyTorch parity is currently limited to LSTM presets.");
@@ -3599,13 +3652,13 @@ function recommendPreset(
     };
   }
 
-  if (warningCodes.has("capture_level_low") || warningCodes.has("rms_mismatch")) {
-    reasons.push("Gain warnings are present, so start with a compact stable baseline.");
+  if (warningCodes.has("capture_level_low")) {
+    reasons.push("The capture looks too quiet for a high-confidence quality run.");
     return {
       presetId: "conv1d_bn_prelu",
       label: "Conv baseline",
-      confidence: "medium",
-      reasons,
+      confidence: "low",
+      reasons: [...reasons, "Fix the capture level first if this baseline also sounds weak."],
     };
   }
 
@@ -3619,65 +3672,94 @@ function recommendPreset(
     };
   }
 
-  if (duration !== null && duration >= 60 && confidence < 0.75) {
-    reasons.push(
-      "Long captures with review-level alignment should start with a finite-memory baseline.",
-    );
+  if (warningCodes.has("rms_mismatch")) {
+    reasons.push("Input and target levels differ enough to warrant a quick sanity run.");
     return {
       presetId: "conv1d_bn_prelu",
-      label: "Conv + PReLU",
-      confidence: confidence >= 0.55 ? "medium" : "low",
+      label: "Conv baseline",
+      confidence: "medium",
       reasons: [
         ...reasons,
-        "This avoids recurrent hidden-state drift while checking whether the capture can be learned.",
+        "If the residual sounds mostly level-related, fix the capture gain before a long WaveNet run.",
       ],
     };
   }
 
-  if (duration !== null && duration >= 120 && confidence >= 0.8) {
-    reasons.push("The capture is long enough for the quality WaveNet finite-memory model.");
-    if (gainVerdict === "healthy") {
-      reasons.push("Gain staging looks healthy enough for a slower high-gain run.");
+  if (ampLike && duration !== null && duration >= 120) {
+    if (confidence < 0.65) {
+      reasons.push("The capture is long enough for WaveNet, but alignment needs review.");
+      return {
+        presetId: denseOrDriven ? "wavenet_tcn_quality" : "wavenet_tcn_balanced",
+        label: denseOrDriven ? "WaveNet Quality" : "WaveNet Balanced",
+        confidence: "low",
+        reasons: [
+          ...reasons,
+          "Try the top latency candidates in Align before committing to a long run.",
+        ],
+      };
     }
-    if (targetRms !== null && targetRms > -22) {
-      reasons.push("The processed target has enough RMS energy to justify the larger model.");
-    }
-    return {
-      presetId: "wavenet_tcn_quality",
-      label: "WaveNet Quality",
-      confidence: "high",
-      reasons: [
-        ...reasons,
-        "Use this for dense high-gain tones when training time and native benchmark cost are acceptable.",
-      ],
-    };
-  }
 
-  if (duration !== null && duration >= 90 && confidence >= 0.75) {
-    reasons.push("The capture is long enough for the balanced WaveNet finite-memory model.");
+    if (denseOrDriven) {
+      reasons.push("Dense or driven amp captures have consistently favored WaveNet Quality.");
+      if (gainVerdict === "healthy") {
+        reasons.push("Gain staging looks healthy enough for a slower quality run.");
+      }
+      return {
+        presetId: "wavenet_tcn_quality",
+        label: "WaveNet Quality",
+        confidence: confidence >= 0.75 ? "high" : "medium",
+        reasons: [
+          ...reasons,
+          "Use this when crunch/rhythm tones still leave audible residual detail.",
+        ],
+      };
+    }
+
+    reasons.push("Long amp captures are now routed through WaveNet as the quality lane.");
     return {
       presetId: "wavenet_tcn_balanced",
       label: "WaveNet Balanced",
       confidence: "high",
       reasons: [
         ...reasons,
-        "This is the recommended high-gain path; check native benchmark results before export.",
+        "Balanced is the first pass for clean and lower-gain captures; quality is the refinement step.",
+      ],
+    };
+  }
+
+  if (ampLike && duration !== null && duration >= 60) {
+    reasons.push(
+      confidence < 0.75
+        ? "Alignment needs review, but WaveNet is still the better quality starting point."
+        : "The capture is long enough for the balanced WaveNet finite-memory model.",
+    );
+    return {
+      presetId: "wavenet_tcn_balanced",
+      label: "WaveNet Balanced",
+      confidence: confidence >= 0.75 ? "high" : "medium",
+      reasons: [
+        ...reasons,
+        confidence < 0.75
+          ? "Use Align to try candidate offsets before extending the run."
+          : "Check native benchmark results before export.",
       ],
     };
   }
 
   if (duration !== null && duration >= 45 && confidence >= 0.65) {
-    reasons.push("The capture has enough material for the stacked finite-memory model.");
+    reasons.push("The capture has enough material for a fast finite-memory sanity model.");
     if (headroom !== null && headroom < 3) {
       reasons.push("Peak headroom is tight, so inspect residual peaks before a WaveNet quality run.");
     }
     return {
-      presetId: "conv1d_stack_prelu",
-      label: "Stacked Conv",
+      presetId: ampLike ? "wavenet_tcn_fast" : "conv1d_stack_prelu",
+      label: ampLike ? "WaveNet Fast" : "Stacked Conv",
       confidence: "medium",
       reasons: [
         ...reasons,
-        "Use WaveNet next if this misses high-gain harmonic detail.",
+        ampLike
+          ? "Use balanced or quality next if the preview suggests the capture is learnable."
+          : "Use this as a fast check before spending time on a larger model.",
       ],
     };
   }
@@ -3891,12 +3973,37 @@ function qualityVerdict(
       action: "Run training to generate validation metrics and preview audio.",
     };
   }
+  const correlation = residualCorrelation(metrics);
+  const correlationOk = correlation === null || correlation >= 0.93;
+  const correlationStrong = correlation === null || correlation >= 0.99;
+  const isolatedPeak =
+    metrics.peak_residual > 0.55 &&
+    metrics.esr <= 0.03 &&
+    metrics.rmse <= 0.03 &&
+    (correlation === null || correlation >= 0.98);
+  if (
+    metrics.esr <= 0.015 &&
+    metrics.rmse <= 0.02 &&
+    correlationStrong &&
+    metrics.realtime_factor >= 1
+  ) {
+    return {
+      verdict: "excellent",
+      summary: isolatedPeak
+        ? "Excellent candidate with isolated peaks."
+        : "Excellent candidate for export.",
+      action: isolatedPeak
+        ? "Residual energy and correlation are strong. Listen for the peak events, then export if the native benchmark passes."
+        : "This is a preferred model. Export if the native benchmark has enough realtime margin.",
+    };
+  }
   if (
     metrics.esr <= 0.12 &&
     metrics.rmse <= 0.06 &&
+    correlationOk &&
     metrics.realtime_factor >= 1
   ) {
-    if (metrics.peak_residual > 0.55) {
+    if (metrics.peak_residual > 0.55 && !isolatedPeak) {
       return {
         verdict: "usable",
         summary: "Usable with residual peaks to inspect.",
@@ -3914,7 +4021,8 @@ function qualityVerdict(
   if (
     metrics.esr <= 0.18 &&
     metrics.rmse <= 0.08 &&
-    metrics.peak_residual <= 0.7 &&
+    metrics.peak_residual <= 0.8 &&
+    (correlation === null || correlation >= 0.88) &&
     metrics.realtime_factor >= 1
   ) {
     return {
@@ -3932,8 +4040,44 @@ function qualityVerdict(
 }
 
 function normalizeQualityVerdict(value: string): QualityDecision["verdict"] {
-  if (value === "good" || value === "usable" || value === "needs_work") return value;
+  if (
+    value === "excellent" ||
+    value === "good" ||
+    value === "usable" ||
+    value === "needs_work"
+  ) {
+    return value;
+  }
   return "unknown";
+}
+
+function residualCorrelation(metrics: TrainingMetrics) {
+  const fromState = metrics.state_continuous_correlation;
+  if (typeof fromState === "number" && Number.isFinite(fromState)) return fromState;
+  const fallback = metrics.correlation;
+  if (typeof fallback === "number" && Number.isFinite(fallback)) return fallback;
+  return null;
+}
+
+function latencyCandidateSamples(audio: AudioReport | null | undefined) {
+  const candidates = new Set<number>();
+  for (const warning of audio?.warning_details ?? []) {
+    if (!warning.code.includes("latency")) continue;
+    const source = `${warning.message} ${warning.detail} ${warning.action}`;
+    const candidateText = source.match(/top candidates include ([^.]+)/i)?.[1] ?? source;
+    for (const match of candidateText.matchAll(/-?\d+(?=\s*samples?)/gi)) {
+      const value = Number(match[0]);
+      if (Number.isFinite(value)) candidates.add(value);
+    }
+  }
+  if (!candidates.size) return [];
+
+  const autoLatency = audio?.latency_auto_samples ?? audio?.latency_samples ?? 0;
+  candidates.add(autoLatency);
+  return [...candidates]
+    .filter((candidate) => Math.abs(candidate - autoLatency) <= 256)
+    .sort((left, right) => Math.abs(left - autoLatency) - Math.abs(right - autoLatency))
+    .slice(0, 4);
 }
 
 function getString(value: Record<string, unknown> | null, key: string) {

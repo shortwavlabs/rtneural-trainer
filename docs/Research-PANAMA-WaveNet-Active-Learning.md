@@ -2,6 +2,12 @@
 
 Date reviewed: June 21, 2026
 
+Implementation update: RTNeural Trainer now ships RTNeural-safe WaveNet/TCN
+presets (`wavenet_tcn_fast`, `wavenet_tcn_balanced`,
+`wavenet_tcn_quality`), uses WaveNet balanced as the default amp quality
+recipe, and keeps Stacked Conv as the fast fallback. Parametric/active-learning
+capture remains deferred.
+
 Primary paper: [Parametric Neural Amp Modeling with Active Learning](https://arxiv.org/html/2507.02109v1)
 
 Related references reviewed:
@@ -48,13 +54,14 @@ with spectral pressure, instead of jumping back to recurrent state.
 
 ## What To Build Now
 
-- Add `wavenet_tcn`: an RTNeural-safe WaveNet-style TCN preset.
-- Use a wider dilation schedule than `conv1d_stack_prelu`.
+- Keep testing `wavenet_tcn_balanced` and `wavenet_tcn_quality` across more amp
+  and pedal captures.
 - Keep the model finite-memory for stable continuous inference.
-- Add a multi-resolution STFT + pre-emphasis loss default for this preset.
-- Expose the preset in the UI as an advanced/high-detail Keras preset.
-- Keep `conv1d_bn_prelu` as the baseline and `conv1d_stack_prelu` as the safer
-  high-detail finite-memory preset.
+- Keep multi-resolution STFT + pre-emphasis as the WaveNet default loss path.
+- Use latency candidate review before long high-gain runs when preparation
+  confidence is low.
+- Keep `conv1d_bn_prelu` as the compact baseline and `conv1d_stack_prelu` as
+  the fast finite-memory fallback.
 
 ## What To Defer
 

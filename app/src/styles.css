@@ -974,6 +974,49 @@ dd,
   font-size: 0.9rem;
 }
 
+.candidate-offsets {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 8px;
+}
+
+.candidate-offsets > span {
+  color: #eef2ec;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.candidate-offsets > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.candidate-offsets small {
+  color: #aeb8b1;
+  line-height: 1.4;
+}
+
+.chip {
+  min-height: 32px;
+  padding: 0 10px;
+  color: #cfd8d1;
+  font-weight: 800;
+  background: #161a19;
+  border: 1px solid #303735;
+  border-radius: 999px;
+}
+
+.chip.active {
+  color: #0e1710;
+  background: #8ee690;
+  border-color: #8ee690;
+}
+
 .preset-list {
   display: grid;
   gap: 10px;
@@ -1138,7 +1181,10 @@ dd,
   gap: 10px;
 }
 
-.training-guidance,
+.training-guidance {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
 .guidance-grid,
 .evidence-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1167,6 +1213,11 @@ dd,
 
 .quality-callout.good {
   border-color: #325837;
+}
+
+.quality-callout.excellent {
+  border-color: #8ee690;
+  box-shadow: inset 3px 0 0 #8ee690;
 }
 
 .quality-callout.usable {
