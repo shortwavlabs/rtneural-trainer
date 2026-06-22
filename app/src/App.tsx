@@ -35,6 +35,7 @@ import type {
   CaptureChannelPolicy,
   DeviceInspection,
   ExportPackage,
+  LatencyCandidate,
   ProjectDetail,
   ProjectSummary,
   ProjectWaveform,
@@ -333,6 +334,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [progressEvents, setProgressEvents] = useState<SidecarProgressEvent[]>([]);
+  const projectLoadRequestRef = useRef(0);
   const sidecarBusy =
     busy === "audio" || busy === "sample" || busy === "train" || busy === "export";
 
@@ -364,6 +366,7 @@ export default function App() {
 
   useEffect(() => {
     setProgressEvents([]);
+    projectLoadRequestRef.current += 1;
     if (!selectedId) {
       setProject(null);
       return;
@@ -420,15 +423,19 @@ export default function App() {
   }
 
   async function loadProject(projectId: string) {
+    const requestId = projectLoadRequestRef.current + 1;
+    projectLoadRequestRef.current = requestId;
     try {
       setError(null);
       const [nextProject, nextEvents] = await Promise.all([
         api.getProject(projectId),
         api.listProjectEvents(projectId),
       ]);
+      if (requestId !== projectLoadRequestRef.current) return;
       setProject(nextProject);
       setProgressEvents(nextEvents);
     } catch (caught) {
+      if (requestId !== projectLoadRequestRef.current) return;
       setError(toFriendlyMessage(caught));
     }
   }
@@ -462,6 +469,7 @@ export default function App() {
   }
 
   async function commitProject(nextProject: ProjectDetail, nextTab?: TabId) {
+    projectLoadRequestRef.current += 1;
     setProject(nextProject);
     setSelectedId(nextProject.id);
     await refreshProjects();
@@ -599,6 +607,7 @@ export default function App() {
             <section className="work-surface">
               {activeTab === "capture" ? (
                 <CaptureView
+                  key={project.id}
                   project={project}
                   busy={busy === "audio"}
                   onAnalyze={async (capture) => {
@@ -1364,13 +1373,27 @@ function CaptureView({
   busy: boolean;
   onAnalyze: (payload: CaptureAnalyzePayload) => Promise<void>;
 }) {
-  const [inputPath, setInputPath] = useState(project.audio?.input.path ?? "");
-  const [targetPath, setTargetPath] = useState(project.audio?.target.path ?? "");
-  const [resample, setResample] = useState(false);
-  const [targetSampleRate, setTargetSampleRate] = useState(48_000);
-  const [channelPolicy, setChannelPolicy] = useState<CaptureChannelPolicy>("mixdown");
+  const initialCapture = captureDefaultsForProject(project);
+  const [inputPath, setInputPath] = useState(initialCapture.inputPath);
+  const [targetPath, setTargetPath] = useState(initialCapture.targetPath);
+  const [resample, setResample] = useState(initialCapture.resample);
+  const [targetSampleRate, setTargetSampleRate] = useState(
+    initialCapture.targetSampleRate,
+  );
+  const [channelPolicy, setChannelPolicy] = useState<CaptureChannelPolicy>(
+    initialCapture.channelPolicy,
+  );
   const captureValidation = validateCaptureForm(inputPath, targetPath);
   const canPickFiles = isTauriRuntime();
+
+  useEffect(() => {
+    const nextCapture = captureDefaultsForProject(project);
+    setInputPath(nextCapture.inputPath);
+    setTargetPath(nextCapture.targetPath);
+    setResample(nextCapture.resample);
+    setTargetSampleRate(nextCapture.targetSampleRate);
+    setChannelPolicy(nextCapture.channelPolicy);
+  }, [project.id]);
 
   async function pickCaptureFile(kind: "input" | "target") {
     const selected = await openDialog({
@@ -1568,7 +1591,9 @@ function AlignView({
     48_000;
   const savedNudge = project.audio?.manual_latency_adjustment_samples ?? 0;
   const hasUnsavedNudge = nudge !== savedNudge;
-  const latencyCandidates = latencyCandidateSamples(project.audio);
+  const latencyCandidates = latencyCandidateDetails(project.audio);
+  const latencyAgreement = finiteNumber(project.audio?.latency?.agreement);
+  const latencyMargin = finiteNumber(project.audio?.latency?.score_margin);
 
   useEffect(() => {
     setNudge(project.audio?.manual_latency_adjustment_samples ?? 0);
@@ -1632,6 +1657,12 @@ function AlignView({
           <Metric label="Manual adjustment" value={`${nudge} samples`} />
           <Metric label="Training latency" value={`${effectiveLatency} samples`} />
           <Metric label="Confidence" value={`${Math.round(confidence * 100)}%`} />
+          {latencyAgreement !== null ? (
+            <Metric label="Window agreement" value={`${Math.round(latencyAgreement * 100)}%`} />
+          ) : null}
+          {latencyMargin !== null ? (
+            <Metric label="Score margin" value={latencyMargin.toFixed(3)} />
+          ) : null}
           <Metric
             label="Milliseconds"
             value={`${((effectiveLatency / sampleRate) * 1000).toFixed(2)} ms`}
@@ -1653,18 +1684,19 @@ function AlignView({
             <span>Try detected candidates</span>
             <div>
               {latencyCandidates.map((candidate) => {
-                const candidateNudge = candidate - autoLatency;
+                const candidateSamples = candidate.samples;
+                const candidateNudge = candidateSamples - autoLatency;
                 const clampedNudge = clampNumber(candidateNudge, -256, 256);
-                const isActive = effectiveLatency === candidate;
+                const isActive = effectiveLatency === candidateSamples;
                 return (
                   <button
                     className={isActive ? "chip active" : "chip"}
-                    key={candidate}
+                    key={candidateSamples}
                     type="button"
-                    title={`Set training latency to ${candidate} samples`}
+                    title={latencyCandidateTitle(candidate)}
                     onClick={() => setNudge(clampedNudge)}
                   >
-                    {candidate} samples
+                    {latencyCandidateLabel(candidate)}
                   </button>
                 );
               })}
@@ -4060,24 +4092,71 @@ function residualCorrelation(metrics: TrainingMetrics) {
 }
 
 function latencyCandidateSamples(audio: AudioReport | null | undefined) {
-  const candidates = new Set<number>();
+  return latencyCandidateDetails(audio).map((candidate) => candidate.samples);
+}
+
+function latencyCandidateDetails(audio: AudioReport | null | undefined): LatencyCandidate[] {
+  const candidates = new Map<number, LatencyCandidate>();
+  const autoLatency = audio?.latency_auto_samples ?? audio?.latency_samples ?? 0;
+
+  for (const candidate of audio?.latency?.candidates ?? []) {
+    const samples = finiteNumber(candidate.samples);
+    if (samples === null) continue;
+    candidates.set(samples, { ...candidate, samples });
+  }
+
   for (const warning of audio?.warning_details ?? []) {
     if (!warning.code.includes("latency")) continue;
     const source = `${warning.message} ${warning.detail} ${warning.action}`;
     const candidateText = source.match(/top candidates include ([^.]+)/i)?.[1] ?? source;
     for (const match of candidateText.matchAll(/-?\d+(?=\s*samples?)/gi)) {
       const value = Number(match[0]);
-      if (Number.isFinite(value)) candidates.add(value);
+      if (Number.isFinite(value) && !candidates.has(value)) {
+        candidates.set(value, { samples: value });
+      }
     }
   }
   if (!candidates.size) return [];
 
-  const autoLatency = audio?.latency_auto_samples ?? audio?.latency_samples ?? 0;
-  candidates.add(autoLatency);
-  return [...candidates]
-    .filter((candidate) => Math.abs(candidate - autoLatency) <= 256)
-    .sort((left, right) => Math.abs(left - autoLatency) - Math.abs(right - autoLatency))
+  if (!candidates.has(autoLatency)) {
+    candidates.set(autoLatency, {
+      samples: autoLatency,
+      score: audio?.latency_confidence ?? null,
+      agreement: audio?.latency?.agreement ?? null,
+    });
+  }
+
+  return [...candidates.values()]
+    .filter((candidate) => Math.abs(candidate.samples - autoLatency) <= 256)
+    .sort((left, right) => {
+      const leftDistance = Math.abs(left.samples - autoLatency);
+      const rightDistance = Math.abs(right.samples - autoLatency);
+      if (leftDistance !== rightDistance) return leftDistance - rightDistance;
+      return (right.agreement ?? 0) - (left.agreement ?? 0);
+    })
     .slice(0, 4);
+}
+
+function latencyCandidateLabel(candidate: LatencyCandidate) {
+  const agreement = finiteNumber(candidate.agreement);
+  if (agreement === null) return `${candidate.samples} samples`;
+  return `${candidate.samples} samples · ${Math.round(agreement * 100)}%`;
+}
+
+function latencyCandidateTitle(candidate: LatencyCandidate) {
+  const score = finiteNumber(candidate.score);
+  const onsetScore = finiteNumber(candidate.onset_score);
+  const voteCount = finiteNumber(candidate.vote_count);
+  const windowCount = finiteNumber(candidate.window_count);
+  const details = [
+    `Set training latency to ${candidate.samples} samples`,
+    voteCount !== null && windowCount !== null
+      ? `${voteCount}/${windowCount} windows voted for this offset`
+      : null,
+    score !== null ? `score ${score.toFixed(3)}` : null,
+    onsetScore !== null ? `onset ${onsetScore.toFixed(3)}` : null,
+  ];
+  return details.filter(Boolean).join(" · ");
 }
 
 function getString(value: Record<string, unknown> | null, key: string) {
@@ -4088,6 +4167,10 @@ function getString(value: Record<string, unknown> | null, key: string) {
 function getNumber(value: Record<string, unknown> | null, key: string) {
   const item = value?.[key];
   return typeof item === "number" ? item : null;
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function getBoolean(value: Record<string, unknown> | null, key: string) {
@@ -4140,6 +4223,24 @@ function operationLabel(operation: string) {
   return operation
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function captureDefaultsForProject(project: ProjectDetail): CaptureAnalyzePayload {
+  const options = project.audio?.options ?? null;
+  const savedChannelPolicy = getString(options, "channel_policy");
+  return {
+    inputPath: project.audio?.input.path ?? "",
+    targetPath: project.audio?.target.path ?? "",
+    targetSampleRate: getNumber(options, "target_sample_rate") ?? 48_000,
+    resample: getBoolean(options, "resample"),
+    channelPolicy: isCaptureChannelPolicy(savedChannelPolicy)
+      ? savedChannelPolicy
+      : "mixdown",
+  };
+}
+
+function isCaptureChannelPolicy(value: string | null): value is CaptureChannelPolicy {
+  return value === "mixdown" || value === "first" || value === "reject";
 }
 
 function validateCaptureForm(inputPath: string, targetPath: string) {

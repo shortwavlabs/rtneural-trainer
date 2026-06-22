@@ -121,8 +121,9 @@ very dense: `-14.95 dBFS` RMS with only about `5.2 dB` crest factor. Latency
 confidence is low, but a preview shift search still selected shift `0`, so the
 rendered residual is real model mismatch rather than a report alignment artifact.
 The residual is broad-band and concentrated in the presence/fizz region
-(`1-9 kHz`). This suggests dense lead saturation and possibly time-varying chain
-behavior, not a bad WAV file.
+(`1-9 kHz`). Since the capture is pure amp head with no cabinet or time-based
+effects, this points to dense lead saturation plus latency ambiguity rather than
+a bad WAV file or a contaminated target chain.
 
 ### Overdrive Pedal
 
@@ -165,9 +166,10 @@ CPU budget matters.
 
    Lead had the hottest RMS, lowest crest factor, and weakest latency confidence
    in this set. Balanced and quality tied, and the residual stayed broad-band in
-   the presence/fizz region. Future lead captures should try top latency
-   candidates before long runs and, when possible, avoid post-amp delay, reverb,
-   modulation, gates, or compressors in the training target.
+   the presence/fizz region. The capture is already pure amp head, so future
+   lead work should focus on transient pre-roll, top latency candidates, and
+   balanced-versus-quality comparisons rather than removing nonexistent
+   downstream effects.
 
 5. Latency confidence should affect workflow language.
 
@@ -224,8 +226,8 @@ CPU budget matters.
    `17` samples) with shorter balanced runs before another long production run.
 3. Export clean, edge, pedal, crunch, and rhythm balanced/quality winners;
    compare native benchmark matrix results.
-4. If lead remains harder, record or test an amp/cab-only lead target without
-   delay, reverb, modulation, gate, or compressor after the amp.
+4. If lead remains harder, re-test with the transient pre-roll and candidate
+   latency offsets before another long production run.
 5. If rhythm still has audible residual, try the top latency candidates from
    preparation (`2`, `10`, and `18` samples) before another long run.
 6. Add a second clean or edge-of-breakup capture to make sure the clean result

@@ -26,9 +26,9 @@ rename/delete actions, native file pickers, optional resampling and stereo
 policy, manual latency override, cancel/resume/recovery, validation curves,
 streaming validation checkpoints, early stopping controls, learning-rate
 plateau decay, recurrent state-drift diagnostics, runtime inspection,
-target/prediction/residual playback, golden RTNeural JSON fixtures, native
-parity checks, block-size/channel native benchmark reports, and debug/release
-smoke scripts.
+target/prediction/residual playback, transient-aware latency candidate review
+with window agreement, golden RTNeural JSON fixtures, native parity checks,
+block-size/channel native benchmark reports, and debug/release smoke scripts.
 
 Still deferred: signed/notarized release distribution, richer waveform/spectrum
 inspection, a full tiny train/export smoke inside an installed bundle, UI smoke

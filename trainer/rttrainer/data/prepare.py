@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rttrainer.data.audio_io import (
@@ -29,6 +29,20 @@ class LatencyScore:
     feature_score: float
     signed_score: float
     window_count: int
+    preemphasis_score: float = 0.0
+    onset_score: float = 0.0
+    vote_count: int = 0
+    agreement: float = 0.0
+    window_scores: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class LatencyWindowCandidate:
+    start: int
+    quality: float
+    energy: float
+    onset_energy: float
+    crest_factor: float
 
 
 @dataclass(frozen=True)
@@ -36,6 +50,7 @@ class LatencyAnalysis:
     estimated_samples: int
     confidence: float
     method: str
+    agreement: float
     search_radius_samples: int
     window_length_samples: int
     analysis_window_count: int
@@ -150,6 +165,7 @@ def prepare_audio(
             "effective_samples": effective_latency_samples,
             "confidence": confidence,
             "method": latency_analysis.method,
+            "agreement": latency_analysis.agreement,
             "search_radius_samples": latency_analysis.search_radius_samples,
             "window_length_samples": latency_analysis.window_length_samples,
             "analysis_window_count": latency_analysis.analysis_window_count,
@@ -479,6 +495,7 @@ def analyze_latency(input_samples: list[float], target_samples: list[float]) -> 
             estimated_samples=0,
             confidence=0.0,
             method="active_window_correlation",
+            agreement=0.0,
             search_radius_samples=0,
             window_length_samples=length,
             analysis_window_count=0,
@@ -523,6 +540,7 @@ def analyze_latency(input_samples: list[float], target_samples: list[float]) -> 
         fine_window_length,
         fine_lags,
     )
+    fine_scores = add_latency_vote_agreement(fine_scores, len(starts))
     ranked = ranked_latency_scores(
         fine_scores,
         max_count=8,
@@ -533,6 +551,7 @@ def analyze_latency(input_samples: list[float], target_samples: list[float]) -> 
             estimated_samples=0,
             confidence=0.0,
             method="active_window_correlation",
+            agreement=0.0,
             search_radius_samples=search_radius,
             window_length_samples=window_length,
             analysis_window_count=len(starts),
@@ -543,7 +562,7 @@ def analyze_latency(input_samples: list[float], target_samples: list[float]) -> 
     best = choose_best_latency_score(fine_scores, ranked[0])
     runner_up = next((score for score in ranked if score.lag != best.lag), None)
     score_margin = best.score - runner_up.score if runner_up else best.score
-    confidence = latency_confidence(best.score, score_margin)
+    confidence = latency_confidence(best.score, score_margin, best.agreement)
     candidates = [latency_score_payload(score) for score in ranked[:5]]
     if best.lag not in {score.lag for score in ranked[:5]}:
         candidates.insert(0, latency_score_payload(best))
@@ -552,6 +571,7 @@ def analyze_latency(input_samples: list[float], target_samples: list[float]) -> 
         estimated_samples=best.lag,
         confidence=confidence,
         method="active_window_correlation",
+        agreement=best.agreement,
         search_radius_samples=search_radius,
         window_length_samples=window_length,
         analysis_window_count=len(starts),
@@ -572,7 +592,11 @@ def latency_analysis_details(analysis: LatencyAnalysis) -> list[dict[str, str]]:
             )
         ]
 
-    if analysis.confidence >= 0.65 and analysis.score_margin >= 0.02:
+    if (
+        analysis.confidence >= 0.65
+        and analysis.score_margin >= 0.02
+        and analysis.agreement >= 0.60
+    ):
         return []
 
     candidate_text = ", ".join(
@@ -586,9 +610,10 @@ def latency_analysis_details(analysis: LatencyAnalysis) -> list[dict[str, str]]:
             "Latency estimate should be reviewed.",
             (
                 f"Best candidate is {analysis.estimated_samples} samples with "
-                f"{analysis.confidence:.2f} confidence; top candidates include {candidate_text}."
+                f"{analysis.confidence:.2f} confidence and "
+                f"{analysis.agreement:.0%} window agreement; top candidates include {candidate_text}."
             ),
-            "Inspect the alignment view or try a manual nudge before long training runs.",
+            "Audition the detected candidates or use a manual nudge before long training runs.",
         )
     ]
 
@@ -613,24 +638,79 @@ def select_latency_window_starts(
 
     step = max(1, window_length // 2)
     max_start = length - window_length
-    energies: list[tuple[float, int]] = []
+    windows: list[LatencyWindowCandidate] = []
     for start in range(0, max_start + 1, step):
-        energies.append((energy_between(samples, start, start + window_length), start))
-    if not energies or energies[-1][1] != max_start:
-        energies.append((energy_between(samples, max_start, length), max_start))
+        windows.append(latency_window_candidate(samples, start, start + window_length))
+    if not windows or windows[-1].start != max_start:
+        windows.append(latency_window_candidate(samples, max_start, length))
+
+    max_energy = max((window.energy for window in windows), default=0.0)
+    max_onset = max((window.onset_energy for window in windows), default=0.0)
+    scored_windows = [
+        replace(
+            window,
+            quality=latency_window_quality(
+                window,
+                max_energy=max_energy,
+                max_onset_energy=max_onset,
+            ),
+        )
+        for window in windows
+    ]
 
     selected: list[int] = []
     min_spacing = max(1, window_length // 2)
-    for energy, start in sorted(energies, reverse=True):
-        if energy <= 1e-12:
+    for window in sorted(scored_windows, key=lambda item: item.quality, reverse=True):
+        if window.energy <= 1e-12:
             continue
-        if all(abs(start - existing) >= min_spacing for existing in selected):
-            selected.append(start)
+        if all(abs(window.start - existing) >= min_spacing for existing in selected):
+            selected.append(window.start)
         if len(selected) >= max_windows:
             break
     if not selected:
         selected.append(0)
     return sorted(selected)
+
+
+def latency_window_candidate(samples: list[float], start: int, end: int) -> LatencyWindowCandidate:
+    start = max(0, start)
+    end = min(len(samples), end)
+    energy = 0.0
+    onset_energy = 0.0
+    peak = 0.0
+    previous_abs = abs(samples[start - 1]) if start > 0 and start < len(samples) else 0.0
+
+    for index in range(start, end):
+        value = samples[index]
+        abs_value = abs(value)
+        energy += value * value
+        onset = max(0.0, abs_value - previous_abs)
+        onset_energy += onset * onset
+        peak = max(peak, abs_value)
+        previous_abs = abs_value
+
+    sample_count = max(1, end - start)
+    rms = math.sqrt(energy / sample_count)
+    crest_factor = peak / max(rms, 1e-12)
+    return LatencyWindowCandidate(
+        start=start,
+        quality=0.0,
+        energy=energy,
+        onset_energy=onset_energy,
+        crest_factor=crest_factor,
+    )
+
+
+def latency_window_quality(
+    window: LatencyWindowCandidate,
+    *,
+    max_energy: float,
+    max_onset_energy: float,
+) -> float:
+    energy_score = window.energy / max_energy if max_energy > 1e-12 else 0.0
+    onset_score = window.onset_energy / max_onset_energy if max_onset_energy > 1e-12 else 0.0
+    crest_score = min(window.crest_factor / 12.0, 1.0)
+    return 0.40 * energy_score + 0.50 * onset_score + 0.10 * crest_score
 
 
 def coarse_latency_scores(
@@ -728,7 +808,9 @@ def score_latency_lag(
     scores: list[float] = []
     feature_scores: list[float] = []
     signed_scores: list[float] = []
-    signed_weight = max(0.0, min(1.0, 1.0 - feature_weight))
+    preemphasis_scores: list[float] = []
+    onset_scores: list[float] = []
+    window_scores: list[float] = []
     feature_weight = max(0.0, min(1.0, feature_weight))
 
     for start in starts:
@@ -740,12 +822,22 @@ def score_latency_lag(
             lag=lag,
         )
         if correlations is None:
+            window_scores.append(float("-inf"))
             continue
-        feature_score, signed_score = correlations
-        combined = feature_weight * feature_score + signed_weight * max(0.0, signed_score)
+        feature_score, signed_score, preemphasis_score, onset_score = correlations
+        combined = combine_latency_feature_scores(
+            feature_score,
+            signed_score,
+            preemphasis_score,
+            onset_score,
+            feature_weight=feature_weight,
+        )
         scores.append(combined)
         feature_scores.append(feature_score)
         signed_scores.append(signed_score)
+        preemphasis_scores.append(preemphasis_score)
+        onset_scores.append(onset_score)
+        window_scores.append(combined)
 
     return LatencyScore(
         lag=lag,
@@ -753,6 +845,9 @@ def score_latency_lag(
         feature_score=trimmed_mean(feature_scores),
         signed_score=trimmed_mean(signed_scores),
         window_count=len(scores),
+        preemphasis_score=trimmed_mean(preemphasis_scores),
+        onset_score=trimmed_mean(onset_scores),
+        window_scores=tuple(window_scores),
     )
 
 
@@ -763,7 +858,7 @@ def latency_window_correlations(
     start: int,
     window_length: int,
     lag: int,
-) -> tuple[float, float] | None:
+) -> tuple[float, float, float, float] | None:
     if lag >= 0:
         input_start = start
         target_start = start + lag
@@ -785,9 +880,17 @@ def latency_window_correlations(
     signed_num = 0.0
     signed_input_energy = 0.0
     signed_target_energy = 0.0
+    preemphasis_num = 0.0
+    preemphasis_input_energy = 0.0
+    preemphasis_target_energy = 0.0
+    onset_num = 0.0
+    onset_input_energy = 0.0
+    onset_target_energy = 0.0
     for offset in range(length):
-        input_value = input_samples[input_start + offset]
-        target_value = target_samples[target_start + offset]
+        input_index = input_start + offset
+        target_index = target_start + offset
+        input_value = input_samples[input_index]
+        target_value = target_samples[target_index]
         input_feature = abs(input_value)
         target_feature = abs(target_value)
         feature_num += input_feature * target_feature
@@ -796,6 +899,22 @@ def latency_window_correlations(
         signed_num += input_value * target_value
         signed_input_energy += input_value * input_value
         signed_target_energy += target_value * target_value
+
+        input_previous = input_samples[input_index - 1] if input_index > 0 else 0.0
+        target_previous = target_samples[target_index - 1] if target_index > 0 else 0.0
+        input_preemphasis = input_value - 0.95 * input_previous
+        target_preemphasis = target_value - 0.95 * target_previous
+        preemphasis_num += input_preemphasis * target_preemphasis
+        preemphasis_input_energy += input_preemphasis * input_preemphasis
+        preemphasis_target_energy += target_preemphasis * target_preemphasis
+
+        input_previous_feature = abs(input_previous)
+        target_previous_feature = abs(target_previous)
+        input_onset = max(0.0, input_feature - input_previous_feature)
+        target_onset = max(0.0, target_feature - target_previous_feature)
+        onset_num += input_onset * target_onset
+        onset_input_energy += input_onset * input_onset
+        onset_target_energy += target_onset * target_onset
 
     feature_score = safe_correlation(
         feature_num,
@@ -807,7 +926,35 @@ def latency_window_correlations(
         signed_input_energy,
         signed_target_energy,
     )
-    return feature_score, signed_score
+    preemphasis_score = safe_correlation(
+        preemphasis_num,
+        preemphasis_input_energy,
+        preemphasis_target_energy,
+    )
+    onset_score = safe_correlation(
+        onset_num,
+        onset_input_energy,
+        onset_target_energy,
+    )
+    return feature_score, signed_score, preemphasis_score, onset_score
+
+
+def combine_latency_feature_scores(
+    feature_score: float,
+    signed_score: float,
+    preemphasis_score: float,
+    onset_score: float,
+    *,
+    feature_weight: float,
+) -> float:
+    if feature_weight >= 0.999:
+        return feature_score
+    return (
+        0.42 * feature_score
+        + 0.28 * max(0.0, preemphasis_score)
+        + 0.20 * onset_score
+        + 0.10 * max(0.0, signed_score)
+    )
 
 
 def safe_correlation(numerator: float, x_energy: float, y_energy: float) -> float:
@@ -815,6 +962,39 @@ def safe_correlation(numerator: float, x_energy: float, y_energy: float) -> floa
     if denominator <= 1e-12:
         return 0.0
     return numerator / denominator
+
+
+def add_latency_vote_agreement(
+    scores: list[LatencyScore],
+    window_count: int,
+) -> list[LatencyScore]:
+    if not scores or window_count <= 0:
+        return scores
+
+    votes: dict[int, int] = {}
+    for window_index in range(window_count):
+        best_lag: int | None = None
+        best_score = float("-inf")
+        for score in scores:
+            if window_index >= len(score.window_scores):
+                continue
+            window_score = score.window_scores[window_index]
+            if not math.isfinite(window_score):
+                continue
+            if window_score > best_score:
+                best_score = window_score
+                best_lag = score.lag
+        if best_lag is not None:
+            votes[best_lag] = votes.get(best_lag, 0) + 1
+
+    return [
+        replace(
+            score,
+            vote_count=votes.get(score.lag, 0),
+            agreement=votes.get(score.lag, 0) / window_count,
+        )
+        for score in scores
+    ]
 
 
 def trimmed_mean(values: list[float]) -> float:
@@ -837,7 +1017,11 @@ def ranked_latency_scores(
     min_distance: int,
 ) -> list[LatencyScore]:
     ranked: list[LatencyScore] = []
-    for score in sorted(scores, key=lambda item: item.score, reverse=True):
+    for score in sorted(
+        scores,
+        key=lambda item: (item.score, item.agreement, item.vote_count),
+        reverse=True,
+    ):
         if score.window_count <= 0:
             continue
         if all(abs(score.lag - existing.lag) >= min_distance for existing in ranked):
@@ -852,13 +1036,29 @@ def choose_best_latency_score(
     best_score: LatencyScore,
 ) -> LatencyScore:
     zero_score = next((score for score in scores if score.lag == 0), None)
-    if zero_score is not None and zero_score.score >= best_score.score - 0.002:
+    if (
+        zero_score is not None
+        and zero_score.score >= best_score.score - 0.002
+        and zero_score.agreement >= best_score.agreement - 0.15
+    ):
         return zero_score
+    close_scores = [score for score in scores if score.score >= best_score.score - 0.003]
+    if close_scores:
+        return max(
+            close_scores,
+            key=lambda score: (score.vote_count, score.agreement, score.score),
+        )
     return best_score
 
 
-def latency_confidence(score: float, margin: float) -> float:
+def latency_confidence(score: float, margin: float, agreement: float) -> float:
     confidence = max(0.0, min(1.0, score))
+    if agreement <= 0.0:
+        confidence = min(confidence, 0.25)
+    elif agreement < 0.35:
+        confidence = min(confidence, 0.45)
+    elif agreement < 0.55:
+        confidence = min(confidence, 0.65)
     if margin < 0.005:
         return min(confidence, 0.35)
     if margin < 0.02:
@@ -872,7 +1072,11 @@ def latency_score_payload(score: LatencyScore) -> dict[str, int | float]:
         "score": score.score,
         "feature_score": score.feature_score,
         "signed_score": score.signed_score,
+        "preemphasis_score": score.preemphasis_score,
+        "onset_score": score.onset_score,
         "window_count": score.window_count,
+        "vote_count": score.vote_count,
+        "agreement": score.agreement,
     }
 
 

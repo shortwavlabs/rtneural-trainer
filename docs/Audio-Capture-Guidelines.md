@@ -89,8 +89,11 @@ quality lane and careful listening to the residual.
 
 ## Latency And Alignment
 
-The prepare step estimates target latency with cross-correlation. Check the
-reported confidence before long training runs.
+The prepare step estimates target latency with transient-aware active-window
+correlation. It scores rectified amplitude, pre-emphasized signal detail, onset
+shape, and a small signed-correlation term, then reports how many analysis
+windows agreed on each candidate. Check both confidence and window agreement
+before long training runs.
 
 Guidelines:
 
@@ -99,6 +102,8 @@ Guidelines:
   compare residuals.
 - When the app shows candidate offsets in Align, try those exact candidates
   before committing to a long WaveNet run.
+- Treat low window agreement as a real ambiguity signal, even when the top
+  numeric score looks plausible.
 - Do not assume every profile in a family has the same latency.
 - Heavier processing paths may report different latency than clean or crunch
   paths.
@@ -141,6 +146,11 @@ especially for high-gain rhythm or dense lead captures.
 
 Use material that excites the behavior you want the model to learn.
 
+Start the DI with 2-3 seconds of clear, dry, varied attacks before the main
+musical pass. Palm mutes, single-note plucks, and hard/soft pick attacks are
+ideal. This gives the latency estimator crisp transient evidence before the
+capture settles into dense rhythm, lead, or sustained material.
+
 Include:
 
 - Single notes across the register.
@@ -162,12 +172,12 @@ Avoid:
 - Changing knobs, pickup selection, input gain, or output gain mid-capture
   unless that variation is part of the intended model.
 
-Lead captures need extra discipline. If possible, capture an amp/cab-only lead
-target first: no delay, reverb, modulation, post-amp compressor, gate, or
-limiter. The current lead capture trained to a usable model, but it had the
-lowest crest factor and weakest latency confidence in the set. Time-varying
-post effects can make this harder because the model is trying to learn one
-fixed nonlinear system, not a whole mix-ready lead chain.
+Lead captures need extra discipline even when they are pure amp-head captures.
+The current lead target had no cabinet, delay, reverb, modulation, gate,
+limiter, or post-amp compressor, yet it still had the lowest crest factor and
+weakest latency confidence in the set. Treat dense lead saturation as its own
+hard case: use the transient pre-roll, review latency candidates, and compare
+balanced versus quality before assuming the capture is bad.
 
 ## Preset Expectations From Current Captures
 
@@ -202,8 +212,9 @@ The dry and processed average levels are far apart. This may be intentional for
 some rigs, but it should be reviewed before training.
 
 `latency_estimate_review`:
-The top latency candidates are close. Try the candidate offsets shown in Align
-before long runs, especially for rhythm and lead tones.
+The top latency candidates are close or too few analysis windows agreed on one
+offset. Try the candidate offsets shown in Align before long runs, especially
+for rhythm and lead tones.
 
 `long_capture`:
 The capture is long enough that the trainer will sample windows across it. Use a
@@ -219,7 +230,7 @@ The latest calibration family used one DI with six outputs:
 | CRUNCH2 | n/a | `-17.27 dBFS` | `+6.79 dB` | `6 samples` | `0.76` | WaveNet quality clearly preferred. |
 | RHYTHM2 | n/a | `-16.40 dBFS` | `+7.66 dB` | `10 samples` | `0.60` | Hardest amp capture; try latency candidates before long runs. |
 | EDGE2 | `-5.59 dBFS` | `-18.26 dBFS` | `+5.80 dB` | `11 samples` | `0.88` | Healthy edge-of-breakup case; WaveNet quality best, balanced excellent. |
-| LEAD2 | `-9.74 dBFS` | `-14.95 dBFS` | `+9.11 dB` | `9 samples` | `0.59` | Dense lead outlier; balanced tied quality, review latency/chain. |
+| LEAD2 | `-9.74 dBFS` | `-14.95 dBFS` | `+9.11 dB` | `9 samples` | `0.59` | Dense pure-amp lead outlier; balanced tied quality, review latency. |
 | DRIVE2 | `-5.00 dBFS` | `-15.09 dBFS` | `+8.97 dB` | `3 samples` | `0.85` | Strong overdrive pedal capture; quality best, balanced excellent. |
 
 Takeaways:
@@ -229,8 +240,8 @@ Takeaways:
   the real rig behavior.
 - Low confidence around `0.60` is not a failure, but it should trigger latency
   candidate checks.
-- Lead tones are the most likely to hide non-modelable chain behavior. Capture a
-  dry amp/cab-only lead target first when possible.
+- Pure amp-head lead tones can still be harder than rhythm or pedal captures
+  when crest factor is low and latency candidates are close.
 - Pedal captures can train extremely well with the same rules as amp captures
   when latency confidence is good.
 

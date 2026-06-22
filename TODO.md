@@ -22,9 +22,9 @@ Recommended next move:
    This is the highest-value next step because it calibrates preset
    recommendations, gain warnings, report language, and export confidence.
    WaveNet defaults, excellent/good/usable/needs-work report language, latency
-   candidate review, export parity snapshots, and the native benchmark matrix
-   are now in place; edge-of-breakup, lead, pedal, quiet, clipped, and stereo
-   captures are the next useful evidence.
+   candidate review with window agreement, export parity snapshots, and the
+   native benchmark matrix are now in place; edge-of-breakup, lead, pedal,
+   quiet, clipped, and stereo captures are the next useful evidence.
 2. `Codex` Add the real Tauri UI smoke suite after the first real-capture pass.
    This protects the workflow while the UI and reports are still being tuned.
 3. `You` Decide the release/signing policy before we spend more time on release
@@ -39,8 +39,9 @@ Recommended next move:
     high-latency capture cases.
   - You: do the listening judgment for target/prediction/residual and mark
     whether each report verdict feels right.
-  - You: for low-confidence latency warnings, try the candidate sample offsets
-    shown in Align before committing to long WaveNet runs.
+  - You: for low-confidence or low-agreement latency warnings, try the
+    candidate sample offsets shown in Align before committing to long WaveNet
+    runs.
   - Codex: create or maintain a repeatable capture-results template if needed.
   - Codex: tune capture/gain/preset recommendation thresholds from the results.
   - Codex: keep WaveNet balanced/quality as the amp quality lane unless new

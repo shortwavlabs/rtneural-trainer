@@ -85,6 +85,7 @@ export interface AudioReport {
   latency_auto_samples?: number | null;
   manual_latency_adjustment_samples: number;
   latency_confidence: number;
+  latency?: LatencyReport | null;
   warnings: string[];
   warning_details: AudioWarning[];
   prepared?: Record<string, unknown> | null;
@@ -92,6 +93,33 @@ export interface AudioReport {
   gain?: Record<string, unknown> | null;
   options?: Record<string, unknown> | null;
   status: AudioStatus;
+}
+
+export interface LatencyReport {
+  estimated_samples: number;
+  auto_estimated_samples?: number | null;
+  manual_adjustment_samples?: number | null;
+  effective_samples?: number | null;
+  confidence: number;
+  method?: string | null;
+  agreement?: number | null;
+  search_radius_samples?: number | null;
+  window_length_samples?: number | null;
+  analysis_window_count?: number | null;
+  score_margin?: number | null;
+  candidates?: LatencyCandidate[];
+}
+
+export interface LatencyCandidate {
+  samples: number;
+  score?: number | null;
+  feature_score?: number | null;
+  signed_score?: number | null;
+  preemphasis_score?: number | null;
+  onset_score?: number | null;
+  window_count?: number | null;
+  vote_count?: number | null;
+  agreement?: number | null;
 }
 
 export interface AudioWarning {

@@ -597,7 +597,21 @@ Validation report fields:
     "manual_adjustment_samples": 5,
     "effective_samples": 128,
     "confidence": 0.94,
-    "method": "cross_correlation"
+    "method": "active_window_correlation",
+    "agreement": 0.83,
+    "score_margin": 0.08,
+    "candidates": [
+      {
+        "samples": 128,
+        "score": 0.94,
+        "feature_score": 0.96,
+        "preemphasis_score": 0.91,
+        "onset_score": 0.88,
+        "vote_count": 10,
+        "window_count": 12,
+        "agreement": 0.83
+      }
+    ]
   },
   "capture_profile": {
     "duration_seconds": 120.0,
@@ -619,10 +633,14 @@ Validation report fields:
 Latency alignment strategy:
 
 1. Prefer known impulse markers in the capture signal.
-2. Fall back to cross-correlation on active regions.
-3. Store latency in samples, milliseconds, and confidence.
-4. Preserve enough pre/post-roll so the user can manually nudge in the UI.
-5. Never silently discard large unmatched regions.
+2. Fall back to transient-aware active-window correlation.
+3. Score rectified amplitude, pre-emphasized detail, onset shape, and signed
+   correlation so nonlinear/high-gain captures still have timing evidence.
+4. Vote across analysis windows and store candidate agreement, score margin,
+   feature scores, and top offsets.
+5. Store latency in samples, milliseconds, and confidence.
+6. Preserve enough pre/post-roll so the user can manually nudge in the UI.
+7. Never silently discard large unmatched regions.
 
 Acceptance criteria:
 
@@ -1545,8 +1563,9 @@ The original order below is now mostly complete:
    the supported Keras path.
 4. RTNeural JSON export and Python parity: complete for every exposed preset.
 5. Native RTNeural validator/benchmark sidecar: complete.
-6. WAV preparation, resampling, stereo policy, latency estimation, manual
-   alignment override, and preparation reports: complete.
+6. WAV preparation, resampling, stereo policy, transient-aware latency
+   estimation, candidate agreement reporting, manual alignment override, and
+   preparation reports: complete.
 7. Paired-WAV training with metrics, checkpoints, preview WAVs, validation
    history, early stopping, recurrent context updates, recurrent state-drift
    diagnostics, and quality language: complete for local v1.

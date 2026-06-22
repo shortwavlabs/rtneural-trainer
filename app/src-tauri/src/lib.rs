@@ -138,6 +138,8 @@ struct AudioReport {
     #[serde(default)]
     manual_latency_adjustment_samples: i32,
     latency_confidence: f64,
+    #[serde(default)]
+    latency: Option<serde_json::Value>,
     warnings: Vec<String>,
     #[serde(default)]
     warning_details: Vec<AudioWarning>,
@@ -971,7 +973,7 @@ fn prepare_project_audio(
     mark_job_completed(state, &job_id)?;
 
     let prepare_report_path = prepared_dir.join("preparation-report.json");
-    let prepare_report: PrepareReport = read_json(&prepare_report_path)?;
+    let (prepare_report, latency_metadata) = read_prepare_report(&prepare_report_path)?;
 
     let report = AudioReport {
         input: prepare_report.input,
@@ -983,6 +985,7 @@ fn prepare_project_audio(
         latency_auto_samples: prepare_report.latency.auto_estimated_samples,
         manual_latency_adjustment_samples: prepare_report.latency.manual_adjustment_samples,
         latency_confidence: prepare_report.latency.confidence,
+        latency: latency_metadata,
         warnings: prepare_report.warnings,
         warning_details: prepare_report.warning_details,
         prepared: prepare_report.prepared,
@@ -1102,7 +1105,7 @@ fn update_project_alignment_blocking(
     mark_job_completed(state, &job_id)?;
 
     let prepare_report_path = prepared_dir.join("preparation-report.json");
-    let prepare_report: PrepareReport = read_json(&prepare_report_path)?;
+    let (prepare_report, latency_metadata) = read_prepare_report(&prepare_report_path)?;
     let report = AudioReport {
         input: prepare_report.input,
         target: prepare_report.target,
@@ -1113,6 +1116,7 @@ fn update_project_alignment_blocking(
         latency_auto_samples: prepare_report.latency.auto_estimated_samples,
         manual_latency_adjustment_samples: prepare_report.latency.manual_adjustment_samples,
         latency_confidence: prepare_report.latency.confidence,
+        latency: latency_metadata,
         warnings: prepare_report.warnings,
         warning_details: prepare_report.warning_details,
         prepared: prepare_report.prepared,
@@ -1733,6 +1737,13 @@ pub fn run() {
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, String> {
     let raw = fs::read_to_string(path).map_err(to_error)?;
     serde_json::from_str(&raw).map_err(to_error)
+}
+
+fn read_prepare_report(path: &Path) -> Result<(PrepareReport, Option<serde_json::Value>), String> {
+    let raw: serde_json::Value = read_json(path)?;
+    let latency = raw.get("latency").cloned();
+    let report = serde_json::from_value(raw).map_err(to_error)?;
+    Ok((report, latency))
 }
 
 fn read_optional_json_value(path: &Path) -> Option<serde_json::Value> {
@@ -4508,6 +4519,7 @@ mod tests {
             latency_auto_samples: Some(0),
             manual_latency_adjustment_samples: 0,
             latency_confidence: 1.0,
+            latency: None,
             warnings: Vec::new(),
             warning_details: Vec::new(),
             prepared: None,

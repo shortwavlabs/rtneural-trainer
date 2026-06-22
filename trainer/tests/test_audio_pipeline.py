@@ -102,6 +102,32 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertGreater(analysis.confidence, 0.8)
         self.assertEqual(analysis.candidates[0]["samples"], delay)
 
+    def test_latency_estimator_reports_window_agreement_for_compressed_tones(self) -> None:
+        length = 60_000
+        delay = 17
+        dry = [0.0] * length
+        target = [0.0] * length
+        for burst_start in (4_000, 16_000, 28_000, 43_000):
+            for index in range(3_500):
+                envelope = min(1.0, index / 120, (3_500 - index) / 600)
+                sample = envelope * (
+                    0.34 * deterministic_sample(burst_start + index)
+                    + 0.12 * deterministic_sample((burst_start + index) * 5)
+                )
+                dry[burst_start + index] = sample
+                target[burst_start + index + delay] = soft_clip(sample * 5.0) * 0.72
+
+        analysis = analyze_latency(dry, target)
+        best = analysis.candidates[0]
+
+        self.assertEqual(analysis.estimated_samples, delay)
+        self.assertEqual(best["samples"], delay)
+        self.assertGreaterEqual(analysis.agreement, 0.9)
+        self.assertGreaterEqual(float(best["agreement"]), 0.9)
+        self.assertGreaterEqual(int(best["vote_count"]), 1)
+        self.assertIn("preemphasis_score", best)
+        self.assertIn("onset_score", best)
+
     def test_prepare_applies_manual_latency_adjustment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
