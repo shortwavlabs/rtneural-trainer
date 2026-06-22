@@ -29,7 +29,10 @@ const MODEL_PRESETS: &[&str] = &[
     "conv1d_light",
     "conv1d_bn_prelu",
     "conv1d_stack_prelu",
+    "wavenet_tcn_fast",
     "wavenet_tcn",
+    "wavenet_tcn_balanced",
+    "wavenet_tcn_quality",
     "conv_gru_hybrid",
 ];
 
@@ -1185,9 +1188,9 @@ fn start_training(
                     "Choose a completed run when starting from a previous checkpoint.".to_string(),
                 );
             }
-            if source_run.preset != model_preset {
+            if !resume_presets_compatible(&source_run.preset, &model_preset) {
                 return Err(format!(
-                    "Resume source uses preset '{}'. Select the same preset before resuming.",
+                    "Resume source uses preset '{}'. Select a compatible preset before resuming.",
                     source_run.preset
                 ));
             }
@@ -2173,6 +2176,17 @@ fn normalize_model_preset(value: &str) -> Result<&'static str, String> {
                 MODEL_PRESETS.join(", ")
             )
         })
+}
+
+fn resume_presets_compatible(source_preset: &str, target_preset: &str) -> bool {
+    if source_preset == target_preset {
+        return true;
+    }
+    matches!(
+        (source_preset, target_preset),
+        ("wavenet_tcn", "wavenet_tcn_balanced")
+            | ("wavenet_tcn_balanced", "wavenet_tcn")
+    )
 }
 
 fn normalize_training_recipe(payload: SaveTrainingRecipeRequest) -> Result<TrainingRecipe, String> {
@@ -4666,6 +4680,26 @@ mod tests {
             Some("/tmp/rttrainer-python".to_string())
         );
         assert!(normalize_runtime_device("quantum").is_err());
+    }
+
+    #[test]
+    fn wavenet_balanced_alias_can_resume_legacy_runs() {
+        assert!(resume_presets_compatible(
+            "wavenet_tcn",
+            "wavenet_tcn_balanced"
+        ));
+        assert!(resume_presets_compatible(
+            "wavenet_tcn_balanced",
+            "wavenet_tcn"
+        ));
+        assert!(!resume_presets_compatible(
+            "wavenet_tcn",
+            "wavenet_tcn_quality"
+        ));
+        assert!(!resume_presets_compatible(
+            "wavenet_tcn_fast",
+            "wavenet_tcn_balanced"
+        ));
     }
 
     #[test]

@@ -2,6 +2,12 @@
 
 Reviewed: 2026-06-22
 
+Implementation status: the app now exposes `wavenet_tcn_fast`,
+`wavenet_tcn_balanced`, and `wavenet_tcn_quality`; keeps legacy `wavenet_tcn`
+for existing checkpoints; recommends WaveNet for long/high-confidence amp and
+pedal captures; and includes a one-click "Continue best WaveNet" refinement
+helper.
+
 This note captures what we can learn from the Neural Amp Modeler ecosystem after the continued
 `wavenet_tcn` run on the current high-gain capture. It focuses on product and engineering choices
 for RTNeural Trainer, not on adopting NAM's file format or copying its code.

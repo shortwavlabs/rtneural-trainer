@@ -99,6 +99,18 @@ class TrainingResumeTests(unittest.TestCase):
             resolve_training_loss_name({}, get_preset("wavenet_tcn")),
             "mrstft_preemphasis",
         )
+        self.assertEqual(
+            resolve_training_loss_name({}, get_preset("wavenet_tcn_fast")),
+            "mrstft_preemphasis",
+        )
+        self.assertEqual(
+            resolve_training_loss_name({}, get_preset("wavenet_tcn_balanced")),
+            "mrstft_preemphasis",
+        )
+        self.assertEqual(
+            resolve_training_loss_name({}, get_preset("wavenet_tcn_quality")),
+            "mrstft_preemphasis",
+        )
 
     def test_training_loss_rejects_unknown_values(self) -> None:
         with self.assertRaises(ValueError):
@@ -189,20 +201,27 @@ class TrainingResumeTests(unittest.TestCase):
         self.assertFalse(diagnostic["applies"])
         self.assertEqual(diagnostic["verdict"], "finite_memory")
 
-    def test_state_reset_diagnostic_marks_wavenet_tcn_as_finite_memory(self) -> None:
+    def test_state_reset_diagnostic_marks_wavenet_presets_as_finite_memory(self) -> None:
         target = [0.0, 0.4, -0.4, 0.3]
 
-        diagnostic = state_reset_diagnostic(
-            get_preset("wavenet_tcn"),
-            target=target,
-            continuous_prediction=target,
-            chunk_reset_prediction=target,
-            chunk_size=4,
-            sample_rate=48_000,
-        )
+        for preset_id in (
+            "wavenet_tcn_fast",
+            "wavenet_tcn",
+            "wavenet_tcn_balanced",
+            "wavenet_tcn_quality",
+        ):
+            with self.subTest(preset=preset_id):
+                diagnostic = state_reset_diagnostic(
+                    get_preset(preset_id),
+                    target=target,
+                    continuous_prediction=target,
+                    chunk_reset_prediction=target,
+                    chunk_size=4,
+                    sample_rate=48_000,
+                )
 
-        self.assertFalse(diagnostic["applies"])
-        self.assertEqual(diagnostic["verdict"], "finite_memory")
+                self.assertFalse(diagnostic["applies"])
+                self.assertEqual(diagnostic["verdict"], "finite_memory")
 
 
 if __name__ == "__main__":

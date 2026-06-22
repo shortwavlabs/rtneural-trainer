@@ -289,7 +289,10 @@ Implemented presets:
 | `conv1d_light` | Causal Conv1D with bounded dense output | Fast temporal front-end |
 | `conv1d_bn_prelu` | Causal Conv1D with BatchNorm/PReLU and bounded output | Safe BatchNorm/PReLU coverage |
 | `conv1d_stack_prelu` | Stacked dilated causal Conv1D/PReLU with bounded output and pre-emphasis MSE default loss | Higher-detail finite-memory amp/pedal preset |
-| `wavenet_tcn` | Deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Highest-detail finite-memory amp/pedal preset; benchmark before export |
+| `wavenet_tcn_fast` | Smaller WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Faster high-gain probe |
+| `wavenet_tcn_balanced` | Proven WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Recommended high-gain quality path; benchmark before export |
+| `wavenet_tcn_quality` | Wider/deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Slower high-gain refinement path; benchmark before export |
+| `wavenet_tcn` | Legacy balanced WaveNet-style preset | Existing run/checkpoint compatibility |
 | `conv_gru_hybrid` | Conv1D front-end + GRU with bounded dense output | Richer Keras temporal preset |
 
 Model rules:
@@ -1306,6 +1309,9 @@ fixtures/rtneural-json/golden/
   conv1d_bn_prelu.rtneural.json
   conv1d_stack_prelu.rtneural.json
   wavenet_tcn.rtneural.json
+  wavenet_tcn_fast.rtneural.json
+  wavenet_tcn_balanced.rtneural.json
+  wavenet_tcn_quality.rtneural.json
   conv_gru_hybrid.rtneural.json
 ```
 
@@ -1439,7 +1445,10 @@ PyTorch, or export logic changes.
 | `conv1d_light` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `conv1d_bn_prelu` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `conv1d_stack_prelu` | Required | Later | Required | Required | Required | Required | v1-plus |
-| `wavenet_tcn` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `wavenet_tcn_fast` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `wavenet_tcn_balanced` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `wavenet_tcn_quality` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `wavenet_tcn` | Required | Later | Required | Required | Required | Required | Legacy alias |
 | `conv_gru_hybrid` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `heavy_recurrent` | Later | Later | Required before exposure | Required | Required | Required | Warned v1 or later |
 | `parametric_active_learning` | Later | Later | Later | Later | Later | Later | Defer |

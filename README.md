@@ -336,15 +336,19 @@ Current Keras-first presets are:
 - `lstm_standard`: default LSTM recurrent model.
 - `conv1d_light`: causal Conv1D model.
 - `conv1d_bn_prelu`: causal Conv1D with safe BatchNorm/PReLU; this is the
-  balanced finite-memory baseline for long captures with review-level alignment.
+  compact finite-memory baseline for capture sanity checks.
 - `conv1d_stack_prelu`: stacked causal Conv1D/PReLU with dilations and a
-  pre-emphasis MSE default loss for distorted amp/pedal captures that need more
-  harmonic detail without recurrent state.
-- `wavenet_tcn`: RTNeural-safe WaveNet-style TCN using a deeper dilated causal
-  Conv1D stack and a multi-resolution STFT + pre-emphasis default loss for the
-  hardest high-gain captures. This is heavier than the smaller Conv presets;
-  use it to test quality first, then inspect native benchmark results before
-  treating it as export-ready.
+  pre-emphasis MSE default loss. This is the balanced medium/low-gain amp and
+  pedal path when recurrent state is not needed.
+- `wavenet_tcn_fast`: smaller RTNeural-safe WaveNet-style TCN for a faster
+  high-gain probe.
+- `wavenet_tcn_balanced`: the current recommended high-gain quality path,
+  matching the proven legacy `wavenet_tcn` architecture.
+- `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement
+  runs when the balanced model is promising. Benchmark before treating quality
+  exports as plugin-ready.
+- `wavenet_tcn`: legacy balanced WaveNet preset kept for existing runs and
+  checkpoint compatibility.
 - `conv_gru_hybrid`: causal Conv1D front-end feeding a compact GRU.
 
 Newly initialized presets use a bounded `tanh` output layer so long streaming
@@ -566,6 +570,7 @@ Tauri bundle outputs, staged sidecars, and
 
 - [Research note](docs/Research-RTNeural-Training-Desktop-App.md)
 - [PANAMA / WaveNet findings](docs/Research-PANAMA-WaveNet-Active-Learning.md)
+- [NAM / WaveNet performance findings](docs/Research-NAM-Performance-And-WaveNet.md)
 - [Implementation guide](docs/Implementation-Guide-RTNeural-Training-Desktop-App.md)
 - [Audio capture guidelines](docs/Audio-Capture-Guidelines.md)
 - [RTNeural upstream](https://github.com/jatinchowdhury18/RTNeural)

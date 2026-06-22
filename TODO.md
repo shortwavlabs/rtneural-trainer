@@ -17,8 +17,8 @@ Recommended next move:
 
 1. `Shared` Run 2-3 real capture projects through the app and record outcomes,
    starting each long amp/pedal capture with the Conv1D finite-memory baseline
-   and then comparing `conv1d_stack_prelu` or `wavenet_tcn` when the baseline
-   underfits harmonic detail.
+   and then comparing `conv1d_stack_prelu`, `wavenet_tcn_balanced`, and
+   `wavenet_tcn_quality` when the baseline underfits harmonic detail.
    This is the highest-value next step because it calibrates preset
    recommendations, gain warnings, report language, and export confidence.
 2. `Codex` Add the real Tauri UI smoke suite after the first real-capture pass.
@@ -39,9 +39,10 @@ Recommended next move:
   - Codex: tune capture/gain/preset recommendation thresholds from the results.
   - Codex: tune the stacked Conv1D/pre-emphasis preset against captures where
     the baseline predicts low output energy or misses upper harmonics.
-  - Codex: compare `wavenet_tcn` against `conv1d_stack_prelu` on the
-    DI2/RHYTHM2 capture; the latest stacked run improved ESR to roughly `0.395`
-    but still missed upper-band energy.
+  - Codex: compare `wavenet_tcn_fast`, `wavenet_tcn_balanced`, and
+    `wavenet_tcn_quality` against `conv1d_stack_prelu` on the DI2/RHYTHM2
+    capture family; the latest WaveNet continuation improved preview ESR to
+    roughly `0.120`, while stacked Conv still missed upper-band energy.
   - Track which warnings fired, which preset was recommended, final ESR/RMSE,
     residual audibility, recurrent state-drift diagnostic, native validation
     status, and benchmark status.

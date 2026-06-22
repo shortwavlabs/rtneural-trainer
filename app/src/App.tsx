@@ -114,6 +114,15 @@ type QualityDecision = {
   action: string;
 };
 
+type PresetOption = {
+  id: string;
+  label: string;
+  detail: string;
+  cpu: string;
+  backends: RuntimeBackend[];
+  hidden?: boolean;
+};
+
 const tabs: Array<{ id: TabId; label: string; icon: LucideIcon }> = [
   { id: "capture", label: "Capture", icon: AudioLines },
   { id: "align", label: "Align", icon: Crosshair },
@@ -129,7 +138,7 @@ const targetLabels: Record<TargetKind, string> = {
   generic: "Generic",
 };
 
-const presets = [
+const presets: PresetOption[] = [
   {
     id: "dense_only",
     label: "Dense",
@@ -180,10 +189,32 @@ const presets = [
     backends: ["keras"],
   },
   {
-    id: "wavenet_tcn",
-    label: "WaveNet TCN",
+    id: "wavenet_tcn_fast",
+    label: "WaveNet Fast",
+    detail: "6x dilated causal Conv1D",
+    cpu: "Heavy",
+    backends: ["keras"],
+  },
+  {
+    id: "wavenet_tcn_balanced",
+    label: "WaveNet Balanced",
     detail: "8x dilated causal Conv1D",
     cpu: "Heavy",
+    backends: ["keras"],
+  },
+  {
+    id: "wavenet_tcn",
+    label: "WaveNet Balanced",
+    detail: "8x dilated causal Conv1D",
+    cpu: "Heavy",
+    backends: ["keras"],
+    hidden: true,
+  },
+  {
+    id: "wavenet_tcn_quality",
+    label: "WaveNet Quality",
+    detail: "10x dilated causal Conv1D",
+    cpu: "Max CPU",
     backends: ["keras"],
   },
   {
@@ -193,13 +224,9 @@ const presets = [
     cpu: "Moderate",
     backends: ["keras"],
   },
-] satisfies Array<{
-  id: string;
-  label: string;
-  detail: string;
-  cpu: string;
-  backends: RuntimeBackend[];
-}>;
+];
+
+const visiblePresets = presets.filter((preset) => !preset.hidden);
 
 const builtInTrainingRecipes = [
   {
@@ -220,7 +247,21 @@ const builtInTrainingRecipes = [
     id: "builtin_balanced",
     source: "built_in",
     name: "Balanced",
-    description: "Finite-memory baseline before trying recurrent models.",
+    description: "Stacked Conv baseline for medium/low-gain amp and pedal captures.",
+    modelPreset: "conv1d_stack_prelu",
+    epochs: 80,
+    batchSize: 16,
+    learningRate: 0.001,
+    sequenceLength: 8192,
+    maxWindows: 2048,
+    earlyStoppingPatience: 10,
+    earlyStoppingMinDelta: 0.0001,
+  },
+  {
+    id: "builtin_conv_baseline",
+    source: "built_in",
+    name: "Conv baseline",
+    description: "Smaller finite-memory pass for capture sanity checks.",
     modelPreset: "conv1d_bn_prelu",
     epochs: 40,
     batchSize: 16,
@@ -231,11 +272,25 @@ const builtInTrainingRecipes = [
     earlyStoppingMinDelta: 0.0001,
   },
   {
+    id: "builtin_wavenet_fast",
+    source: "built_in",
+    name: "WaveNet fast",
+    description: "Faster high-gain probe before a deeper quality run.",
+    modelPreset: "wavenet_tcn_fast",
+    epochs: 80,
+    batchSize: 16,
+    learningRate: 0.0008,
+    sequenceLength: 8192,
+    maxWindows: 2048,
+    earlyStoppingPatience: 10,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
     id: "builtin_production",
     source: "built_in",
-    name: "Production",
-    description: "WaveNet-style TCN for quality experiments; benchmark before export.",
-    modelPreset: "wavenet_tcn",
+    name: "WaveNet balanced",
+    description: "Recommended high-gain quality path; benchmark before export.",
+    modelPreset: "wavenet_tcn_balanced",
     epochs: 120,
     batchSize: 16,
     learningRate: 0.0007,
@@ -245,18 +300,18 @@ const builtInTrainingRecipes = [
     earlyStoppingMinDelta: 0.00005,
   },
   {
-    id: "builtin_long_capture",
+    id: "builtin_wavenet_quality",
     source: "built_in",
-    name: "Long capture",
-    description: "Broader window coverage with the stacked finite-memory model.",
-    modelPreset: "conv1d_stack_prelu",
-    epochs: 80,
+    name: "WaveNet quality",
+    description: "Slower high-gain refinement when the balanced model is promising.",
+    modelPreset: "wavenet_tcn_quality",
+    epochs: 180,
     batchSize: 16,
-    learningRate: 0.001,
+    learningRate: 0.0005,
     sequenceLength: 8192,
-    maxWindows: 4096,
-    earlyStoppingPatience: 10,
-    earlyStoppingMinDelta: 0.0001,
+    maxWindows: 8192,
+    earlyStoppingPatience: 20,
+    earlyStoppingMinDelta: 0.00005,
   },
 ] satisfies TrainingRecipeOption[];
 
@@ -1685,6 +1740,10 @@ function TrainView({
     () => compatibleResumeRuns(project.runs, preset, backend),
     [backend, preset, project.runs],
   );
+  const qualityResumeRun = useMemo(
+    () => bestWaveNetResumeRun(project.runs, backend),
+    [backend, project.runs],
+  );
   const selectedResumeRun =
     resumeCandidates.find((run) => run.id === resumeFromRunId) ?? null;
   const completedRuns = project.runs.filter((run) => run.status === "completed");
@@ -1791,6 +1850,29 @@ function TrainView({
   function markManualRecipeEdit() {
     setSelectedRecipeId("manual");
     setRecipeNotice(null);
+  }
+
+  function applyQualityContinuation(run: TrainingRun) {
+    const nextPreset = qualityContinuationPreset(run.preset);
+    setSelectedRecipeId("manual");
+    setPreset(nextPreset);
+    setResumeFromRunId(run.id);
+    setEpochs(120);
+    setBatchSize(16);
+    setLearningRate(qualityContinuationLearningRate(nextPreset));
+    setSequenceLength(8192);
+    setMaxWindows(
+      Math.max(
+        recommendedWindowBudget(project),
+        nextPreset === "wavenet_tcn_quality" ? 8192 : 4096,
+      ),
+    );
+    setEarlyStoppingPatience(20);
+    setEarlyStoppingMinDelta(0.00005);
+    setRecipeName("");
+    setRecipeNotice(
+      `Continuing ${presetDisplayLabel(run.preset)} from its best checkpoint with a lower learning rate.`,
+    );
   }
 
   async function saveCurrentRecipe() {
@@ -1920,7 +2002,7 @@ function TrainView({
         </div>
         <PresetRecommendation recommendation={recommendation} selectedPreset={selectedPreset} />
         <div className="preset-list">
-          {presets.map((item) => {
+          {visiblePresets.map((item) => {
             const supported = item.backends.includes(backend);
             return (
               <button
@@ -1969,6 +2051,16 @@ function TrainView({
                 ? "Choose a completed run with the same preset and backend to continue training."
                 : "Complete a run first to make checkpoint continuation available."}
           </small>
+          {qualityResumeRun ? (
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => applyQualityContinuation(qualityResumeRun)}
+            >
+              <RotateCcw size={16} />
+              Continue best WaveNet
+            </button>
+          ) : null}
         </div>
         <div className="training-controls">
           <label>
@@ -3482,6 +3574,10 @@ function recommendPreset(
 ): PresetRecommendation {
   const duration = getNumber(project.audio?.capture_profile ?? null, "duration_seconds");
   const confidence = project.audio?.latency_confidence ?? 0;
+  const gain = project.audio?.gain ?? null;
+  const gainVerdict = getString(gain, "verdict");
+  const targetRms = getNumber(gain, "target_rms_dbfs");
+  const headroom = getNumber(gain, "headroom_db");
   const warningCodes = new Set(project.audio?.warning_details.map((warning) => warning.code) ?? []);
   const reasons: string[] = [];
 
@@ -3504,10 +3600,10 @@ function recommendPreset(
   }
 
   if (warningCodes.has("capture_level_low") || warningCodes.has("rms_mismatch")) {
-    reasons.push("Gain warnings are present, so start with a stable recurrent baseline.");
+    reasons.push("Gain warnings are present, so start with a compact stable baseline.");
     return {
-      presetId: "gru_light",
-      label: "GRU",
+      presetId: "conv1d_bn_prelu",
+      label: "Conv baseline",
       confidence: "medium",
       reasons,
     };
@@ -3538,15 +3634,50 @@ function recommendPreset(
     };
   }
 
-  if (duration !== null && duration >= 90 && confidence >= 0.75) {
-    reasons.push("The capture is long enough for the WaveNet-style finite-memory model.");
+  if (duration !== null && duration >= 120 && confidence >= 0.8) {
+    reasons.push("The capture is long enough for the quality WaveNet finite-memory model.");
+    if (gainVerdict === "healthy") {
+      reasons.push("Gain staging looks healthy enough for a slower high-gain run.");
+    }
+    if (targetRms !== null && targetRms > -22) {
+      reasons.push("The processed target has enough RMS energy to justify the larger model.");
+    }
     return {
-      presetId: "wavenet_tcn",
-      label: "WaveNet TCN",
+      presetId: "wavenet_tcn_quality",
+      label: "WaveNet Quality",
       confidence: "high",
       reasons: [
         ...reasons,
-        "This keeps inference finite-memory while adding more dilated-convolution receptive field; check benchmark results before export.",
+        "Use this for dense high-gain tones when training time and native benchmark cost are acceptable.",
+      ],
+    };
+  }
+
+  if (duration !== null && duration >= 90 && confidence >= 0.75) {
+    reasons.push("The capture is long enough for the balanced WaveNet finite-memory model.");
+    return {
+      presetId: "wavenet_tcn_balanced",
+      label: "WaveNet Balanced",
+      confidence: "high",
+      reasons: [
+        ...reasons,
+        "This is the recommended high-gain path; check native benchmark results before export.",
+      ],
+    };
+  }
+
+  if (duration !== null && duration >= 45 && confidence >= 0.65) {
+    reasons.push("The capture has enough material for the stacked finite-memory model.");
+    if (headroom !== null && headroom < 3) {
+      reasons.push("Peak headroom is tight, so inspect residual peaks before a WaveNet quality run.");
+    }
+    return {
+      presetId: "conv1d_stack_prelu",
+      label: "Stacked Conv",
+      confidence: "medium",
+      reasons: [
+        ...reasons,
+        "Use WaveNet next if this misses high-gain harmonic detail.",
       ],
     };
   }
@@ -3603,6 +3734,14 @@ function recipeModelSupported(modelPreset: string, backend: RuntimeBackend) {
   return Boolean(presets.find((preset) => preset.id === modelPreset)?.backends.includes(backend));
 }
 
+function resumePresetsCompatible(sourcePreset: string, targetPreset: string) {
+  if (sourcePreset === targetPreset) return true;
+  return (
+    (sourcePreset === "wavenet_tcn" && targetPreset === "wavenet_tcn_balanced") ||
+    (sourcePreset === "wavenet_tcn_balanced" && targetPreset === "wavenet_tcn")
+  );
+}
+
 function compatibleResumeRuns(
   runs: TrainingRun[],
   preset: string,
@@ -3612,9 +3751,37 @@ function compatibleResumeRuns(
     .reverse()
     .filter((run) => {
       if (run.status !== "completed" || !run.metrics) return false;
-      if (run.preset !== preset) return false;
+      if (!resumePresetsCompatible(run.preset, preset)) return false;
       return normalizeRunBackend(run.backend) === backend;
     });
+}
+
+function isWaveNetPreset(preset: string) {
+  return preset === "wavenet_tcn" || preset.startsWith("wavenet_tcn_");
+}
+
+function bestWaveNetResumeRun(runs: TrainingRun[], backend: RuntimeBackend) {
+  const candidates = runs.filter((run) => {
+    if (run.status !== "completed" || !run.metrics) return false;
+    if (!isWaveNetPreset(run.preset)) return false;
+    return normalizeRunBackend(run.backend) === backend;
+  });
+  return candidates.reduce<TrainingRun | null>((best, run) => {
+    if (!best) return run;
+    const bestEsr = best.metrics?.esr ?? Number.POSITIVE_INFINITY;
+    const runEsr = run.metrics?.esr ?? Number.POSITIVE_INFINITY;
+    return runEsr < bestEsr ? run : best;
+  }, null);
+}
+
+function qualityContinuationPreset(preset: string) {
+  return preset === "wavenet_tcn" ? "wavenet_tcn_balanced" : preset;
+}
+
+function qualityContinuationLearningRate(preset: string) {
+  if (preset === "wavenet_tcn_quality") return 0.00015;
+  if (preset === "wavenet_tcn_fast") return 0.0003;
+  return 0.0002;
 }
 
 function normalizeRunBackend(backend: string) {

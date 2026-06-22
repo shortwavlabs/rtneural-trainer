@@ -1705,8 +1705,12 @@ def flatten_array(values) -> list[float]:  # type: ignore[no-untyped-def]
 
 def estimate_realtime_factor(preset: PresetConfig) -> float:
     # Placeholder until native RTNeural benchmarking is wired to the trainer.
-    if preset.preset_id == "wavenet_tcn":
+    if preset.preset_id == "wavenet_tcn_fast":
+        return 8.0
+    if preset.preset_id in {"wavenet_tcn", "wavenet_tcn_balanced"}:
         return 3.0
+    if preset.preset_id == "wavenet_tcn_quality":
+        return 1.5
     return 180.0 if preset.hidden_size <= 12 else 120.0
 
 

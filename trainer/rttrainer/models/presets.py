@@ -21,6 +21,28 @@ class PresetConfig:
     default_loss: str = "mse"
 
 
+def wavenet_tcn_preset(
+    preset_id: str,
+    *,
+    hidden_size: int,
+    num_layers: int,
+    conv_filters: int,
+    conv_dilations: tuple[int, ...],
+) -> PresetConfig:
+    return PresetConfig(
+        preset_id=preset_id,
+        architecture="conv1d",
+        input_size=1,
+        hidden_size=hidden_size,
+        output_size=1,
+        num_layers=num_layers,
+        kernel_size=3,
+        conv_filters=conv_filters,
+        conv_dilations=conv_dilations,
+        default_loss="mrstft_preemphasis",
+    )
+
+
 PRESETS: dict[str, PresetConfig] = {
     "dense_only": PresetConfig(
         preset_id="dense_only",
@@ -90,17 +112,33 @@ PRESETS: dict[str, PresetConfig] = {
         conv_dilations=(1, 2, 4, 8),
         default_loss="preemphasis_mse",
     ),
-    "wavenet_tcn": PresetConfig(
-        preset_id="wavenet_tcn",
-        architecture="conv1d",
-        input_size=1,
+    "wavenet_tcn_fast": wavenet_tcn_preset(
+        "wavenet_tcn_fast",
+        hidden_size=12,
+        num_layers=6,
+        conv_filters=12,
+        conv_dilations=(1, 2, 4, 8, 16, 32),
+    ),
+    "wavenet_tcn": wavenet_tcn_preset(
+        "wavenet_tcn",
         hidden_size=16,
-        output_size=1,
         num_layers=8,
-        kernel_size=3,
         conv_filters=16,
         conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128),
-        default_loss="mrstft_preemphasis",
+    ),
+    "wavenet_tcn_balanced": wavenet_tcn_preset(
+        "wavenet_tcn_balanced",
+        hidden_size=16,
+        num_layers=8,
+        conv_filters=16,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128),
+    ),
+    "wavenet_tcn_quality": wavenet_tcn_preset(
+        "wavenet_tcn_quality",
+        hidden_size=20,
+        num_layers=10,
+        conv_filters=20,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
     ),
     "conv_gru_hybrid": PresetConfig(
         preset_id="conv_gru_hybrid",
