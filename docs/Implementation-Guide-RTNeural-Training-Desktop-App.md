@@ -292,6 +292,7 @@ Implemented presets:
 | `wavenet_tcn_fast` | Smaller WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Faster high-gain probe |
 | `wavenet_tcn_balanced` | Proven WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Default amp quality path; benchmark before export |
 | `wavenet_tcn_quality` | Wider/deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Slower crunch/rhythm/refinement path; benchmark before export |
+| `wavenet_tcn_separable_fast` | Experimental grouped dilated Conv1D plus 1x1 pointwise WaveNet variant with bounded output and MR-STFT/pre-emphasis default loss | Runtime research only; parity-safe but not faster than balanced in current dynamic RTNeural benchmarks |
 | `wavenet_tcn` | Legacy balanced WaveNet-style preset | Existing run/checkpoint compatibility |
 | `conv_gru_hybrid` | Conv1D front-end + GRU with bounded dense output | Richer Keras temporal preset |
 
@@ -929,6 +930,7 @@ pnpm --filter rtneural-trainer-app package:sidecars:dev
 
 This creates ignored POSIX shims for local work. The `rttrainer` shim delegates
 to `uv run --extra tensorflow python -m rttrainer`; the validator shim delegates
+to a local backend build selected by `RTNEURAL_VALIDATOR_BACKEND` and falls back
 to `native/rtneural-validator/build/rtneural-validator`.
 
 Production staging command:
@@ -938,6 +940,9 @@ pnpm --filter rtneural-trainer-app package:sidecars
 ```
 
 This builds or copies real executables into `app/src-tauri/binaries/`.
+The native validator is built with the Eigen backend by default. Use
+`--validator-backend stl|eigen|xsimd` when staging sidecars to choose a specific
+RTNeural backend; xsimd requires the RTNeural xsimd headers/submodule.
 Support prebuilt override paths for release automation:
 
 ```bash
@@ -1370,6 +1375,7 @@ fixtures/rtneural-json/golden/
   wavenet_tcn_fast.rtneural.json
   wavenet_tcn_balanced.rtneural.json
   wavenet_tcn_quality.rtneural.json
+  wavenet_tcn_separable_fast.rtneural.json
   conv_gru_hybrid.rtneural.json
 ```
 
@@ -1508,6 +1514,7 @@ PyTorch, or export logic changes.
 | `wavenet_tcn_fast` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `wavenet_tcn_balanced` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `wavenet_tcn_quality` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `wavenet_tcn_separable_fast` | Required | Later | Required | Required | Required | Required | Experimental runtime research |
 | `wavenet_tcn` | Required | Later | Required | Required | Required | Required | Legacy alias |
 | `conv_gru_hybrid` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `heavy_recurrent` | Later | Later | Required before exposure | Required | Required | Required | Warned v1 or later |

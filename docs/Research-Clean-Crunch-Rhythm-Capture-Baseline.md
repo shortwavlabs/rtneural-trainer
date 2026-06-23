@@ -113,11 +113,21 @@ benchmark passes and the listening difference matters.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `wavenet_tcn_balanced` | `0.0810` | `0.0553` | `0.9587` | `-25.14 dBFS` | `3.0x` | `120` | Best available result; good candidate. |
 | `wavenet_tcn_quality` | `0.0821` | `0.0557` | `0.9582` | `-25.08 dBFS` | `1.5x` | `73` | Tied with balanced, but lower runtime margin. |
+| `wavenet_tcn_separable_fast` | `0.0833` | `0.0561` | `0.9577` | `-25.02 dBFS` | `5.0x` | `120` | New grouped/dilated experiment; quality is on par. |
 | `conv1d_stack_prelu` | `0.1798` | `0.0824` | `0.9064` | `-21.68 dBFS` | `120x` | `120` | Needs work. |
 | `wavenet_tcn_fast` | `0.1969` | `0.0863` | `0.8989` | `-21.28 dBFS` | `8.0x` | `120` | Needs work. |
 
-Lead is the first capture where quality does not beat balanced. The target is
-very dense: `-14.95 dBFS` RMS with only about `5.2 dB` crest factor. Latency
+Lead is the first capture where quality does not beat balanced. The new
+`wavenet_tcn_separable_fast` preset is also effectively tied on metrics, which
+makes it a useful research preset for this dense lead tone. It trained on CPU by
+design because TensorFlow Metal does not reliably execute grouped Conv1D on this
+machine; export parity now honors the saved CPU checkpoint device. A native
+Eigen benchmark of the trained separable export produced about `8.90x`
+worst-case RTF with a much smaller JSON model (`96 KB`), but balanced still
+benchmarked faster at about `18.35x` worst-case RTF. Keep separable as a
+static/fused/plugin-side experiment, not the default training recommendation.
+
+The target is very dense: `-14.95 dBFS` RMS with only about `5.2 dB` crest factor. Latency
 confidence is low, but a preview shift search still selected shift `0`, so the
 rendered residual is real model mismatch rather than a report alignment artifact.
 The residual is broad-band and concentrated in the presence/fizz region
@@ -146,7 +156,8 @@ CPU budget matters.
    It won clean, crunch, rhythm, edge, lead, and overdrive pedal. On clean,
    edge, and overdrive pedal, balanced and quality were both excellent. On
    crunch and rhythm, quality opened a larger gap. Lead is the exception where
-   balanced slightly beat quality.
+   balanced slightly beat quality and separable-fast landed in the same quality
+   range.
 
 2. Stacked Conv is currently a speed fallback.
 

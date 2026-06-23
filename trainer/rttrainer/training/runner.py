@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import platform
 import random
 import time
 from pathlib import Path
@@ -54,12 +55,17 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     preview_seconds = float(manifest.get("preview_seconds", 3.0))
     early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
     early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
-    device_preference = str(manifest.get("device", "auto"))
+    requested_device_preference = str(manifest.get("device", "auto"))
+    device_preference, device_override_reason = keras_device_preference_for_preset(
+        preset,
+        requested_device_preference,
+    )
     context_training_enabled = recurrent_context_training_enabled(manifest, preset)
     context_multiplier = recurrent_context_training_multiplier(manifest)
     input_path, target_path = resolve_audio_paths(manifest)
     if not input_path.is_file() or not target_path.is_file():
         raise FileNotFoundError("Training requires prepared input_path and target_path WAV files.")
+    preparation_snapshot = snapshot_preparation_report(manifest, run_dir)
 
     set_keras_seed(tf, numpy, seed)
     dataset = build_windowed_dataset(
@@ -130,6 +136,8 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "preset": preset.preset_id,
             "backend": "keras",
             "device": device_label,
+            "requested_device": requested_device_preference,
+            "device_override_reason": device_override_reason,
             "epochs": target_epochs,
             "requested_epochs": requested_epochs,
             "start_epoch": start_epoch,
@@ -371,6 +379,8 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "preset": preset.preset_id,
             "backend": "keras",
             "device": device_label,
+            "requested_device": requested_device_preference,
+            "device_override_reason": device_override_reason,
             "loss": loss_name,
             "epochs": last_epoch,
             "requested_epochs": requested_epochs,
@@ -384,6 +394,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "state_diagnostic": state_diagnostic,
             "history": history,
             "dataset": dataset.summary,
+            "preparation": preparation_snapshot,
             "early_stopping": stopped_early
             or {
                 "stopped": False,
@@ -442,6 +453,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     input_path, target_path = resolve_audio_paths(manifest)
     if not input_path.is_file() or not target_path.is_file():
         raise FileNotFoundError("Training requires prepared input_path and target_path WAV files.")
+    preparation_snapshot = snapshot_preparation_report(manifest, run_dir)
 
     set_torch_seed(torch, seed)
     device = choose_device(manifest.get("device"))
@@ -775,6 +787,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "state_diagnostic": state_diagnostic,
             "history": history,
             "dataset": dataset.summary,
+            "preparation": preparation_snapshot,
             "early_stopping": stopped_early
             or {
                 "stopped": False,
@@ -919,7 +932,6 @@ def load_checkpoint(path: Path):
 
 def load_keras_checkpoint(path: Path):
     tf, _numpy = require_tensorflow()
-    model = tf.keras.models.load_model(path, compile=False)
     metadata_path = path.parent / "best-checkpoint.json"
     if metadata_path.exists():
         checkpoint = read_json(metadata_path)
@@ -932,6 +944,8 @@ def load_keras_checkpoint(path: Path):
             "epoch": 0,
             "metrics": {},
         }
+    with tf.device(tensorflow_device_scope(tf, checkpoint.get("device"))):
+        model = tf.keras.models.load_model(path, compile=False)
     checkpoint["backend"] = "keras"
     checkpoint["model_path"] = str(path)
     return model, checkpoint
@@ -1594,6 +1608,45 @@ def numeric_metrics(value: Any) -> dict[str, float]:
     return metrics
 
 
+def snapshot_preparation_report(manifest: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+    source_path = resolve_preparation_report_path(manifest)
+    if source_path is None:
+        return {
+            "available": False,
+            "source_path": None,
+            "snapshot_path": None,
+            "report": None,
+        }
+
+    snapshot_path = run_dir / "preparation-report.json"
+    if not source_path.is_file():
+        return {
+            "available": False,
+            "source_path": str(source_path),
+            "snapshot_path": str(snapshot_path),
+            "report": None,
+        }
+
+    report = read_json(source_path)
+    write_json(snapshot_path, report)
+    return {
+        "available": True,
+        "source_path": str(source_path),
+        "snapshot_path": str(snapshot_path),
+        "report": report,
+    }
+
+
+def resolve_preparation_report_path(manifest: dict[str, Any]) -> Path | None:
+    explicit_path = manifest.get("preparation_report_path", manifest.get("prepare_report_path"))
+    if explicit_path:
+        return Path(str(explicit_path)).expanduser()
+    prepared_dir = manifest.get("prepared_dir")
+    if prepared_dir:
+        return Path(str(prepared_dir)).expanduser() / "preparation-report.json"
+    return None
+
+
 def resolve_audio_paths(
     manifest: dict[str, Any],
     *,
@@ -1711,6 +1764,8 @@ def estimate_realtime_factor(preset: PresetConfig) -> float:
         return 3.0
     if preset.preset_id == "wavenet_tcn_quality":
         return 1.5
+    if preset.preset_id == "wavenet_tcn_separable_fast":
+        return 5.0
     return 180.0 if preset.hidden_size <= 12 else 120.0
 
 
@@ -1832,6 +1887,21 @@ def require_tensorflow():
             "Install it with: uv sync --extra tensorflow"
         ) from exc
     return tf, numpy
+
+
+def keras_device_preference_for_preset(
+    preset: PresetConfig,
+    requested_device: str | None,
+) -> tuple[str, str | None]:
+    normalized = normalize_device_preference(requested_device)
+    if preset.architecture != "separable_conv1d":
+        return normalized, None
+    if normalized == "mps" or (normalized == "auto" and platform.system() == "Darwin"):
+        return (
+            "cpu",
+            "TensorFlow Metal does not reliably execute grouped Conv1D for the efficient WaveNet preset; using CPU for training.",
+        )
+    return normalized, None
 
 
 def tensorflow_device_scope(tf, preferred: str | None = None) -> str:  # type: ignore[no-untyped-def]

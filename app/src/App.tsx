@@ -197,6 +197,13 @@ const presets: PresetOption[] = [
     backends: ["keras"],
   },
   {
+    id: "wavenet_tcn_separable_fast",
+    label: "WaveNet Separable",
+    detail: "Depthwise dilated Conv1D + 1x1 mix",
+    cpu: "Experimental",
+    backends: ["keras"],
+  },
+  {
     id: "wavenet_tcn_balanced",
     label: "WaveNet Balanced",
     detail: "8x dilated causal Conv1D",
@@ -284,6 +291,20 @@ const builtInTrainingRecipes = [
     sequenceLength: 8192,
     maxWindows: 2048,
     earlyStoppingPatience: 10,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_efficient",
+    source: "built_in",
+    name: "WaveNet separable",
+    description: "Experimental grouped-Conv1D WaveNet for RTNeural runtime research.",
+    modelPreset: "wavenet_tcn_separable_fast",
+    epochs: 120,
+    batchSize: 16,
+    learningRate: 0.0007,
+    sequenceLength: 8192,
+    maxWindows: 4096,
+    earlyStoppingPatience: 12,
     earlyStoppingMinDelta: 0.00005,
   },
   {
@@ -3743,6 +3764,7 @@ function recommendPreset(
         reasons: [
           ...reasons,
           "Use this when crunch/rhythm tones still leave audible residual detail.",
+          "Compare WaveNet Fast if native benchmark headroom is weak.",
         ],
       };
     }
@@ -3755,6 +3777,7 @@ function recommendPreset(
       reasons: [
         ...reasons,
         "Balanced is the first pass for clean and lower-gain captures; quality is the refinement step.",
+        "Use WaveNet Fast as the lower-runtime A/B check.",
       ],
     };
   }
@@ -3773,7 +3796,7 @@ function recommendPreset(
         ...reasons,
         confidence < 0.75
           ? "Use Align to try candidate offsets before extending the run."
-          : "Check native benchmark results before export.",
+          : "Check native benchmark results before export; try WaveNet Fast if headroom is tight.",
       ],
     };
   }

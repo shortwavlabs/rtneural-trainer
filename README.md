@@ -168,8 +168,21 @@ pnpm --filter rtneural-trainer-app package:sidecars
 ```
 
 The production script packages `rttrainer` with PyInstaller through `uv` and
-builds the native validator with CMake release settings. You can also provide
-prebuilt executables:
+builds the native validator with CMake release settings. The validator uses the
+Eigen RTNeural backend by default; choose another backend with:
+
+```bash
+pnpm --filter rtneural-trainer-app package:sidecars -- --validator-backend stl
+```
+
+For local backend comparison builds:
+
+```bash
+pnpm --filter rtneural-trainer-app build:validators
+```
+
+`xsimd` builds require the RTNeural xsimd headers/submodule to be present in the
+local RTNeural checkout. You can also provide prebuilt executables:
 
 ```bash
 RTTRAINER_SIDECAR_SOURCE=/path/to/rttrainer \
@@ -209,6 +222,14 @@ no local checkout is found, CMake fetches the pinned RTNeural commit.
 ```bash
 cmake -S native/rtneural-validator -B native/rtneural-validator/build
 cmake --build native/rtneural-validator/build
+```
+
+The default backend is Eigen. To build an explicit backend:
+
+```bash
+cmake -S native/rtneural-validator -B native/rtneural-validator/build-stl \
+  -DRTNEURAL_VALIDATOR_BACKEND=stl
+cmake --build native/rtneural-validator/build-stl
 ```
 
 Example validator commands:
@@ -355,6 +376,10 @@ Current Keras-first presets are:
 - `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement
   runs, especially crunch/rhythm/high-gain tones. Benchmark before treating
   quality exports as plugin-ready.
+- `wavenet_tcn_separable_fast`: experimental grouped/dilated Conv1D plus 1x1
+  pointwise WaveNet variant. It has Python/native parity coverage, but current
+  dynamic RTNeural benchmarks do not beat `wavenet_tcn_balanced`; use it only
+  for runtime research.
 - `wavenet_tcn`: legacy balanced WaveNet preset kept for existing runs and
   checkpoint compatibility.
 - `conv_gru_hybrid`: causal Conv1D front-end feeding a compact GRU.

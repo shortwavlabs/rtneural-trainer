@@ -30,6 +30,7 @@ GOLDEN_FIXTURE_SEEDS = {
     "wavenet_tcn_fast": 19,
     "wavenet_tcn_balanced": 20,
     "wavenet_tcn_quality": 21,
+    "wavenet_tcn_separable_fast": 22,
 }
 
 
@@ -92,6 +93,7 @@ def build_all_fixtures() -> dict[str, dict[str, Any]]:
 
 def build_fixture_models() -> dict[str, GoldenFixture]:
     tf = require_tensorflow()
+    prefer_cpu_for_fixtures(tf)
     fixtures: dict[str, GoldenFixture] = {}
     for index, preset_id in enumerate(sorted(PRESETS)):
         model = build_keras_model(PRESETS[preset_id], tf.keras)
@@ -120,6 +122,13 @@ def build_fixture_models() -> dict[str, GoldenFixture]:
             payload=payload,
         )
     return fixtures
+
+
+def prefer_cpu_for_fixtures(tf: Any) -> None:
+    try:
+        tf.config.set_visible_devices([], "GPU")
+    except Exception:
+        pass
 
 
 def initialize_model(model) -> None:  # type: ignore[no-untyped-def]

@@ -50,6 +50,7 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
     write_json(model_path, model_json)
 
     input_path = resolve_parity_input(manifest, checkpoint_path)
+    device_preference = export_device_preference(manifest, checkpoint)
     validation = validate_export_parity(
         checkpoint_path=checkpoint_path,
         model_json_path=model_path,
@@ -57,6 +58,7 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         tolerance=float(
             manifest.get("parity_tolerance", default_parity_tolerance(preset.preset_id))
         ),
+        device_preference=device_preference,
     )
     validation_path = export_dir / "validation-report.json"
     write_json(validation_path, validation)
@@ -68,6 +70,7 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         checkpoint_path=checkpoint_path,
         input_path=input_path,
         manifest=manifest,
+        device_preference=device_preference,
     )
 
     benchmark = {
@@ -185,6 +188,7 @@ def write_parity_snapshot(
     checkpoint_path: Path,
     input_path: Path,
     manifest: dict[str, Any],
+    device_preference: str | None = None,
 ) -> dict[str, Any]:
     input_audio = read_wav_mono(input_path)
     if not input_audio.samples:
@@ -196,7 +200,7 @@ def write_parity_snapshot(
         model,
         checkpoint,
         samples,
-        manifest.get("device"),
+        device_preference or export_device_preference(manifest, checkpoint),
     )
 
     snapshot_input_path = export_dir / "parity-snapshot-input.wav"
@@ -302,7 +306,8 @@ def build_keras_rtneural_json(
             layer["output_size"] = len(kernel[0]) if kernel else 0
         elif layer.get("type") == "conv1d":
             kernel, _bias = layer["weights"]
-            layer["input_size"] = len(kernel[0]) if kernel else 0
+            groups = int(layer.get("groups", 1) or 1)
+            layer["input_size"] = (len(kernel[0]) if kernel else 0) * groups
             layer["output_size"] = len(kernel[0][0]) if kernel and kernel[0] else 0
         elif layer.get("type") in ("batchnorm", "prelu", "activation"):
             shape = layer.get("shape") or []
@@ -356,8 +361,21 @@ def render_export_prediction(manifest: dict[str, Any]) -> dict[str, Any]:
         model,
         _checkpoint,
         input_audio.samples,
-        manifest.get("device"),
+        export_device_preference(manifest, _checkpoint),
     )
     metrics = compute_metrics(target_audio.samples, prediction)
     write_json(output_dir / "metrics.json", metrics)
     return {"metrics": metrics, "metrics_path": str(output_dir / "metrics.json")}
+
+
+def export_device_preference(
+    manifest: dict[str, Any],
+    checkpoint: dict[str, Any],
+) -> str | None:
+    manifest_device = manifest.get("device")
+    if manifest_device is not None:
+        return str(manifest_device)
+    checkpoint_device = checkpoint.get("device")
+    if checkpoint_device is not None:
+        return str(checkpoint_device)
+    return None

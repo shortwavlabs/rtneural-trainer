@@ -8,7 +8,29 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(RTNEURAL_STL ON CACHE BOOL "Use RTNeural STL backend" FORCE)
+set(RTNEURAL_VALIDATOR_BACKEND "eigen" CACHE STRING "RTNeural backend: stl, eigen, or xsimd")
+set_property(CACHE RTNEURAL_VALIDATOR_BACKEND PROPERTY STRINGS stl eigen xsimd)
+string(TOLOWER "${RTNEURAL_VALIDATOR_BACKEND}" RTNEURAL_VALIDATOR_BACKEND_NORMALIZED)
+
+set(RTNEURAL_EIGEN OFF CACHE BOOL "Use RTNeural Eigen backend" FORCE)
+set(RTNEURAL_XSIMD OFF CACHE BOOL "Use RTNeural xsimd backend" FORCE)
+set(RTNEURAL_STL OFF CACHE BOOL "Use RTNeural STL backend" FORCE)
+
+if(RTNEURAL_VALIDATOR_BACKEND_NORMALIZED STREQUAL "eigen")
+    set(RTNEURAL_EIGEN ON CACHE BOOL "Use RTNeural Eigen backend" FORCE)
+elseif(RTNEURAL_VALIDATOR_BACKEND_NORMALIZED STREQUAL "xsimd")
+    set(RTNEURAL_XSIMD ON CACHE BOOL "Use RTNeural xsimd backend" FORCE)
+elseif(RTNEURAL_VALIDATOR_BACKEND_NORMALIZED STREQUAL "stl")
+    set(RTNEURAL_STL ON CACHE BOOL "Use RTNeural STL backend" FORCE)
+else()
+    message(FATAL_ERROR "Unsupported RTNEURAL_VALIDATOR_BACKEND='${RTNEURAL_VALIDATOR_BACKEND}'. Use stl, eigen, or xsimd.")
+endif()
+
+set(RTNEURAL_VALIDATOR_BACKEND_LABEL "rtneural-${RTNEURAL_VALIDATOR_BACKEND_NORMALIZED}")
+if(DEFINED RTNEURAL_USE_AVX AND RTNEURAL_USE_AVX)
+    string(APPEND RTNEURAL_VALIDATOR_BACKEND_LABEL "-avx")
+endif()
+
 set(BUILD_TESTS OFF CACHE BOOL "Do not build RTNeural tests" FORCE)
 set(BUILD_BENCH OFF CACHE BOOL "Do not build RTNeural benchmarks" FORCE)
 set(BUILD_EXAMPLES OFF CACHE BOOL "Do not build RTNeural examples" FORCE)
@@ -34,6 +56,11 @@ else()
     set(RTNEURAL_SOURCE_PATH "${rtneural_SOURCE_DIR}")
 endif()
 
+if(RTNEURAL_VALIDATOR_BACKEND_NORMALIZED STREQUAL "xsimd"
+   AND NOT EXISTS "${RTNEURAL_SOURCE_PATH}/modules/xsimd/include/xsimd/xsimd.hpp")
+    message(FATAL_ERROR "RTNeural xsimd backend requested, but xsimd headers are missing at '${RTNEURAL_SOURCE_PATH}/modules/xsimd/include'. Initialize the RTNeural xsimd submodule or choose RTNEURAL_VALIDATOR_BACKEND=eigen.")
+endif()
+
 if(TARGET RTNeural)
     # Keep warnings from the pinned third-party dependency out of CI logs.
     if(MSVC)
@@ -52,9 +79,9 @@ else()
 endif()
 target_compile_definitions(
   rtneural-validator
-  PRIVATE
+    PRIVATE
     RTNEURAL_NO_DEBUG=1
-    RTNEURAL_VALIDATOR_BACKEND="rtneural-stl"
+    RTNEURAL_VALIDATOR_BACKEND="${RTNEURAL_VALIDATOR_BACKEND_LABEL}"
     RTNEURAL_VALIDATOR_BUILD_TYPE="${RTNEURAL_VALIDATOR_BUILD_TYPE}"
 )
 target_include_directories(rtneural-validator SYSTEM PRIVATE "${RTNEURAL_SOURCE_PATH}")

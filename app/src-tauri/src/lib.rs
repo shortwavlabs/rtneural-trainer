@@ -33,6 +33,7 @@ const MODEL_PRESETS: &[&str] = &[
     "wavenet_tcn",
     "wavenet_tcn_balanced",
     "wavenet_tcn_quality",
+    "wavenet_tcn_separable_fast",
     "conv_gru_hybrid",
 ];
 
@@ -4242,6 +4243,13 @@ fn emit_sidecar_line(app: &tauri::AppHandle, context: &SidecarContext, stream: &
 }
 
 fn validator_binary_path(state: &AppState) -> Result<PathBuf, String> {
+    if let Ok(path) = std::env::var("RTNEURAL_VALIDATOR_BINARY") {
+        let candidate = PathBuf::from(path);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             if let Some(path) = existing_binary(dir, RTNEURAL_VALIDATOR_SIDECAR) {
@@ -4250,12 +4258,45 @@ fn validator_binary_path(state: &AppState) -> Result<PathBuf, String> {
         }
     }
 
-    let dev_dir = state.workspace_root.join("native/rtneural-validator/build");
-    if let Some(path) = existing_binary(&dev_dir, "rtneural-validator") {
-        return Ok(path);
+    let backend = std::env::var("RTNEURAL_VALIDATOR_BACKEND")
+        .unwrap_or_else(|_| "eigen".to_string())
+        .trim()
+        .to_ascii_lowercase();
+    let valid_backend = matches!(backend.as_str(), "stl" | "eigen" | "xsimd");
+    let avx = env_flag("RTNEURAL_VALIDATOR_AVX");
+    let mut dev_dirs = Vec::new();
+    if valid_backend {
+        if avx {
+            dev_dirs.push(format!("native/rtneural-validator/build-{backend}-avx"));
+            dev_dirs.push(format!(
+                "native/rtneural-validator/build-release-{backend}-avx"
+            ));
+        }
+        dev_dirs.push(format!("native/rtneural-validator/build-{backend}"));
+        dev_dirs.push(format!("native/rtneural-validator/build-release-{backend}"));
+    }
+    dev_dirs.push("native/rtneural-validator/build".to_string());
+    dev_dirs.push("native/rtneural-validator/build-release".to_string());
+
+    for dev_dir in dev_dirs {
+        let candidate_dir = state.workspace_root.join(dev_dir);
+        if let Some(path) = existing_binary(&candidate_dir, "rtneural-validator") {
+            return Ok(path);
+        }
     }
 
-    Err("rtneural-validator binary not found. Build it with: cmake --build native/rtneural-validator/build".to_string())
+    Err("rtneural-validator binary not found. Build it with: cmake -S native/rtneural-validator -B native/rtneural-validator/build-eigen -DRTNEURAL_VALIDATOR_BACKEND=eigen && cmake --build native/rtneural-validator/build-eigen".to_string())
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn bundled_sidecar_exists(stem: &str) -> bool {

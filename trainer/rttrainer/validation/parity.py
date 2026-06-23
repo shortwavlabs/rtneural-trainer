@@ -16,10 +16,16 @@ def validate_export_parity(
     model_json_path: Path,
     input_path: Path,
     tolerance: float,
+    device_preference: str | None = None,
 ) -> dict[str, Any]:
     model, checkpoint = load_checkpoint(checkpoint_path)
     input_audio = read_wav_mono(input_path)
-    backend_output = predict_loaded_sequence(model, checkpoint, input_audio.samples)
+    backend_output = predict_loaded_sequence(
+        model,
+        checkpoint,
+        input_audio.samples,
+        device_preference,
+    )
     json_output = run_exported_json(model_json_path, input_audio.samples)
     errors = [
         abs(backend_output[index] - json_output[index])

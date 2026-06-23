@@ -142,10 +142,14 @@ def normalize_device_preference(preferred: str | None) -> str:
     normalized = str(preferred).strip().lower()
     if normalized in {"", "auto"}:
         return "auto"
-    if normalized in {"cpu", "tensorflow-cpu"}:
+    if normalized in {"cpu", "tensorflow-cpu"} or normalized.startswith("tensorflow-cpu:"):
         return "cpu"
-    if normalized in {"mps", "metal"}:
+    if normalized in {"mps", "metal"} or normalized.startswith(
+        ("tensorflow-mps:", "tensorflow-metal:")
+    ):
         return "mps"
+    if normalized.startswith("tensorflow-gpu:"):
+        return "auto"
     if normalized in {"cuda", "gpu", "tensorflow-gpu"} or normalized.startswith("cuda:"):
         return "cuda"
     raise RuntimeError("Device must be 'auto', 'cpu', 'mps', or 'cuda'.")

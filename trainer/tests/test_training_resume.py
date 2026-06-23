@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
+from rttrainer.utils import read_json, write_json
 from rttrainer.training.runner import (
     correlation_coefficient,
     default_learning_rate_plateau_patience,
+    keras_device_preference_for_preset,
     numeric_metrics,
     quality_assessment,
     recurrent_context_training_enabled,
@@ -12,6 +16,7 @@ from rttrainer.training.runner import (
     resolve_learning_rate_schedule,
     resolve_resume_learning_rate,
     resolve_training_loss_name,
+    snapshot_preparation_report,
     state_reset_diagnostic,
     target_epoch_count,
     validation_selection_metrics,
@@ -38,6 +43,44 @@ class TrainingResumeTests(unittest.TestCase):
         metrics = numeric_metrics({"esr": 0.25, "note": "best", "epoch": 12})
 
         self.assertEqual(metrics, {"esr": 0.25, "epoch": 12.0})
+
+    def test_training_run_snapshots_preparation_report(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            prepared_dir = root / "audio" / "prepared"
+            run_dir = root / "runs" / "run_test"
+            report = {
+                "schema_version": 1,
+                "prepared": {"sample_rate": 48_000, "samples": 1024},
+                "latency": {
+                    "auto_estimated_samples": 8,
+                    "manual_adjustment_samples": -9,
+                    "effective_samples": -1,
+                    "confidence": 0.35,
+                },
+            }
+            write_json(prepared_dir / "preparation-report.json", report)
+
+            snapshot = snapshot_preparation_report({"prepared_dir": str(prepared_dir)}, run_dir)
+
+            snapshot_path = Path(str(snapshot["snapshot_path"]))
+            self.assertTrue(snapshot["available"])
+            self.assertEqual(snapshot["source_path"], str(prepared_dir / "preparation-report.json"))
+            self.assertEqual(snapshot["report"], report)
+            self.assertEqual(read_json(snapshot_path), report)
+
+    def test_training_run_records_missing_preparation_report_path(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            prepared_dir = root / "audio" / "prepared"
+            run_dir = root / "runs" / "run_test"
+
+            snapshot = snapshot_preparation_report({"prepared_dir": str(prepared_dir)}, run_dir)
+
+            self.assertFalse(snapshot["available"])
+            self.assertEqual(snapshot["source_path"], str(prepared_dir / "preparation-report.json"))
+            self.assertEqual(snapshot["snapshot_path"], str(run_dir / "preparation-report.json"))
+            self.assertIsNone(snapshot["report"])
 
     def test_learning_rate_plateau_patience_precedes_early_stopping(self) -> None:
         self.assertEqual(default_learning_rate_plateau_patience(0), 5)
@@ -83,6 +126,24 @@ class TrainingResumeTests(unittest.TestCase):
 
         self.assertEqual(learning_rate, 0.0001)
 
+    def test_separable_wavenet_mps_uses_cpu_training_fallback(self) -> None:
+        device, reason = keras_device_preference_for_preset(
+            get_preset("wavenet_tcn_separable_fast"),
+            "mps",
+        )
+
+        self.assertEqual(device, "cpu")
+        self.assertIsNotNone(reason)
+
+    def test_regular_wavenet_keeps_selected_keras_device(self) -> None:
+        device, reason = keras_device_preference_for_preset(
+            get_preset("wavenet_tcn_balanced"),
+            "mps",
+        )
+
+        self.assertEqual(device, "mps")
+        self.assertIsNone(reason)
+
     def test_training_loss_defaults_to_mse(self) -> None:
         self.assertEqual(resolve_training_loss_name({}), "mse")
         self.assertEqual(resolve_training_loss_name({"loss": "esr"}), "esr")
@@ -110,6 +171,10 @@ class TrainingResumeTests(unittest.TestCase):
         )
         self.assertEqual(
             resolve_training_loss_name({}, get_preset("wavenet_tcn_quality")),
+            "mrstft_preemphasis",
+        )
+        self.assertEqual(
+            resolve_training_loss_name({}, get_preset("wavenet_tcn_separable_fast")),
             "mrstft_preemphasis",
         )
 
@@ -251,6 +316,7 @@ class TrainingResumeTests(unittest.TestCase):
             "wavenet_tcn",
             "wavenet_tcn_balanced",
             "wavenet_tcn_quality",
+            "wavenet_tcn_separable_fast",
         ):
             with self.subTest(preset=preset_id):
                 diagnostic = state_reset_diagnostic(

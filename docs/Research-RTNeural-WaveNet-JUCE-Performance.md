@@ -1,6 +1,7 @@
 # RTNeural WaveNet And JUCE Plugin Performance Notes
 
 Reviewed: 2026-06-22
+Updated: 2026-06-22
 
 ## Short Answer
 
@@ -11,18 +12,70 @@ The highest-leverage performance actions are:
 
 1. Benchmark every exported WaveNet model with multiple RTNeural backends:
    STL, Eigen, xsimd, and AVX where available.
-2. Stop treating the current STL validator result as the final plugin answer.
+2. Stop treating any single dynamic-validator result as the final plugin
+   answer.
 3. Add a compile-time `ModelT` validation/benchmark path for known preset
    shapes.
-4. Experiment with grouped or depthwise-style dilated Conv1D blocks to reduce
-   WaveNet cost while staying inside RTNeural JSON support.
+4. Benchmark grouped or depthwise-style dilated Conv1D blocks while staying
+   inside RTNeural JSON support.
 5. Build the eventual JUCE plugin around real-time constraints from day one:
    no parsing, allocation, locking, file IO, UI calls, or model swaps in
    `processBlock()`.
 
 The current app is already doing one important thing correctly: it benchmarks
-the exported native RTNeural JSON. The gap is that it benchmarks only the
-dynamic runtime model and currently forces the validator to the STL backend.
+the exported native RTNeural JSON. The app-side gap around the STL-only
+validator has now been closed: local/dev and packaged validator builds can use
+Eigen by default, with STL and xsimd available as explicit build targets when
+their dependencies are present.
+
+## Implementation Update
+
+Implemented in the trainer app on 2026-06-22:
+
+- `native/rtneural-validator` now supports
+  `RTNEURAL_VALIDATOR_BACKEND=stl|eigen|xsimd`.
+- Tauri sidecar packaging defaults the native validator to Eigen and accepts
+  `--validator-backend` plus optional AVX flags.
+- `pnpm --filter rtneural-trainer-app build:validators` builds local backend
+  variants for benchmark comparisons.
+- The dev validator shim can select a local backend with
+  `RTNEURAL_VALIDATOR_BACKEND=eigen|stl|xsimd`.
+- An experimental `wavenet_tcn_separable_fast` preset was added with grouped
+  dilated Conv1D plus 1x1 pointwise mixing.
+- Golden JSON fixtures, Python parity, and native RTNeural validation now cover
+  the grouped Conv1D export path.
+
+Local benchmark snapshot on Apple Silicon with dynamic RTNeural JSON:
+
+| Preset | Eigen Worst RTF | STL Worst RTF | Notes |
+| --- | ---: | ---: | --- |
+| `wavenet_tcn_fast` | `35.54x` | `22.45x` | Fastest current WaveNet runtime lane. |
+| `wavenet_tcn_balanced` | `21.35x` | `10.36x` | Eigen is the clear app-side win. |
+| `wavenet_tcn_quality` | `12.41x` | `5.10x` | Still viable dynamically on this machine, but plugin headroom remains unproven. |
+| `wavenet_tcn_separable_fast` | `9.24x` | `8.50x` | Parity-safe, but not faster than balanced in dynamic JSON. Keep experimental. |
+
+The separable result is important: reducing theoretical MACs did not beat the
+extra dynamic-layer overhead in the current validator path. It may still become
+useful with static `ModelT`, xsimd, or a fused plugin-side implementation, but
+it should not replace `wavenet_tcn_fast` or `wavenet_tcn_balanced` yet.
+
+Follow-up trained lead-capture result:
+
+| Preset | Test ESR | RMSE | Correlation | Eigen Worst RTF | Model Size | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `wavenet_tcn_balanced` | `0.08098` | `0.05532` | `0.95874` | `18.35x` | `211 KB` | Best metric/runtime balance. |
+| `wavenet_tcn_quality` | `0.08210` | `0.05570` | `0.95822` | `11.14x` | `414 KB` | Similar quality, slower and larger. |
+| `wavenet_tcn_separable_fast` | `0.08332` | `0.05612` | `0.95768` | `8.90x` | `96 KB` | Quality is on par; dynamic runtime is still slower. |
+
+This makes the separable preset more interesting than the fixture benchmark
+alone suggested. It can reach comparable quality with a much smaller JSON model,
+but the current dynamic RTNeural path still pays for the extra layer count.
+That keeps the main recommendation unchanged: use balanced as the practical
+default, keep separable for static/fused/plugin-side experiments.
+
+The local RTNeural checkout currently lacks vendored xsimd headers at
+`modules/xsimd/include/xsimd/xsimd.hpp`, so xsimd builds are skipped by the
+matrix helper unless that dependency is initialized.
 
 ## Sources Reviewed
 
@@ -55,6 +108,7 @@ The app's WaveNet presets are sequential Keras models exported to RTNeural JSON:
 | `wavenet_tcn_fast` | 6 | 12 | 3 | `1..32` | 127 samples |
 | `wavenet_tcn_balanced` | 8 | 16 | 3 | `1..128` | 511 samples |
 | `wavenet_tcn_quality` | 10 | 20 | 3 | `1..512` | 2047 samples |
+| `wavenet_tcn_separable_fast` | 15 Conv1D ops | 16 | 3 plus 1 | `1..128` | 511 samples |
 
 The model graph is intentionally simple:
 
@@ -92,26 +146,32 @@ RTNeural supports STL, Eigen, and xsimd backends. The RTNeural README says Eigen
 is generally best for larger networks, while smaller networks may perform better
 with xsimd. The comparison repo confirms the answer is shape-dependent.
 
-Our current validator does this:
+The original validator did this:
 
 ```cmake
 set(RTNEURAL_STL ON CACHE BOOL "Use RTNeural STL backend" FORCE)
 ```
 
-That makes the current benchmark conservative, but incomplete. It is useful as
+That made the original benchmark conservative but incomplete. It was useful as
 a baseline, not as the final product runtime result.
 
-Action:
+Implemented app-side:
 
-- Add a CMake option such as `RTNEURAL_VALIDATOR_BACKEND=stl|eigen|xsimd`.
-- Build separate validator binaries or one matrix job per backend.
-- Record all backend results in the export package.
+- Added `RTNEURAL_VALIDATOR_BACKEND=stl|eigen|xsimd`.
+- Added sidecar packaging flags for backend and AVX selection.
+- Added a local backend build helper.
+
+Still pending:
+
+- Record a full backend matrix in each export package instead of one selected
+  backend report.
 - Let the UI label the fastest passing backend.
+- Build xsimd once the RTNeural xsimd headers/submodule are present.
 
 Expected outcome:
 
-- Balanced and quality WaveNet exports may move from borderline to acceptable on
-  Eigen or xsimd.
+- Balanced and quality WaveNet exports move from conservative STL numbers to
+  more realistic Eigen numbers on supported machines.
 - Backend choice can become architecture-specific instead of global.
 
 ### 2. Dynamic JSON Models Are Convenient, Not The Performance Ceiling
@@ -211,12 +271,23 @@ Caveats:
 - Keras grouped Conv1D must export exactly as RTNeural expects.
 - The pointwise layer must be represented by supported RTNeural layers.
 
-Action:
+Implemented app-side:
 
-- Add a `wavenet_tcn_separable_fast` experimental preset.
-- Add Keras export parity and native RTNeural parity fixtures for grouped
+- Added a `wavenet_tcn_separable_fast` experimental preset.
+- Added Keras export parity and native RTNeural parity fixtures for grouped
   Conv1D.
+
+Finding:
+
+- The separable preset was not faster than `wavenet_tcn_balanced` in the current
+  dynamic JSON validator. Keep it as an experiment, not as the recommended
+  performance path.
+
+Still pending:
+
 - Test against clean, crunch, rhythm, lead, and pedal captures.
+- Re-test with static `ModelT` and xsimd before deciding whether to keep or
+  remove the separable family.
 
 ### 5. Activation Cost Matters, But Do Not Optimize It First
 
@@ -355,6 +426,8 @@ honest than a single `>= 1x` gate.
 
 ### Phase 1: Backend Benchmark Matrix
 
+Status: partly implemented in the trainer app.
+
 Build and package native validator variants:
 
 - `rtneural-validator-stl`
@@ -383,6 +456,8 @@ Write a report that includes:
 
 ### Phase 2: Static `ModelT` Benchmarks
 
+Status: deferred to plugin/native runtime work.
+
 For built-in presets, generate static RTNeural model types:
 
 - `wavenet_tcn_fast`
@@ -402,10 +477,11 @@ specializations or stay fully dynamic.
 
 ### Phase 3: Separable WaveNet Experiment
 
-Add experimental presets:
+Status: parity-safe in the trainer app, not promoted.
+
+Added experimental preset:
 
 - `wavenet_tcn_separable_fast`
-- `wavenet_tcn_separable_balanced`
 
 Use grouped dilated Conv1D plus pointwise mixing.
 
@@ -415,6 +491,12 @@ Success criteria:
 - RTF improves by at least 1.5x over the comparable full Conv1D WaveNet.
 - Preview quality stays close to current WaveNet balanced on clean, crunch,
   rhythm, lead, and pedal captures.
+
+Current result:
+
+- Native parity passes.
+- Dynamic JSON RTF did not improve over `wavenet_tcn_balanced`.
+- Next meaningful test is static/plugin-side, not more trainer-side copy.
 
 ### Phase 4: Product Runtime Gate
 
@@ -428,6 +510,8 @@ Update the export report and UI:
   but costs too much CPU.
 
 ### Phase 5: JUCE Plugin Prototype
+
+Status: remaining plugin-side work.
 
 Build a minimal RTNeural playback plugin:
 
@@ -458,14 +542,34 @@ These are promising but should wait:
 
 ## Concrete Next Actions
 
+Done in the trainer app:
+
 1. Change `native/rtneural-validator` so the RTNeural backend is configurable.
-2. Add CI/build scripts for STL, Eigen, and xsimd validator variants.
-3. Run backend benchmarks on existing WaveNet balanced and quality exports.
-4. Add a generated/static `ModelT` benchmark path for built-in presets.
-5. Add grouped Conv1D golden fixtures before creating separable WaveNet presets.
-6. Add an experimental separable WaveNet preset and compare it against balanced.
-7. Update export report language from `>= 1x` to a plugin-headroom scale.
-8. Start a small JUCE RTNeural playback plugin once backend/static data is in.
+2. Add local build/packaging support for Eigen, STL, and optional xsimd
+   validator variants.
+3. Run local backend benchmarks on WaveNet fast, balanced, quality, and
+   separable fixtures.
+4. Add grouped Conv1D golden fixtures.
+5. Add an experimental separable WaveNet preset and compare it against balanced.
+
+Remaining trainer-app work:
+
+1. Store a full backend benchmark matrix in export packages.
+2. Surface fastest passing backend and plugin-headroom warnings in the export
+   UI.
+3. Initialize or vendor xsimd for local/CI builds if we want xsimd data.
+
+Remaining plugin-side work:
+
+1. Add generated/static `ModelT` benchmark paths for built-in presets.
+2. Build a minimal JUCE RTNeural playback plugin.
+3. Load/exported models off the audio thread and atomically swap prepared model
+   instances.
+4. Keep `processBlock()` allocation-free, lock-free, file-IO-free, and
+   denormal-safe.
+5. Run pluginval plus small-buffer DAW smoke tests at 32/64/128 sample buffers.
+6. Decide whether static `ModelT`, xsimd, or a custom fused Conv1D path is
+   needed for quality WaveNet in a shipping plugin.
 
 ## What This Means For The Project
 

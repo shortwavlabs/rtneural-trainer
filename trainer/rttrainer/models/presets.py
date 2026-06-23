@@ -43,6 +43,28 @@ def wavenet_tcn_preset(
     )
 
 
+def wavenet_tcn_separable_preset(
+    preset_id: str,
+    *,
+    hidden_size: int,
+    num_layers: int,
+    conv_filters: int,
+    conv_dilations: tuple[int, ...],
+) -> PresetConfig:
+    return PresetConfig(
+        preset_id=preset_id,
+        architecture="separable_conv1d",
+        input_size=1,
+        hidden_size=hidden_size,
+        output_size=1,
+        num_layers=num_layers,
+        kernel_size=3,
+        conv_filters=conv_filters,
+        conv_dilations=conv_dilations,
+        default_loss="mrstft_preemphasis",
+    )
+
+
 PRESETS: dict[str, PresetConfig] = {
     "dense_only": PresetConfig(
         preset_id="dense_only",
@@ -139,6 +161,13 @@ PRESETS: dict[str, PresetConfig] = {
         num_layers=10,
         conv_filters=20,
         conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
+    ),
+    "wavenet_tcn_separable_fast": wavenet_tcn_separable_preset(
+        "wavenet_tcn_separable_fast",
+        hidden_size=16,
+        num_layers=8,
+        conv_filters=16,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128),
     ),
     "conv_gru_hybrid": PresetConfig(
         preset_id="conv_gru_hybrid",
@@ -264,6 +293,54 @@ def build_keras_model(config: PresetConfig, keras):
                 )
             if config.prelu:
                 model_layers.append(layers.PReLU(shared_axes=[1], name=f"prelu{suffix}"))
+        model_layers.append(
+            layers.Dense(
+                config.output_size,
+                activation=config.output_activation,
+                name="dense_out",
+            )
+        )
+    elif config.architecture == "separable_conv1d":
+        block_count = max(1, config.num_layers)
+        filters = config.conv_filters or config.hidden_size
+        dilations = config.conv_dilations or tuple(1 for _index in range(block_count))
+        for block_index in range(block_count):
+            suffix = "" if block_count == 1 else f"_{block_index + 1}"
+            dilation = dilations[min(block_index, len(dilations) - 1)]
+            if block_index == 0:
+                model_layers.append(
+                    layers.Conv1D(
+                        filters,
+                        kernel_size=config.kernel_size,
+                        dilation_rate=dilation,
+                        padding="causal",
+                        activation="tanh",
+                        name=f"conv1d_expand{suffix}",
+                    )
+                )
+                continue
+
+            model_layers.extend(
+                [
+                    layers.Conv1D(
+                        filters,
+                        kernel_size=config.kernel_size,
+                        dilation_rate=dilation,
+                        padding="causal",
+                        groups=filters,
+                        activation=None,
+                        name=f"depthwise_conv1d{suffix}",
+                    ),
+                    layers.Conv1D(
+                        filters,
+                        kernel_size=1,
+                        dilation_rate=1,
+                        padding="causal",
+                        activation="tanh",
+                        name=f"pointwise_conv1d{suffix}",
+                    ),
+                ]
+            )
         model_layers.append(
             layers.Dense(
                 config.output_size,

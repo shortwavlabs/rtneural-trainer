@@ -18,5 +18,6 @@ trainer/dist/
 trainer/build/
 trainer/*.egg-info/
 native/rtneural-validator/build/
+native/rtneural-validator/build-*/
 projects/*
 !projects/.gitkeep

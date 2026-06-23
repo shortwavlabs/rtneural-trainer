@@ -17,6 +17,7 @@ TAURI_DIR = APP_DIR / "src-tauri"
 BINARIES_DIR = TAURI_DIR / "binaries"
 TRAINER_DIR = ROOT / "trainer"
 VALIDATOR_DIR = ROOT / "native" / "rtneural-validator"
+VALIDATOR_BACKENDS = ("stl", "eigen", "xsimd")
 
 
 def main() -> int:
@@ -37,6 +38,18 @@ def main() -> int:
         "--validator-source",
         default=os.environ.get("RTNEURAL_VALIDATOR_SOURCE"),
         help="Copy a prebuilt rtneural-validator executable instead of building CMake.",
+    )
+    parser.add_argument(
+        "--validator-backend",
+        choices=VALIDATOR_BACKENDS,
+        default=os.environ.get("RTNEURAL_VALIDATOR_BACKEND", "eigen"),
+        help="RTNeural backend to use when building the validator sidecar.",
+    )
+    parser.add_argument(
+        "--validator-avx",
+        action=argparse.BooleanOptionalAction,
+        default=env_flag("RTNEURAL_VALIDATOR_AVX"),
+        help="Enable RTNeural AVX flags for x86/x64 validator builds when supported.",
     )
     parser.add_argument(
         "--skip-trainer",
@@ -75,7 +88,7 @@ def main() -> int:
         validator_source = (
             resolve_user_path(args.validator_source)
             if args.validator_source
-            else build_rtneural_validator()
+            else build_rtneural_validator(args.validator_backend, args.validator_avx)
         )
         install_sidecar(validator_source, "rtneural-validator", target_triple)
 
@@ -166,17 +179,23 @@ def build_rttrainer() -> Path:
     return output
 
 
-def build_rtneural_validator() -> Path:
-    build_dir = VALIDATOR_DIR / "build-release"
+def build_rtneural_validator(backend: str, avx: bool) -> Path:
+    backend = normalize_validator_backend(backend)
+    suffix = f"{backend}-avx" if avx else backend
+    build_dir = VALIDATOR_DIR / f"build-release-{suffix}"
+    configure_command = [
+        "cmake",
+        "-S",
+        str(VALIDATOR_DIR),
+        "-B",
+        str(build_dir),
+        "-DCMAKE_BUILD_TYPE=Release",
+        f"-DRTNEURAL_VALIDATOR_BACKEND={backend}",
+    ]
+    if avx:
+        configure_command.append("-DRTNEURAL_USE_AVX=ON")
     run(
-        [
-            "cmake",
-            "-S",
-            str(VALIDATOR_DIR),
-            "-B",
-            str(build_dir),
-            "-DCMAKE_BUILD_TYPE=Release",
-        ],
+        configure_command,
         cwd=ROOT,
     )
     run(["cmake", "--build", str(build_dir), "--config", "Release"], cwd=ROOT)
@@ -211,12 +230,38 @@ def write_dev_validator_shim(destination: Path) -> None:
     script = f"""#!/usr/bin/env bash
 set -euo pipefail
 ROOT={shell_quote(str(ROOT))}
-VALIDATOR="$ROOT/native/rtneural-validator/build/rtneural-validator"
-if [[ ! -x "$VALIDATOR" ]]; then
-  echo "rtneural-validator dev binary not found. Build it with: cmake --build native/rtneural-validator/build" >&2
-  exit 127
+backend="${{RTNEURAL_VALIDATOR_BACKEND:-eigen}}"
+case "$backend" in
+  stl|eigen|xsimd) ;;
+  *)
+    echo "Unsupported RTNEURAL_VALIDATOR_BACKEND='$backend'. Use stl, eigen, or xsimd." >&2
+    exit 2
+    ;;
+esac
+candidates=()
+if [[ -n "${{RTNEURAL_VALIDATOR_DEV_BINARY:-}}" ]]; then
+  candidates+=("$RTNEURAL_VALIDATOR_DEV_BINARY")
 fi
-exec "$VALIDATOR" "$@"
+if [[ "${{RTNEURAL_VALIDATOR_AVX:-}}" =~ ^(1|true|TRUE|on|ON|yes|YES)$ ]]; then
+  candidates+=(
+    "$ROOT/native/rtneural-validator/build-$backend-avx/rtneural-validator"
+    "$ROOT/native/rtneural-validator/build-release-$backend-avx/rtneural-validator"
+  )
+fi
+candidates+=(
+  "$ROOT/native/rtneural-validator/build-$backend/rtneural-validator"
+  "$ROOT/native/rtneural-validator/build-release-$backend/rtneural-validator"
+  "$ROOT/native/rtneural-validator/build/rtneural-validator"
+  "$ROOT/native/rtneural-validator/build-release/rtneural-validator"
+)
+for candidate in "${{candidates[@]}}"; do
+  if [[ -x "$candidate" ]]; then
+    exec "$candidate" "$@"
+  fi
+done
+echo "rtneural-validator dev binary not found for backend '$backend'." >&2
+echo "Build it with: cmake -S native/rtneural-validator -B native/rtneural-validator/build-$backend -DRTNEURAL_VALIDATOR_BACKEND=$backend && cmake --build native/rtneural-validator/build-$backend" >&2
+  exit 127
 """
     write_executable_text(destination, script)
     print(f"installed development rtneural-validator shim: {destination.relative_to(ROOT)}")
@@ -231,6 +276,19 @@ def make_executable(path: Path) -> None:
     if platform.system() != "Windows":
         mode = path.stat().st_mode
         path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def normalize_validator_backend(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in VALIDATOR_BACKENDS:
+        choices = ", ".join(VALIDATOR_BACKENDS)
+        raise ValueError(f"Unsupported validator backend '{value}'. Use one of: {choices}")
+    return normalized
+
+
+def env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def run(
