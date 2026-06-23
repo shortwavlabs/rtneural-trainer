@@ -20,6 +20,8 @@ import {
   Square,
   Trash2,
   X,
+  ZoomIn,
+  ZoomOut,
   type LucideIcon,
 } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -53,6 +55,9 @@ import type {
 } from "./types";
 
 type TabId = "capture" | "align" | "train" | "evaluate" | "export";
+
+const ALIGNMENT_WAVEFORM_WINDOWS = [2048, 4096, 8192, 16384, 32768] as const;
+const DEFAULT_ALIGNMENT_WAVEFORM_WINDOW_INDEX = 1;
 
 type CaptureAnalyzePayload = {
   inputPath: string;
@@ -1624,6 +1629,9 @@ function AlignView({
   const [waveform, setWaveform] = useState<ProjectWaveform | null>(null);
   const [waveformBusy, setWaveformBusy] = useState(false);
   const [waveformError, setWaveformError] = useState<string | null>(null);
+  const [waveformWindowIndex, setWaveformWindowIndex] = useState(
+    DEFAULT_ALIGNMENT_WAVEFORM_WINDOW_INDEX,
+  );
   const autoLatency =
     project.audio?.latency_auto_samples ?? project.audio?.latency_samples ?? 0;
   const effectiveLatency = autoLatency + nudge;
@@ -1637,6 +1645,11 @@ function AlignView({
   const latencyCandidates = latencyCandidateDetails(project.audio);
   const latencyAgreement = finiteNumber(project.audio?.latency?.agreement);
   const latencyMargin = finiteNumber(project.audio?.latency?.score_margin);
+  const waveformWindowSamples =
+    ALIGNMENT_WAVEFORM_WINDOWS[waveformWindowIndex] ??
+    ALIGNMENT_WAVEFORM_WINDOWS[DEFAULT_ALIGNMENT_WAVEFORM_WINDOW_INDEX];
+  const canZoomIn = waveformWindowIndex > 0;
+  const canZoomOut = waveformWindowIndex < ALIGNMENT_WAVEFORM_WINDOWS.length - 1;
 
   useEffect(() => {
     setNudge(project.audio?.manual_latency_adjustment_samples ?? 0);
@@ -1653,7 +1666,11 @@ function AlignView({
 
     setWaveformBusy(true);
     api
-      .getProjectWaveform({ project_id: project.id, bins: 420, window_samples: 4096 })
+      .getProjectWaveform({
+        project_id: project.id,
+        bins: 420,
+        window_samples: waveformWindowSamples,
+      })
       .then((nextWaveform) => {
         if (mounted) setWaveform(nextWaveform);
       })
@@ -1667,7 +1684,7 @@ function AlignView({
     return () => {
       mounted = false;
     };
-  }, [project.id, project.updated_at]);
+  }, [project.id, project.updated_at, waveformWindowSamples]);
 
   if (!project.audio) {
     return (
@@ -1693,6 +1710,17 @@ function AlignView({
           error={waveformError}
           waveform={waveform}
           alignmentShiftSamples={nudge - savedNudge}
+          zoomLabel={`${waveformWindowSamples.toLocaleString()} samples`}
+          canZoomIn={canZoomIn}
+          canZoomOut={canZoomOut}
+          onZoomIn={() => {
+            setWaveformWindowIndex((current) => Math.max(0, current - 1));
+          }}
+          onZoomOut={() => {
+            setWaveformWindowIndex((current) =>
+              Math.min(ALIGNMENT_WAVEFORM_WINDOWS.length - 1, current + 1),
+            );
+          }}
         />
       </div>
       <div className="panel span-4">
@@ -3454,12 +3482,22 @@ function WaveformOverlay({
   error,
   waveform,
   alignmentShiftSamples,
+  zoomLabel,
+  canZoomIn,
+  canZoomOut,
+  onZoomIn,
+  onZoomOut,
 }: {
   latency: number;
   loading: boolean;
   error: string | null;
   waveform: ProjectWaveform | null;
   alignmentShiftSamples: number;
+  zoomLabel: string;
+  canZoomIn: boolean;
+  canZoomOut: boolean;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
 }) {
   const normalizePeak = waveform
     ? Math.max(waveform.input.peak, waveform.target.peak, 0.000001)
@@ -3472,12 +3510,37 @@ function WaveformOverlay({
       aria-label="Prepared dry input and processed target waveforms"
     >
       <div className="waveform-meta">
-        <span>Prepared waveform</span>
-        <small>
-          {waveform
-            ? `${formatSeconds(waveform.duration_seconds)} · ${waveform.sample_rate.toLocaleString()} Hz`
-            : "Loading actual prepared audio"}
-        </small>
+        <div>
+          <span>Prepared waveform</span>
+          <small>
+            {waveform
+              ? `${formatSeconds(waveform.duration_seconds)} · ${waveform.sample_rate.toLocaleString()} Hz`
+              : "Loading actual prepared audio"}
+          </small>
+        </div>
+        <div className="waveform-zoom" aria-label="Waveform zoom">
+          <button
+            className="icon-button"
+            type="button"
+            disabled={!canZoomOut}
+            onClick={onZoomOut}
+            title="Zoom waveform out"
+            aria-label="Zoom waveform out"
+          >
+            <ZoomOut size={14} />
+          </button>
+          <span>{zoomLabel}</span>
+          <button
+            className="icon-button"
+            type="button"
+            disabled={!canZoomIn}
+            onClick={onZoomIn}
+            title="Zoom waveform in"
+            aria-label="Zoom waveform in"
+          >
+            <ZoomIn size={14} />
+          </button>
+        </div>
       </div>
       <div className="latency-marker">
         <span>{latency} samples</span>

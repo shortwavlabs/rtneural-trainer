@@ -208,6 +208,21 @@ describe("Tauri UI smoke", () => {
     expect(await screen.findByText("Latency Alignment")).toBeInTheDocument();
     expect(await screen.findByText("Window agreement")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /10 samples/ })).toBeInTheDocument();
+    expect(screen.getByText("4,096 samples")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Zoom waveform in" }));
+    expect(await screen.findByText("2,048 samples")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        state.commands.some(
+          (item) =>
+            item.command === "get_project_waveform" &&
+            (item.args?.payload as { window_samples?: number } | undefined)?.window_samples ===
+              2048,
+        ),
+      ).toBe(true);
+    });
+    await user.click(screen.getByRole("button", { name: "Zoom waveform out" }));
+    expect(await screen.findByText("4,096 samples")).toBeInTheDocument();
     await waitFor(() => {
       expect(document.querySelector(".alignment-wave-track.target .wave-bars")).toBeTruthy();
     });

@@ -847,9 +847,15 @@ dd,
 
 .waveform-meta {
   display: flex;
-  align-items: baseline;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.waveform-meta > div:first-child {
+  display: grid;
+  gap: 4px;
 }
 
 .waveform-meta span,
@@ -862,6 +868,21 @@ dd,
 .alignment-wave-label small {
   color: #9da9a1;
   font-size: 0.76rem;
+}
+
+.waveform-zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.waveform-zoom span {
+  min-width: 104px;
+  color: #cdd5cf;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
 }
 
 .alignment-wave-track {
