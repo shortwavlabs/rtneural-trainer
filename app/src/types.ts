@@ -331,6 +331,7 @@ export interface ProjectWaveform {
 export interface ProjectWaveformRequest {
   project_id: string;
   bins?: number;
+  window_samples?: number;
 }
 
 export interface UpdateNotesRequest {

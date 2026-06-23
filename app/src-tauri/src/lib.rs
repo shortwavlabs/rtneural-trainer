@@ -346,6 +346,8 @@ struct ProjectWaveformRequest {
     project_id: String,
     #[serde(default = "default_waveform_bins")]
     bins: usize,
+    #[serde(default)]
+    window_samples: usize,
 }
 
 #[derive(Deserialize)]
@@ -805,8 +807,14 @@ fn get_project_waveform(
     ensure_artifact_inside(&project_dir, &target_path)?;
 
     let bins = payload.bins.clamp(64, 600);
-    let input = waveform_track("input", "Dry input", &input_path, bins)?;
-    let target = waveform_track("target", "Processed target", &target_path, bins)?;
+    let (input, target) = if payload.window_samples > 0 {
+        alignment_waveform_tracks(&input_path, &target_path, bins, payload.window_samples)?
+    } else {
+        (
+            waveform_track("input", "Dry input", &input_path, bins)?,
+            waveform_track("target", "Processed target", &target_path, bins)?,
+        )
+    };
     Ok(ProjectWaveform {
         project_id: payload.project_id,
         sample_rate: input.sample_rate,
@@ -3502,6 +3510,71 @@ fn prepared_audio_path(
     Ok(artifact_path(project_dir, stored_path))
 }
 
+fn alignment_waveform_tracks(
+    input_path: &Path,
+    target_path: &Path,
+    bins: usize,
+    window_samples: usize,
+) -> Result<(WaveformTrack, WaveformTrack), String> {
+    let (input_sample_rate, input_samples) = read_wav_mono_samples(input_path)?;
+    let (target_sample_rate, target_samples) = read_wav_mono_samples(target_path)?;
+    if input_sample_rate != target_sample_rate {
+        return Err("Prepared waveform sample rates differ.".to_string());
+    }
+
+    let length = input_samples.len().min(target_samples.len());
+    if length == 0 {
+        let input_summary = summarize_wav_samples(input_sample_rate, &[], bins);
+        let target_summary = summarize_wav_samples(target_sample_rate, &[], bins);
+        return Ok((
+            waveform_track_from_summary("input", "Dry input", input_path, input_summary),
+            waveform_track_from_summary("target", "Processed target", target_path, target_summary),
+        ));
+    }
+
+    let window = window_samples.clamp(256, length);
+    let start = active_alignment_window_start(&input_samples, &target_samples, length, window);
+    let end = (start + window).min(length);
+    let input_summary = summarize_wav_samples(input_sample_rate, &input_samples[start..end], bins);
+    let target_summary =
+        summarize_wav_samples(target_sample_rate, &target_samples[start..end], bins);
+
+    Ok((
+        waveform_track_from_summary("input", "Dry input", input_path, input_summary),
+        waveform_track_from_summary("target", "Processed target", target_path, target_summary),
+    ))
+}
+
+fn active_alignment_window_start(
+    input_samples: &[f64],
+    target_samples: &[f64],
+    length: usize,
+    window_samples: usize,
+) -> usize {
+    if length <= window_samples {
+        return 0;
+    }
+
+    let step = (window_samples / 8).max(1);
+    let max_start = length - window_samples;
+    let mut best_start = 0usize;
+    let mut best_energy = -1.0_f64;
+    for start in (0..=max_start).step_by(step) {
+        let end = start + window_samples;
+        let mut energy = 0.0_f64;
+        for index in start..end {
+            let input = input_samples.get(index).copied().unwrap_or(0.0);
+            let target = target_samples.get(index).copied().unwrap_or(0.0);
+            energy += input * input + target * target;
+        }
+        if energy > best_energy {
+            best_energy = energy;
+            best_start = start;
+        }
+    }
+    best_start
+}
+
 fn waveform_track(
     kind: &str,
     label: &str,
@@ -3509,7 +3582,16 @@ fn waveform_track(
     bins: usize,
 ) -> Result<WaveformTrack, String> {
     let summary = read_wav_preview_summary(path, bins)?;
-    Ok(WaveformTrack {
+    Ok(waveform_track_from_summary(kind, label, path, summary))
+}
+
+fn waveform_track_from_summary(
+    kind: &str,
+    label: &str,
+    path: &Path,
+    summary: WavPreviewSummary,
+) -> WaveformTrack {
+    WaveformTrack {
         kind: kind.to_string(),
         label: label.to_string(),
         path: path.display().to_string(),
@@ -3517,10 +3599,15 @@ fn waveform_track(
         duration_seconds: summary.duration_seconds,
         peak: summary.peak,
         waveform: summary.waveform,
-    })
+    }
 }
 
 fn read_wav_preview_summary(path: &Path, bins: usize) -> Result<WavPreviewSummary, String> {
+    let (sample_rate, samples) = read_wav_mono_samples(path)?;
+    Ok(summarize_wav_samples(sample_rate, &samples, bins))
+}
+
+fn read_wav_mono_samples(path: &Path) -> Result<(u32, Vec<f64>), String> {
     let bytes = fs::read(path).map_err(to_error)?;
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return Err(format!("{} is not a RIFF/WAVE file.", path.display()));
@@ -3599,35 +3686,7 @@ fn read_wav_preview_summary(path: &Path, bins: usize) -> Result<WavPreviewSummar
         data_range.ok_or_else(|| format!("{} is missing audio data.", path.display()))?;
     let bytes_per_frame = usize::from(channels) * 2;
     let frame_count = (data_end - data_start) / bytes_per_frame;
-    if frame_count == 0 {
-        let bin_count = bins.max(1);
-        return Ok(WavPreviewSummary {
-            sample_rate,
-            duration_seconds: 0.0,
-            peak: 0.0,
-            peaks: vec![0.0; bin_count],
-            waveform: vec![
-                WaveformBin {
-                    min: 0.0,
-                    max: 0.0,
-                    peak: 0.0
-                };
-                bin_count
-            ],
-        });
-    }
-
-    let bin_count = bins.max(1);
-    let mut peaks = vec![0.0_f64; bin_count];
-    let mut waveform = vec![
-        WaveformBin {
-            min: 0.0,
-            max: 0.0,
-            peak: 0.0
-        };
-        bin_count
-    ];
-    let mut peak = 0.0_f64;
+    let mut samples = Vec::with_capacity(frame_count);
     for frame_index in 0..frame_count {
         let frame_start = data_start + frame_index * bytes_per_frame;
         let mut frame_value = 0.0_f64;
@@ -3641,22 +3700,42 @@ fn read_wav_preview_summary(path: &Path, bins: usize) -> Result<WavPreviewSummar
             frame_value += f64::from(sample) / 32768.0;
         }
         frame_value /= f64::from(channels);
+        samples.push(frame_value);
+    }
+
+    Ok((sample_rate, samples))
+}
+
+fn summarize_wav_samples(sample_rate: u32, samples: &[f64], bins: usize) -> WavPreviewSummary {
+    let bin_count = bins.max(1);
+    let mut peaks = vec![0.0_f64; bin_count];
+    let mut waveform = vec![
+        WaveformBin {
+            min: 0.0,
+            max: 0.0,
+            peak: 0.0
+        };
+        bin_count
+    ];
+    let mut peak = 0.0_f64;
+    let frame_count = samples.len();
+    for (frame_index, frame_value) in samples.iter().copied().enumerate() {
         let frame_peak = frame_value.abs();
         peak = peak.max(frame_peak);
-        let bin = ((frame_index * peaks.len()) / frame_count).min(peaks.len() - 1);
+        let bin = ((frame_index * peaks.len()) / frame_count.max(1)).min(peaks.len() - 1);
         peaks[bin] = peaks[bin].max(frame_peak);
         waveform[bin].min = waveform[bin].min.min(frame_value);
         waveform[bin].max = waveform[bin].max.max(frame_value);
         waveform[bin].peak = waveform[bin].peak.max(frame_peak);
     }
 
-    Ok(WavPreviewSummary {
+    WavPreviewSummary {
         sample_rate,
         duration_seconds: frame_count as f64 / f64::from(sample_rate),
         peak,
         peaks,
         waveform,
-    })
+    }
 }
 
 fn open_folder(path: &Path) -> Result<(), String> {

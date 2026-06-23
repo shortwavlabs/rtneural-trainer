@@ -883,8 +883,17 @@ dd,
   overflow: visible;
 }
 
+.soundcloud-wave.shifted {
+  overflow: hidden;
+}
+
 .soundcloud-wave.compact {
   height: 32px;
+}
+
+.wave-bars {
+  transition: transform 90ms linear;
+  will-change: transform;
 }
 
 .wave-centerline {

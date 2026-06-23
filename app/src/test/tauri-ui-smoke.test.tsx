@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../App";
@@ -208,6 +208,13 @@ describe("Tauri UI smoke", () => {
     expect(await screen.findByText("Latency Alignment")).toBeInTheDocument();
     expect(await screen.findByText("Window agreement")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /10 samples/ })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.querySelector(".alignment-wave-track.target .wave-bars")).toBeTruthy();
+    });
+    const targetBars = document.querySelector(".alignment-wave-track.target .wave-bars");
+    expect(targetBars).not.toHaveAttribute("transform");
+    fireEvent.change(screen.getByRole("slider"), { target: { value: "42" } });
+    expect(targetBars).toHaveAttribute("transform", expect.stringMatching(/^translate\(-/));
 
     await user.click(tab("Train"));
     expect(await screen.findByText("Training Setup")).toBeInTheDocument();
@@ -266,8 +273,10 @@ function installTauriSmokeBackend(projects: ProjectDetail[]): SmokeState {
         return [] satisfies SidecarProgressEvent[];
       case "get_project":
         return clone(requireProject(state, String(args?.projectId)));
-      case "get_project_waveform":
-        return clone(projectWaveformFixture(String((args?.payload as { project_id: string }).project_id)));
+      case "get_project_waveform": {
+        const payload = args?.payload as { project_id: string; window_samples?: number };
+        return clone(projectWaveformFixture(payload.project_id, payload.window_samples));
+      }
       case "create_sample_project":
         return clone(addProject(state, sampleProjectFixture()));
       case "create_project": {
@@ -667,19 +676,21 @@ function runPreviewFixture(projectId: string, runId: string): RunPreview {
   };
 }
 
-function projectWaveformFixture(projectId: string): ProjectWaveform {
+function projectWaveformFixture(projectId: string, windowSamples = 4096): ProjectWaveform {
+  const sampleRate = 48_000;
+  const durationSeconds = windowSamples / sampleRate;
   return {
-    duration_seconds: 120,
-    input: waveformTrackFixture("input", "Dry input"),
+    duration_seconds: durationSeconds,
+    input: waveformTrackFixture("input", "Dry input", durationSeconds),
     project_id: projectId,
-    sample_rate: 48_000,
-    target: waveformTrackFixture("target", "Processed target"),
+    sample_rate: sampleRate,
+    target: waveformTrackFixture("target", "Processed target", durationSeconds),
   };
 }
 
-function waveformTrackFixture(kind: "input" | "target", label: string) {
+function waveformTrackFixture(kind: "input" | "target", label: string, durationSeconds: number) {
   return {
-    duration_seconds: 120,
+    duration_seconds: durationSeconds,
     kind,
     label,
     path: `/waveforms/${kind}.wav`,

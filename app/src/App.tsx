@@ -1653,7 +1653,7 @@ function AlignView({
 
     setWaveformBusy(true);
     api
-      .getProjectWaveform({ project_id: project.id, bins: 240 })
+      .getProjectWaveform({ project_id: project.id, bins: 420, window_samples: 4096 })
       .then((nextWaveform) => {
         if (mounted) setWaveform(nextWaveform);
       })
@@ -1692,6 +1692,7 @@ function AlignView({
           loading={waveformBusy}
           error={waveformError}
           waveform={waveform}
+          alignmentShiftSamples={nudge - savedNudge}
         />
       </div>
       <div className="panel span-4">
@@ -3219,11 +3220,17 @@ function SoundCloudWaveform({
   peaks = [],
   normalizePeak,
   compact = false,
+  shiftSamples = 0,
+  sampleRate,
+  durationSeconds,
 }: {
   waveform: WaveformBin[];
   peaks?: number[];
   normalizePeak?: number;
   compact?: boolean;
+  shiftSamples?: number;
+  sampleRate?: number;
+  durationSeconds?: number;
 }) {
   const bins = waveform.length ? waveform : waveformFromPeaks(peaks);
   const visibleBins = bins.length ? bins : waveformFromPeaks(Array.from({ length: 96 }, () => 0));
@@ -3236,10 +3243,20 @@ function SoundCloudWaveform({
     normalizePeak ??
     Math.max(...visibleBins.map((bin) => bin.peak), 0.000001);
   const width = Math.max(1, visibleBins.length * (barWidth + gap));
+  const sampleCount =
+    sampleRate && durationSeconds ? Math.max(1, sampleRate * durationSeconds) : 0;
+  const shiftX = sampleCount ? (-shiftSamples / sampleCount) * width : 0;
+  const barsTransform = Math.abs(shiftX) > 0.0001 ? `translate(${shiftX} 0)` : undefined;
 
   return (
     <svg
-      className={compact ? "soundcloud-wave compact" : "soundcloud-wave"}
+      className={[
+        "soundcloud-wave",
+        compact ? "compact" : null,
+        barsTransform ? "shifted" : null,
+      ]
+        .filter(Boolean)
+        .join(" ")}
       viewBox={`0 0 ${width} ${height}`}
       preserveAspectRatio="none"
       aria-hidden="true"
@@ -3251,27 +3268,29 @@ function SoundCloudWaveform({
         y1={center}
         y2={center}
       />
-      {visibleBins.map((bin, index) => {
-        const positive = clamp01(Math.max(0, bin.max) / peak);
-        const negative = clamp01(Math.abs(Math.min(0, bin.min)) / peak);
-        const fallback = clamp01(bin.peak / peak) * 0.5;
-        const topAmount = Math.max(positive, fallback);
-        const bottomAmount = Math.max(negative, fallback);
-        const x = index * (barWidth + gap) + barWidth / 2;
-        const y1 = center - Math.max(compact ? 1.5 : 2.5, topAmount * usableHeight);
-        const y2 = center + Math.max(compact ? 1.5 : 2.5, bottomAmount * usableHeight);
-        return (
-          <line
-            className="wave-bar"
-            key={`${index}-${bin.min}-${bin.max}`}
-            x1={x}
-            x2={x}
-            y1={y1}
-            y2={y2}
-            strokeWidth={barWidth}
-          />
-        );
-      })}
+      <g className="wave-bars" transform={barsTransform}>
+        {visibleBins.map((bin, index) => {
+          const positive = clamp01(Math.max(0, bin.max) / peak);
+          const negative = clamp01(Math.abs(Math.min(0, bin.min)) / peak);
+          const fallback = clamp01(bin.peak / peak) * 0.5;
+          const topAmount = Math.max(positive, fallback);
+          const bottomAmount = Math.max(negative, fallback);
+          const x = index * (barWidth + gap) + barWidth / 2;
+          const y1 = center - Math.max(compact ? 1.5 : 2.5, topAmount * usableHeight);
+          const y2 = center + Math.max(compact ? 1.5 : 2.5, bottomAmount * usableHeight);
+          return (
+            <line
+              className="wave-bar"
+              key={`${index}-${bin.min}-${bin.max}`}
+              x1={x}
+              x2={x}
+              y1={y1}
+              y2={y2}
+              strokeWidth={barWidth}
+            />
+          );
+        })}
+      </g>
     </svg>
   );
 }
@@ -3434,11 +3453,13 @@ function WaveformOverlay({
   loading,
   error,
   waveform,
+  alignmentShiftSamples,
 }: {
   latency: number;
   loading: boolean;
   error: string | null;
   waveform: ProjectWaveform | null;
+  alignmentShiftSamples: number;
 }) {
   const normalizePeak = waveform
     ? Math.max(waveform.input.peak, waveform.target.peak, 0.000001)
@@ -3474,6 +3495,7 @@ function WaveformOverlay({
           <AlignmentWaveformTrack
             track={waveform.target}
             normalizePeak={normalizePeak}
+            shiftSamples={alignmentShiftSamples}
           />
         </>
       ) : (
@@ -3486,9 +3508,11 @@ function WaveformOverlay({
 function AlignmentWaveformTrack({
   track,
   normalizePeak,
+  shiftSamples = 0,
 }: {
   track: ProjectWaveformTrack;
   normalizePeak: number;
+  shiftSamples?: number;
 }) {
   return (
     <div className={`alignment-wave-track ${track.kind}`}>
@@ -3501,6 +3525,9 @@ function AlignmentWaveformTrack({
       <SoundCloudWaveform
         waveform={track.waveform}
         normalizePeak={normalizePeak}
+        shiftSamples={shiftSamples}
+        sampleRate={track.sample_rate}
+        durationSeconds={track.duration_seconds}
       />
     </div>
   );
