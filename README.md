@@ -248,7 +248,7 @@ native/rtneural-validator/build/rtneural-validator benchmark \
   --block-sizes 16,32,64,128,256,512 \
   --channels 1,2 \
   --passes 3 \
-  --warmup-blocks 4 \
+  --warmup-blocks 8 \
   --min-realtime-factor 1.0 \
   --report projects/demo/exports/export_001/native-benchmark-report.json
 ```
@@ -258,6 +258,12 @@ model, compares against mono reference audio, and writes structured validation
 and benchmark reports. The benchmark report includes a worst-case real-time
 factor across the requested block-size/channel matrix, per-case timings, model
 size, architecture metadata, latency, and inferred Conv1D receptive field.
+Desktop exports also write `native-benchmark-matrix.json` and embed it in
+`package.json` as `benchmark_matrix`; when backend-specific validator builds are
+available, this compares Eigen, STL, xsimd, and optional AVX variants and marks
+the fastest passing backend. Run
+`pnpm --filter rtneural-trainer-app build:validators` before export when you
+want the local matrix to include every available native backend.
 
 ## Use The Trainer CLI
 
@@ -440,6 +446,7 @@ The export folder receives:
 - `model.rtneural.json`
 - `validation-report.json`
 - `benchmark-report.json`
+- `native-benchmark-matrix.json` when exported from the desktop app
 - `parity-snapshot.json`
 - `parity-snapshot-input.wav`
 - `parity-snapshot-expected.wav`

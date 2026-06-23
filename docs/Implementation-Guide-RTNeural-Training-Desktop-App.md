@@ -43,8 +43,9 @@ Implemented:
    candidate review, and focused error recovery copy.
 8. Offline preview playback for target, prediction, residual, and recurrent
    chunk-reset diagnostic WAVs, plus peak-envelope waveform comparison.
-9. Rich export package metadata, validation/benchmark report display, and
-   open-export-folder support.
+9. Rich export package metadata, validation report display, selected native
+   benchmark report display, full native backend benchmark matrix packaging,
+   fastest-backend/headroom export UI, and open-export-folder support.
 10. Development sidecar shims, production sidecar packaging, release sidecar
     smoke tests, Tauri bundle smoke tests, and release artifact manifests.
 11. First-run generated sample project, setup/empty states, visible focus

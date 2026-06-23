@@ -160,13 +160,16 @@ Implemented app-side:
 - Added `RTNEURAL_VALIDATOR_BACKEND=stl|eigen|xsimd`.
 - Added sidecar packaging flags for backend and AVX selection.
 - Added a local backend build helper.
+- Export now writes `native-benchmark-matrix.json`, embeds it in
+  `package.json` as `benchmark_matrix`, and surfaces fastest backend/headroom
+  in the Export UI.
 
 Still pending:
 
-- Record a full backend matrix in each export package instead of one selected
-  backend report.
-- Let the UI label the fastest passing backend.
-- Build xsimd once the RTNeural xsimd headers/submodule are present.
+- Package every backend-specific validator sidecar in signed release bundles if
+  we want production apps to benchmark all variants offline.
+- Build xsimd once the RTNeural xsimd headers/submodule are present on CI and
+  release builders.
 
 Expected outcome:
 
@@ -426,7 +429,7 @@ honest than a single `>= 1x` gate.
 
 ### Phase 1: Backend Benchmark Matrix
 
-Status: partly implemented in the trainer app.
+Status: implemented app-side for available native validator binaries.
 
 Build and package native validator variants:
 
@@ -435,13 +438,13 @@ Build and package native validator variants:
 - `rtneural-validator-xsimd`
 - `rtneural-validator-xsimd-avx` on Intel platforms where legal
 
-For each export, run the benchmark matrix with:
+For each export, the app now runs the benchmark matrix with:
 
-- block sizes: `32,64,128,256`
+- block sizes: `16,32,64,128,256,512`
 - channels: `1,2`
-- sample rate: `48000`
-- passes: at least `3`
-- warmup blocks: at least `8`
+- sample rate: export sample rate, usually `48000`
+- passes: `3`
+- warmup blocks: `8`
 
 Write a report that includes:
 
@@ -554,10 +557,10 @@ Done in the trainer app:
 
 Remaining trainer-app work:
 
-1. Store a full backend benchmark matrix in export packages.
-2. Surface fastest passing backend and plugin-headroom warnings in the export
-   UI.
-3. Initialize or vendor xsimd for local/CI builds if we want xsimd data.
+1. Initialize or vendor xsimd for local/CI builds if we want xsimd data.
+2. Add signed-release packaging for backend-specific validator variants if
+   production packages should run the full matrix without local build folders.
+3. Calibrate the current headroom labels against a real JUCE plugin prototype.
 
 Remaining plugin-side work:
 

@@ -3330,6 +3330,11 @@ function ExportList({
               status={getString(item.benchmark_report, "status")}
               detail={benchmarkSummary(item.benchmark_report)}
             />
+            <ReportPill
+              label="Backends"
+              status={getNestedString(item.package_metadata, ["benchmark_matrix", "status"])}
+              detail={benchmarkMatrixSummary(item.package_metadata)}
+            />
           </div>
           <div className="artifact-grid">
             <span>{compactPath(item.model_path)}</span>
@@ -4223,6 +4228,11 @@ function getNestedObject(value: Record<string, unknown> | null, keys: string[]) 
     : null;
 }
 
+function getNestedArray(value: Record<string, unknown> | null, keys: string[]) {
+  const item = getNestedValue(value, keys);
+  return Array.isArray(item) ? item : [];
+}
+
 function getNestedValue(value: Record<string, unknown> | null, keys: string[]) {
   let current: unknown = value;
   for (const key of keys) {
@@ -4462,6 +4472,32 @@ function benchmarkSummary(report: Record<string, unknown> | null) {
       : null,
     receptiveField !== null ? `${Math.round(receptiveField)} sample receptive field` : null,
     modelBytes !== null ? `${formatBytes(modelBytes)} model` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function benchmarkMatrixSummary(metadata: Record<string, unknown> | null) {
+  const matrix = getNestedObject(metadata, ["benchmark_matrix"]);
+  if (!matrix) return "waiting for matrix";
+
+  const fastest = getNestedObject(matrix, ["fastest_passing_backend"]);
+  const fastestId = getString(fastest, "id");
+  const fastestFactor = getNumber(fastest, "realtime_factor");
+  const headroom = getString(fastest, "headroom");
+  const backends = getNestedArray(matrix, ["backends"]);
+  const availableCount = backends.filter((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    const status = getString(entry as Record<string, unknown>, "status");
+    return status !== "unavailable";
+  }).length;
+
+  return [
+    fastestId
+      ? `fastest ${fastestId}${fastestFactor !== null ? ` ${fastestFactor.toFixed(2)}x` : ""}`
+      : "no passing backend",
+    headroom ? headroom.split("_").join(" ") : null,
+    `${availableCount}/${backends.length} available`,
   ]
     .filter(Boolean)
     .join(" · ");

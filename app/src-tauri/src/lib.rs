@@ -21,6 +21,7 @@ use uuid::Uuid;
 const RTTRAINER_SIDECAR: &str = "rttrainer";
 const RTNEURAL_VALIDATOR_SIDECAR: &str = "rtneural-validator";
 const RUNTIME_SETTINGS_KEY: &str = "runtime";
+const RTNEURAL_VALIDATOR_BACKENDS: &[&str] = &["eigen", "stl", "xsimd"];
 const MODEL_PRESETS: &[&str] = &[
     "dense_only",
     "gru_light",
@@ -487,6 +488,27 @@ struct FinalExportPackageInput<'a> {
     package_path: &'a Path,
     validation_path: &'a Path,
     benchmark_path: &'a Path,
+    benchmark_matrix_path: &'a Path,
+}
+
+struct NativeBenchmarkMatrixInput<'a> {
+    project_id: &'a str,
+    run_id: &'a str,
+    export_id: &'a str,
+    job_id: &'a str,
+    export_dir: &'a Path,
+    model_path: &'a Path,
+    sample_rate: u32,
+    primary_benchmark_path: &'a Path,
+    matrix_path: &'a Path,
+}
+
+#[derive(Clone)]
+struct ValidatorVariant {
+    id: String,
+    backend: String,
+    avx: bool,
+    binary: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -1448,6 +1470,7 @@ fn export_run_blocking(
     let package_path = export_dir.join("package.json");
     let validation_path = export_dir.join("validation-report.json");
     let benchmark_path = export_dir.join("benchmark-report.json");
+    let benchmark_matrix_path = export_dir.join("native-benchmark-matrix.json");
     let manifest_path = export_dir.join("export-manifest.json");
     let run_dir = project_dir.join("runs").join(&run.id);
     let prediction_path = run_dir.join("previews/prediction.wav");
@@ -1582,27 +1605,7 @@ fn export_run_blocking(
     let benchmark_result = run_validator(
         app,
         state,
-        vec![
-            "benchmark".to_string(),
-            "--model".to_string(),
-            model_path.display().to_string(),
-            "--sample-rate".to_string(),
-            sample_rate.to_string(),
-            "--seconds".to_string(),
-            "2".to_string(),
-            "--block-sizes".to_string(),
-            "16,32,64,128,256,512".to_string(),
-            "--channels".to_string(),
-            "1,2".to_string(),
-            "--passes".to_string(),
-            "3".to_string(),
-            "--warmup-blocks".to_string(),
-            "4".to_string(),
-            "--min-realtime-factor".to_string(),
-            "1.0".to_string(),
-            "--report".to_string(),
-            benchmark_path.display().to_string(),
-        ],
+        native_benchmark_args(&model_path, sample_rate, &benchmark_path),
         SidecarContext {
             job_id: benchmark_job_id.clone(),
             operation: "native_benchmark".to_string(),
@@ -1619,6 +1622,38 @@ fn export_run_blocking(
     }
     mark_job_completed(state, &benchmark_job_id)?;
 
+    let benchmark_matrix_job_id = create_job(
+        state,
+        "native_benchmark_matrix",
+        Some(&project_id),
+        Some(&run.id),
+        Some(&export_id),
+    )?;
+    let benchmark_matrix_result = write_native_benchmark_matrix(
+        app,
+        state,
+        NativeBenchmarkMatrixInput {
+            project_id: &project_id,
+            run_id: &run.id,
+            export_id: &export_id,
+            job_id: &benchmark_matrix_job_id,
+            export_dir: &export_dir,
+            model_path: &model_path,
+            sample_rate,
+            primary_benchmark_path: &benchmark_path,
+            matrix_path: &benchmark_matrix_path,
+        },
+    );
+    match benchmark_matrix_result {
+        Ok(_) => mark_job_completed(state, &benchmark_matrix_job_id)?,
+        Err(error) => {
+            mark_job_failed(state, &benchmark_matrix_job_id, &error)?;
+            let db = state.db.lock().map_err(lock_error)?;
+            update_export_status(&db, &export_id, &ExportStatus::Failed, Some(&error))?;
+            return Err(error);
+        }
+    }
+
     write_final_export_package_metadata(FinalExportPackageInput {
         project_name: &project_name,
         project_id: &project_id,
@@ -1631,6 +1666,7 @@ fn export_run_blocking(
         package_path: &package_path,
         validation_path: &validation_path,
         benchmark_path: &benchmark_path,
+        benchmark_matrix_path: &benchmark_matrix_path,
     })?;
 
     let db = state.db.lock().map_err(lock_error)?;
@@ -2992,6 +3028,7 @@ fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Re
         read_optional_json_value(input.package_path).unwrap_or_else(|| serde_json::json!({}));
     let validation_report = read_optional_json_value(input.validation_path);
     let benchmark_report = read_optional_json_value(input.benchmark_path);
+    let benchmark_matrix_report = read_optional_json_value(input.benchmark_matrix_path);
     let model_json = read_optional_json_value(input.model_path);
     let model_metadata = model_json
         .as_ref()
@@ -3041,6 +3078,12 @@ fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Re
             input.export_dir,
             "benchmark_report",
             input.benchmark_path,
+            "application/json",
+        ),
+        export_artifact_metadata(
+            input.export_dir,
+            "benchmark_matrix_report",
+            input.benchmark_matrix_path,
             "application/json",
         ),
     ];
@@ -3093,11 +3136,13 @@ fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Re
         "model_path": relative_path_string(input.export_dir, input.model_path),
         "validation_path": relative_path_string(input.export_dir, input.validation_path),
         "benchmark_path": relative_path_string(input.export_dir, input.benchmark_path),
+        "benchmark_matrix_path": relative_path_string(input.export_dir, input.benchmark_matrix_path),
         "parity_snapshot": parity_snapshot,
         "package_path": relative_path_string(input.export_dir, input.package_path),
         "quality": input.run.metrics,
         "validation": validation_report,
         "benchmark": benchmark_report,
+        "benchmark_matrix": benchmark_matrix_report,
         "generated_by": {
             "app": "RTNeural Trainer",
             "version": env!("CARGO_PKG_VERSION"),
@@ -3974,6 +4019,294 @@ fn run_validator(
     ))
 }
 
+fn write_native_benchmark_matrix(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    input: NativeBenchmarkMatrixInput<'_>,
+) -> Result<serde_json::Value, String> {
+    let primary_report = read_optional_json_value(input.primary_benchmark_path);
+    let primary_variant_id = primary_report
+        .as_ref()
+        .and_then(validator_report_variant_id);
+    let variants = discover_validator_variants(state);
+    let mut entries = Vec::new();
+    let context = SidecarContext {
+        job_id: input.job_id.to_string(),
+        operation: "native_benchmark_matrix".to_string(),
+        project_id: Some(input.project_id.to_string()),
+        run_id: Some(input.run_id.to_string()),
+        export_id: Some(input.export_id.to_string()),
+    };
+
+    for variant in variants {
+        if primary_variant_id.as_deref() == Some(variant.id.as_str()) && primary_report.is_some() {
+            entries.push(benchmark_matrix_entry(
+                input.export_dir,
+                &variant,
+                Some(input.primary_benchmark_path),
+                primary_report.clone(),
+                Some(true),
+                Some("primary_benchmark"),
+            ));
+            continue;
+        }
+
+        if let Some(binary) = variant.binary.clone() {
+            let report_path = input
+                .export_dir
+                .join(format!("native-benchmark-{}.json", variant.id));
+            let mut process = StdCommand::new(&binary);
+            process.args(native_benchmark_args(
+                input.model_path,
+                input.sample_rate,
+                &report_path,
+            ));
+            emit_sidecar_line(
+                app,
+                &context,
+                "system",
+                &format!("rtneural-validator benchmark {} started", variant.id),
+            );
+            let output = run_streaming_process(app, &context, process)?;
+            let report = read_optional_json_value(&report_path);
+            entries.push(benchmark_matrix_entry(
+                input.export_dir,
+                &variant,
+                Some(&report_path),
+                report,
+                Some(output.status.success()),
+                None,
+            ));
+            continue;
+        }
+
+        entries.push(benchmark_matrix_entry(
+            input.export_dir,
+            &variant,
+            None,
+            None,
+            None,
+            Some("validator binary not available"),
+        ));
+    }
+
+    let fastest = fastest_passing_benchmark(&entries);
+    let status = if fastest.is_some() { "pass" } else { "fail" };
+    let matrix = serde_json::json!({
+        "schema_version": 1,
+        "status": status,
+        "model": relative_path_string(input.export_dir, input.model_path),
+        "sample_rate": input.sample_rate,
+        "primary_report_path": relative_path_string(input.export_dir, input.primary_benchmark_path),
+        "primary_backend": primary_variant_id,
+        "fastest_passing_backend": fastest,
+        "thresholds": {
+            "min_realtime_factor": 1.0
+        },
+        "backends": entries,
+        "created_at": now()
+    });
+    write_json(input.matrix_path, &matrix)?;
+    Ok(matrix)
+}
+
+fn native_benchmark_args(model_path: &Path, sample_rate: u32, report_path: &Path) -> Vec<String> {
+    vec![
+        "benchmark".to_string(),
+        "--model".to_string(),
+        model_path.display().to_string(),
+        "--sample-rate".to_string(),
+        sample_rate.to_string(),
+        "--seconds".to_string(),
+        "2".to_string(),
+        "--block-sizes".to_string(),
+        "16,32,64,128,256,512".to_string(),
+        "--channels".to_string(),
+        "1,2".to_string(),
+        "--passes".to_string(),
+        "3".to_string(),
+        "--warmup-blocks".to_string(),
+        "8".to_string(),
+        "--min-realtime-factor".to_string(),
+        "1.0".to_string(),
+        "--report".to_string(),
+        report_path.display().to_string(),
+    ]
+}
+
+fn discover_validator_variants(state: &AppState) -> Vec<ValidatorVariant> {
+    let mut variants = Vec::new();
+    for backend in RTNEURAL_VALIDATOR_BACKENDS {
+        variants.push(ValidatorVariant {
+            id: (*backend).to_string(),
+            backend: (*backend).to_string(),
+            avx: false,
+            binary: validator_binary_path_for_backend(state, backend, false),
+        });
+        if let Some(binary) = validator_binary_path_for_backend(state, backend, true) {
+            variants.push(ValidatorVariant {
+                id: format!("{backend}-avx"),
+                backend: (*backend).to_string(),
+                avx: true,
+                binary: Some(binary),
+            });
+        }
+    }
+    variants
+}
+
+fn validator_binary_path_for_backend(
+    state: &AppState,
+    backend: &str,
+    avx: bool,
+) -> Option<PathBuf> {
+    let env_name = if avx {
+        format!(
+            "RTNEURAL_VALIDATOR_{}_AVX_BINARY",
+            backend.to_ascii_uppercase()
+        )
+    } else {
+        format!("RTNEURAL_VALIDATOR_{}_BINARY", backend.to_ascii_uppercase())
+    };
+    if let Ok(path) = std::env::var(env_name) {
+        let candidate = PathBuf::from(path);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    let suffix = if avx {
+        format!("{backend}-avx")
+    } else {
+        backend.to_string()
+    };
+    let candidate_dirs = [
+        format!("native/rtneural-validator/build-{suffix}"),
+        format!("native/rtneural-validator/build-release-{suffix}"),
+    ];
+    for dir in candidate_dirs {
+        if let Some(path) =
+            existing_binary(&state.workspace_root.join(dir), RTNEURAL_VALIDATOR_SIDECAR)
+        {
+            return Some(path);
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if let Some(path) = existing_binary(dir, &format!("rtneural-validator-{suffix}")) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn benchmark_matrix_entry(
+    export_dir: &Path,
+    variant: &ValidatorVariant,
+    report_path: Option<&Path>,
+    report: Option<serde_json::Value>,
+    process_success: Option<bool>,
+    note: Option<&str>,
+) -> serde_json::Value {
+    let report_status = report
+        .as_ref()
+        .and_then(|value| value.get("status"))
+        .and_then(serde_json::Value::as_str);
+    let realtime_factor = report
+        .as_ref()
+        .and_then(|value| value.get("realtime_factor"))
+        .and_then(serde_json::Value::as_f64);
+    let status = match (report_status, process_success, report.is_some()) {
+        (Some(status), _, _) => status,
+        (None, Some(false), _) => "error",
+        (None, _, false) => "unavailable",
+        _ => "unknown",
+    };
+    serde_json::json!({
+        "id": variant.id,
+        "backend": variant.backend,
+        "avx": variant.avx,
+        "status": status,
+        "process_success": process_success,
+        "report_path": report_path.map(|path| relative_path_string(export_dir, path)),
+        "realtime_factor": realtime_factor,
+        "headroom": realtime_factor.map(runtime_headroom_label),
+        "build_type": report
+            .as_ref()
+            .and_then(|value| value.get("build_type"))
+            .and_then(serde_json::Value::as_str),
+        "summary": report
+            .as_ref()
+            .and_then(|value| value.get("summary"))
+            .cloned(),
+        "model_info": report
+            .as_ref()
+            .and_then(|value| value.get("model_info"))
+            .cloned(),
+        "note": note,
+        "report": report
+    })
+}
+
+fn fastest_passing_benchmark(entries: &[serde_json::Value]) -> Option<serde_json::Value> {
+    entries
+        .iter()
+        .filter(|entry| entry.get("status").and_then(serde_json::Value::as_str) == Some("pass"))
+        .filter_map(|entry| {
+            entry
+                .get("realtime_factor")
+                .and_then(serde_json::Value::as_f64)
+                .map(|factor| (factor, entry))
+        })
+        .max_by(|left, right| {
+            left.0
+                .partial_cmp(&right.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(factor, entry)| {
+            serde_json::json!({
+                "id": entry.get("id").and_then(serde_json::Value::as_str),
+                "backend": entry.get("backend").and_then(serde_json::Value::as_str),
+                "avx": entry.get("avx").and_then(serde_json::Value::as_bool),
+                "realtime_factor": factor,
+                "headroom": runtime_headroom_label(factor),
+                "report_path": entry.get("report_path").cloned().unwrap_or(serde_json::Value::Null),
+            })
+        })
+}
+
+fn validator_report_variant_id(report: &serde_json::Value) -> Option<String> {
+    let raw = report.get("backend").and_then(serde_json::Value::as_str)?;
+    let normalized = raw
+        .trim()
+        .to_ascii_lowercase()
+        .trim_start_matches("rtneural-")
+        .to_string();
+    RTNEURAL_VALIDATOR_BACKENDS.iter().find_map(|backend| {
+        if normalized == *backend || normalized == format!("{backend}-avx") {
+            Some(normalized.clone())
+        } else {
+            None
+        }
+    })
+}
+
+fn runtime_headroom_label(realtime_factor: f64) -> &'static str {
+    if realtime_factor < 1.0 {
+        "not_realtime"
+    } else if realtime_factor < 2.0 {
+        "risky"
+    } else if realtime_factor < 4.0 {
+        "usable_with_caution"
+    } else if realtime_factor < 8.0 {
+        "plugin_ready"
+    } else {
+        "comfortable"
+    }
+}
+
 struct StreamingProcessOutput {
     status: StreamingExitStatus,
     stdout: String,
@@ -4423,6 +4756,7 @@ mod tests {
         let package_path = export_dir.join("package.json");
         let validation_path = export_dir.join("validation-report.json");
         let benchmark_path = export_dir.join("benchmark-report.json");
+        let benchmark_matrix_path = export_dir.join("native-benchmark-matrix.json");
         write_json(
             &model_path,
             &serde_json::json!({
@@ -4449,6 +4783,37 @@ mod tests {
             }),
         )
         .expect("write benchmark report");
+        write_json(
+            &benchmark_matrix_path,
+            &serde_json::json!({
+                "schema_version": 1,
+                "status": "pass",
+                "fastest_passing_backend": {
+                    "id": "eigen",
+                    "backend": "eigen",
+                    "avx": false,
+                    "realtime_factor": 42.0,
+                    "headroom": "comfortable",
+                    "report_path": "native-benchmark-eigen.json"
+                },
+                "backends": [
+                    {
+                        "id": "eigen",
+                        "backend": "eigen",
+                        "avx": false,
+                        "status": "pass",
+                        "realtime_factor": 42.0
+                    },
+                    {
+                        "id": "stl",
+                        "backend": "stl",
+                        "avx": false,
+                        "status": "unavailable"
+                    }
+                ]
+            }),
+        )
+        .expect("write benchmark matrix");
         fs::write(export_dir.join("parity-snapshot.json"), "{}").expect("write snapshot");
         write_json(
             &package_path,
@@ -4496,6 +4861,7 @@ mod tests {
             package_path: &package_path,
             validation_path: &validation_path,
             benchmark_path: &benchmark_path,
+            benchmark_matrix_path: &benchmark_matrix_path,
         })
         .expect("write final package metadata");
 
@@ -4504,12 +4870,22 @@ mod tests {
         assert_eq!(package["backend"], "keras");
         assert_eq!(package["validation"]["status"], "pass");
         assert_eq!(package["benchmark"]["realtime_factor"], 42.0);
+        assert_eq!(package["benchmark_matrix"]["status"], "pass");
+        assert_eq!(
+            package["benchmark_matrix"]["fastest_passing_backend"]["id"],
+            "eigen"
+        );
         assert_eq!(package["parity_snapshot"]["sample_count"], 8192);
         assert!(package["artifacts"]
             .as_array()
             .expect("artifacts array")
             .iter()
             .any(|artifact| artifact["role"] == "parity_snapshot_manifest"));
+        assert!(package["artifacts"]
+            .as_array()
+            .expect("artifacts array")
+            .iter()
+            .any(|artifact| artifact["role"] == "benchmark_matrix_report"));
         assert_eq!(package["compatibility"]["aidax"]["status"], "deferred");
     }
 
