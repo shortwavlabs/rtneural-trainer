@@ -10,7 +10,7 @@ from pathlib import Path
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.data.prepare import analyze_latency, prepare_audio
 from rttrainer.metrics.audio_metrics import compute_metrics
-from rttrainer.training.dataset import build_windowed_dataset
+from rttrainer.training.dataset import build_windowed_dataset, resample_windowed_training_data
 
 
 class AudioPipelineTests(unittest.TestCase):
@@ -295,9 +295,43 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertEqual(len(dataset.test_target), 144_000)
         self.assertGreaterEqual(int(dataset.summary["test_start_sample"]), 40_000)
 
+    def test_dataset_resamples_training_windows_without_changing_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "input.wav"
+            target_path = root / "target.wav"
+            samples = deterministic_signal(48_000)
+            write_wav_mono(input_path, samples, 48_000)
+            write_wav_mono(target_path, samples, 48_000)
+
+            dataset = build_windowed_dataset(
+                input_path,
+                target_path,
+                sequence_length=256,
+                max_windows=32,
+                seed=11,
+                backend="list",
+            )
+            resampled = resample_windowed_training_data(dataset, seed=99, backend="list")
+
+        self.assertNotEqual(dataset.train_starts, resampled.train_starts)
+        self.assertEqual(dataset.val_starts, resampled.val_starts)
+        self.assertEqual(dataset.test_target, resampled.test_target)
+        self.assertEqual(resampled.summary["selection"], "energy_stratified_resampled_training_windows")
+        self.assertEqual(int(resampled.summary["resampled_training_windows"]), 1)
+
 
 def alternating_signal(length: int) -> list[float]:
     return [0.3 if index % 2 == 0 else -0.3 for index in range(length)]
+
+
+def deterministic_signal(length: int) -> list[float]:
+    return [
+        0.3 * math.sin(index * 0.013)
+        + 0.2 * math.sin(index * 0.071)
+        + (0.4 if index % 2048 < 64 else 0.0)
+        for index in range(length)
+    ]
 
 
 def deterministic_sample(index: int) -> float:

@@ -10,7 +10,7 @@ from typing import Any, cast
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.metrics.audio_metrics import compute_metrics
 from rttrainer.models.presets import PresetConfig, build_keras_model, build_model, get_preset
-from rttrainer.training.dataset import build_windowed_dataset
+from rttrainer.training.dataset import build_windowed_dataset, resample_windowed_training_data
 from rttrainer.training.device import choose_device, normalize_device_preference, require_torch
 from rttrainer.utils import emit, mkdir, now, read_json, write_json
 
@@ -52,6 +52,10 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     loss_name = resolve_training_loss_name(manifest, preset)
     sequence_length = int(manifest.get("sequence_length", 1024))
     max_windows = int(manifest.get("max_windows", 512))
+    resample_training_windows_enabled = manifest_bool(
+        manifest.get("resample_training_windows", False)
+    )
+    resample_interval_epochs = max(1, int(manifest.get("resample_interval_epochs", 1)))
     preview_seconds = float(manifest.get("preview_seconds", 3.0))
     early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
     early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
@@ -145,6 +149,10 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "requested_learning_rate": requested_learning_rate,
             "loss": loss_name,
             "learning_rate_schedule": lr_schedule,
+            "window_resampling": window_resampling_report(
+                resample_training_windows_enabled,
+                resample_interval_epochs,
+            ),
             "recurrent_context_training": recurrent_context_training_report(
                 context_training_enabled,
                 context_multiplier,
@@ -164,9 +172,23 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     last_epoch = start_epoch - 1
     lr_reductions: list[dict[str, float | int]] = []
     current_learning_rate = current_keras_learning_rate(tf, model)
+    latest_dataset_summary = dict(dataset.summary)
 
     for epoch in range(start_epoch, target_epochs + 1):
         last_epoch = epoch
+        windows_resampled = should_resample_training_windows(
+            resample_training_windows_enabled,
+            epoch,
+            start_epoch,
+            resample_interval_epochs,
+        )
+        if windows_resampled:
+            dataset = resample_windowed_training_data(
+                dataset,
+                seed=window_resample_seed(seed, epoch),
+                backend="numpy",
+            )
+            latest_dataset_summary = dict(dataset.summary)
         epoch_learning_rate = current_keras_learning_rate(tf, model)
         with tf.device(device_scope):
             fit_history = model.fit(
@@ -272,6 +294,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "next_learning_rate": current_learning_rate,
             "learning_rate_reduced": lr_reduced,
             "is_best": is_best,
+            "training_windows_resampled": windows_resampled,
         }
         if context_train_loss is not None:
             history_point["context_train_loss"] = context_train_loss
@@ -300,7 +323,13 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "next_learning_rate": current_learning_rate,
             "learning_rate_reduced": lr_reduced,
             "is_best": is_best,
+            "training_windows_resampled": windows_resampled,
         }
+        if windows_resampled:
+            epoch_event["training_window_resample_seed"] = latest_dataset_summary.get(
+                "window_resample_seed"
+            )
+            epoch_event["train_windows"] = latest_dataset_summary.get("train_windows")
         if context_train_loss is not None:
             epoch_event["context_train_loss"] = context_train_loss
         emit(epoch_event)
@@ -393,7 +422,11 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "validation_basis": "composite_validation_score",
             "state_diagnostic": state_diagnostic,
             "history": history,
-            "dataset": dataset.summary,
+            "dataset": latest_dataset_summary,
+            "window_resampling": window_resampling_report(
+                resample_training_windows_enabled,
+                resample_interval_epochs,
+            ),
             "preparation": preparation_snapshot,
             "early_stopping": stopped_early
             or {
@@ -445,6 +478,10 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     loss_name = resolve_training_loss_name(manifest, preset)
     sequence_length = int(manifest.get("sequence_length", 1024))
     max_windows = int(manifest.get("max_windows", 512))
+    resample_training_windows_enabled = manifest_bool(
+        manifest.get("resample_training_windows", False)
+    )
+    resample_interval_epochs = max(1, int(manifest.get("resample_interval_epochs", 1)))
     preview_seconds = float(manifest.get("preview_seconds", 3.0))
     early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
     early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
@@ -494,14 +531,6 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
         early_stopping_min_delta,
     )
     lr_scheduler = build_torch_lr_scheduler(torch, optimizer, lr_schedule)
-    train_x = cast(Any, dataset.train_x)
-    train_y = cast(Any, dataset.train_y)
-    val_y = cast(Any, dataset.val_y)
-    train_loader = torch.utils.data.DataLoader(
-        torch.utils.data.TensorDataset(train_x, train_y),
-        batch_size=batch_size,
-        shuffle=True,
-    )
     resumed_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
     target_epochs = target_epoch_count(manifest, resumed_epoch, requested_epochs)
     start_epoch = resumed_epoch + 1
@@ -537,6 +566,10 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "requested_learning_rate": requested_learning_rate,
             "loss": loss_name,
             "learning_rate_schedule": lr_schedule,
+            "window_resampling": window_resampling_report(
+                resample_training_windows_enabled,
+                resample_interval_epochs,
+            ),
             "recurrent_context_training": recurrent_context_training_report(
                 context_training_enabled,
                 context_multiplier,
@@ -555,12 +588,33 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     last_epoch = start_epoch - 1
     lr_reductions: list[dict[str, float | int]] = []
     current_learning_rate = current_torch_learning_rate(optimizer)
+    latest_dataset_summary = dict(dataset.summary)
 
     for epoch in range(start_epoch, target_epochs + 1):
         last_epoch = epoch
+        windows_resampled = should_resample_training_windows(
+            resample_training_windows_enabled,
+            epoch,
+            start_epoch,
+            resample_interval_epochs,
+        )
+        if windows_resampled:
+            dataset = resample_windowed_training_data(
+                dataset,
+                seed=window_resample_seed(seed, epoch),
+                backend="torch",
+            )
+            latest_dataset_summary = dict(dataset.summary)
         epoch_learning_rate = current_torch_learning_rate(optimizer)
         model.train()
         losses = []
+        train_x = cast(Any, dataset.train_x)
+        train_y = cast(Any, dataset.train_y)
+        train_loader = torch.utils.data.DataLoader(
+            torch.utils.data.TensorDataset(train_x, train_y),
+            batch_size=batch_size,
+            shuffle=True,
+        )
         for batch_x, batch_y in train_loader:
             batch_x = batch_x.to(device)
             batch_y = batch_y.to(device)
@@ -582,6 +636,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             context_training_enabled,
         )
         val_prediction = predict_torch_tensor(torch, model, dataset.val_x, device)
+        val_y = cast(Any, dataset.val_y)
         flat_target = flatten_array(val_y.squeeze(-1).detach().cpu().tolist())
         flat_pred = flatten_array(val_prediction.squeeze(-1).detach().cpu().tolist())
         window_metrics = compute_metrics(flat_target, flat_pred)
@@ -666,6 +721,7 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "next_learning_rate": current_learning_rate,
             "learning_rate_reduced": lr_reduced,
             "is_best": is_best,
+            "training_windows_resampled": windows_resampled,
         }
         if context_train_loss is not None:
             history_point["context_train_loss"] = context_train_loss
@@ -694,7 +750,13 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "next_learning_rate": current_learning_rate,
             "learning_rate_reduced": lr_reduced,
             "is_best": is_best,
+            "training_windows_resampled": windows_resampled,
         }
+        if windows_resampled:
+            epoch_event["training_window_resample_seed"] = latest_dataset_summary.get(
+                "window_resample_seed"
+            )
+            epoch_event["train_windows"] = latest_dataset_summary.get("train_windows")
         if context_train_loss is not None:
             epoch_event["context_train_loss"] = context_train_loss
         emit(epoch_event)
@@ -786,7 +848,11 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
             "validation_basis": "composite_validation_score",
             "state_diagnostic": state_diagnostic,
             "history": history,
-            "dataset": dataset.summary,
+            "dataset": latest_dataset_summary,
+            "window_resampling": window_resampling_report(
+                resample_training_windows_enabled,
+                resample_interval_epochs,
+            ),
             "preparation": preparation_snapshot,
             "early_stopping": stopped_early
             or {
@@ -994,6 +1060,40 @@ def target_epoch_count(
     if bool(manifest.get("resume_epochs_are_additional", False)) and resumed_epoch > 0:
         return resumed_epoch + max(1, requested_epochs)
     return requested_epochs
+
+
+def manifest_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def window_resampling_report(enabled: bool, interval_epochs: int) -> dict[str, Any]:
+    return {
+        "enabled": enabled,
+        "interval_epochs": interval_epochs,
+        "strategy": "energy_stratified_training_only",
+        "validation_windows_fixed": True,
+    }
+
+
+def should_resample_training_windows(
+    enabled: bool,
+    epoch: int,
+    start_epoch: int,
+    interval_epochs: int,
+) -> bool:
+    if not enabled:
+        return False
+    if epoch == start_epoch:
+        return start_epoch > 1
+    return (epoch - start_epoch) % max(1, interval_epochs) == 0
+
+
+def window_resample_seed(seed: int, epoch: int) -> int:
+    return seed + epoch * 104_729
 
 
 def validation_checkpoint_metrics(

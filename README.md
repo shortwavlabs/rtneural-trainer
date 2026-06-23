@@ -325,6 +325,8 @@ Create `projects/demo/train.json`:
   "learning_rate": 0.001,
   "sequence_length": 8192,
   "max_windows": 2048,
+  "resample_training_windows": true,
+  "resample_interval_epochs": 1,
   "seed": 1337
 }
 ```
@@ -349,10 +351,13 @@ audio than a single short window. Checkpoints use a validation score that is
 anchored by streaming ESR, with short-window ESR and an underpowered-output
 penalty to avoid selecting near-silent early checkpoints. If that validation
 score plateaus, the trainer lowers the learning rate before early stopping has a
-chance to stop the run. By default, plateau patience is half the early-stop
-patience, the decay factor is `0.5`, and the floor is `1e-6`. Progress events
-and `history.json` record streaming ESR, short-window diagnostics, validation
-score, output level ratio, learning rate, context-training loss, and any
+chance to stop the run. When `resample_training_windows` is enabled, validation
+and preview excerpts stay fixed, but the training windows rotate at
+`resample_interval_epochs` so long captures get broader coverage across long
+runs. By default, plateau patience is half the early-stop patience, the decay
+factor is `0.5`, and the floor is `1e-6`. Progress events and `history.json`
+record streaming ESR, short-window diagnostics, validation score, output level
+ratio, learning rate, context-training loss, window rotation state, and any
 reductions.
 
 Final reports compare normal continuous inference against a reset-per-chunk

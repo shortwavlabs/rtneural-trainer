@@ -671,6 +671,8 @@ Recommended first approach:
    training, and final preview.
 9. Bias a fixed quota of training windows toward high-energy target regions,
    then fill the rest with deterministic random coverage.
+10. Optionally rotate only the training windows during long runs while keeping
+    validation, streaming-validation, and preview excerpts fixed.
 
 Acceptance criteria:
 
@@ -678,9 +680,10 @@ Acceptance criteria:
 - Dataset summaries record available windows, selected windows, train/validation
   counts, stride, sample rate, duration, recurrent context excerpt,
   streaming-validation excerpt, preview excerpt, energy-selected count,
-  random-selected count, and selection mode.
+  random-selected count, window-rotation seed, and selection mode.
 - Unit tests cover WAV IO, resampling, stereo policy, manual alignment metadata,
-  and long-capture window sampling.
+  long-capture window sampling, and training-window resampling with fixed
+  validation/test excerpts.
 
 ### Step 6.4 Implement Training Loop
 
@@ -724,6 +727,8 @@ Training loop requirements:
 15. For recurrent presets, compare final continuous inference against
     reset-per-chunk inference and flag state drift when chunk-reset ESR and
     correlation are materially better.
+16. Support optional training-window rotation at a configurable epoch interval
+    while keeping validation and preview windows stable.
 
 Validation/inference preview requirements:
 
@@ -743,7 +748,7 @@ Acceptance criteria:
 - Validation previews do not allocate training graphs.
 - Run metadata is sufficient to reproduce the run.
 - Desktop controls now expose epochs, early-stop patience, minimum ESR
-  improvement, and training window budget.
+  improvement, training window budget, and training-window rotation.
 - Recurrent built-in recipes default to longer 8192-sample windows plus a
   bounded active context update so training better matches continuous RTNeural
   playback.

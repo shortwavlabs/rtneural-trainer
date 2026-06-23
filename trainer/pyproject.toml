@@ -23,3 +23,8 @@ rttrainer = "rttrainer.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["rttrainer*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

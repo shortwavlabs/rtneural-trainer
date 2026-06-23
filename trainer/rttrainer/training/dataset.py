@@ -23,6 +23,13 @@ class WindowedDataset:
     test_target: list[float]
     sample_rate: int
     summary: dict[str, int | float | str]
+    input_samples: list[float]
+    target_samples: list[float]
+    sequence_length: int
+    backend: str
+    available_starts: tuple[int, ...]
+    train_starts: tuple[int, ...]
+    val_starts: tuple[int, ...]
 
 
 def build_windowed_dataset(
@@ -95,30 +102,25 @@ def build_windowed_dataset(
         seed=seed,
     )
 
-    windows_x: list[list[float]] = []
-    windows_y: list[list[float]] = []
-    for start in selected_starts:
-        windows_x.append(input_samples[start : start + sequence_length])
-        windows_y.append(target_samples[start : start + sequence_length])
-
-    if len(windows_x) < 4:
+    if len(selected_starts) < 4:
         raise ValueError("Not enough training windows after slicing.")
 
-    permutation = list(range(len(windows_x)))
-    random.Random(seed).shuffle(permutation)
-    windows_x = [windows_x[index] for index in permutation]
-    windows_y = [windows_y[index] for index in permutation]
+    train_starts, val_starts = split_training_validation_starts(selected_starts, seed)
+    train_x, train_y = make_window_arrays(
+        backend,
+        input_samples,
+        target_samples,
+        train_starts,
+        sequence_length,
+    )
+    val_x, val_y = make_window_arrays(
+        backend,
+        input_samples,
+        target_samples,
+        val_starts,
+        sequence_length,
+    )
 
-    train_count = max(1, int(len(windows_x) * 0.8))
-    val_count = max(1, int(len(windows_x) * 0.1))
-    if train_count + val_count >= len(windows_x):
-        train_count = len(windows_x) - 2
-        val_count = 1
-
-    train_x = make_backend_array(backend, windows_x[:train_count])
-    train_y = make_backend_array(backend, windows_y[:train_count])
-    val_x = make_backend_array(backend, windows_x[train_count : train_count + val_count])
-    val_y = make_backend_array(backend, windows_y[train_count : train_count + val_count])
     test_samples = test_end - test_start
     stream_val_samples = stream_val_end - stream_val_start
 
@@ -140,9 +142,10 @@ def build_windowed_dataset(
             "sequence_length": sequence_length,
             "stride": stride,
             "available_windows": total_windows,
-            "selected_windows": len(windows_x),
-            "train_windows": train_count,
-            "validation_windows": val_count,
+            "available_training_windows": len(available_starts),
+            "selected_windows": len(selected_starts),
+            "train_windows": len(train_starts),
+            "validation_windows": len(val_starts),
             "context_training_samples": context_end - context_start,
             "context_training_start_sample": context_start,
             "stream_validation_samples": stream_val_samples,
@@ -151,13 +154,103 @@ def build_windowed_dataset(
             "test_start_sample": test_start,
             "preview_seconds": test_samples / input_audio.sample_rate,
             "selection": "energy_stratified_sampled_across_capture"
-            if total_windows > len(windows_x)
+            if total_windows > len(selected_starts)
             else "energy_stratified_all_windows",
             "energy_selected_windows": energy_selected_count,
             "random_selected_windows": random_selected_count,
+            "resampled_training_windows": 0,
+            "window_resample_seed": seed,
             "reserved_excerpt_count": len(reserved_ranges),
         },
+        input_samples=input_samples,
+        target_samples=target_samples,
+        sequence_length=sequence_length,
+        backend=backend,
+        available_starts=tuple(available_starts),
+        train_starts=tuple(train_starts),
+        val_starts=tuple(val_starts),
     )
+
+
+def resample_windowed_training_data(
+    dataset: WindowedDataset,
+    *,
+    seed: int,
+    backend: str | None = None,
+) -> WindowedDataset:
+    backend = backend or dataset.backend
+    validation_starts = set(dataset.val_starts)
+    available_starts = [
+        start for start in dataset.available_starts if start not in validation_starts
+    ]
+    train_budget = max(1, len(dataset.train_starts))
+    train_starts, energy_selected_count, random_selected_count = select_training_starts(
+        dataset.target_samples,
+        available_starts,
+        sequence_length=dataset.sequence_length,
+        window_budget=train_budget,
+        seed=seed,
+    )
+    if not train_starts:
+        train_starts = list(dataset.train_starts)
+
+    random.Random(seed).shuffle(train_starts)
+    train_x, train_y = make_window_arrays(
+        backend,
+        dataset.input_samples,
+        dataset.target_samples,
+        train_starts,
+        dataset.sequence_length,
+    )
+    summary = dict(dataset.summary)
+    summary.update(
+        {
+            "selected_windows": len(train_starts) + len(dataset.val_starts),
+            "train_windows": len(train_starts),
+            "validation_windows": len(dataset.val_starts),
+            "selection": "energy_stratified_resampled_training_windows",
+            "energy_selected_windows": energy_selected_count,
+            "random_selected_windows": random_selected_count,
+            "resampled_training_windows": 1,
+            "window_resample_seed": seed,
+        }
+    )
+
+    return WindowedDataset(
+        train_x=train_x,
+        train_y=train_y,
+        val_x=dataset.val_x,
+        val_y=dataset.val_y,
+        context_train_input=dataset.context_train_input,
+        context_train_target=dataset.context_train_target,
+        stream_val_input=dataset.stream_val_input,
+        stream_val_target=dataset.stream_val_target,
+        test_input=dataset.test_input,
+        test_target=dataset.test_target,
+        sample_rate=dataset.sample_rate,
+        summary=summary,
+        input_samples=dataset.input_samples,
+        target_samples=dataset.target_samples,
+        sequence_length=dataset.sequence_length,
+        backend=backend,
+        available_starts=dataset.available_starts,
+        train_starts=tuple(train_starts),
+        val_starts=dataset.val_starts,
+    )
+
+
+def split_training_validation_starts(
+    selected_starts: list[int],
+    seed: int,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    starts = list(selected_starts)
+    random.Random(seed).shuffle(starts)
+    train_count = max(1, int(len(starts) * 0.8))
+    val_count = max(1, int(len(starts) * 0.1))
+    if train_count + val_count >= len(starts):
+        train_count = len(starts) - 2
+        val_count = 1
+    return tuple(starts[:train_count]), tuple(starts[train_count : train_count + val_count])
 
 
 def select_training_starts(
@@ -276,6 +369,21 @@ def energy_between_prefix(prefix: list[float], start: int, end: int) -> float:
     bounded_start = max(0, min(start, len(prefix) - 1))
     bounded_end = max(bounded_start, min(end, len(prefix) - 1))
     return prefix[bounded_end] - prefix[bounded_start]
+
+
+def make_window_arrays(
+    backend: str,
+    input_samples: list[float],
+    target_samples: list[float],
+    starts: tuple[int, ...] | list[int],
+    sequence_length: int,
+) -> tuple[object, object]:
+    windows_x: list[list[float]] = []
+    windows_y: list[list[float]] = []
+    for start in starts:
+        windows_x.append(input_samples[start : start + sequence_length])
+        windows_y.append(target_samples[start : start + sequence_length])
+    return make_backend_array(backend, windows_x), make_backend_array(backend, windows_y)
 
 
 def make_backend_array(backend: str, windows: list[list[float]]):

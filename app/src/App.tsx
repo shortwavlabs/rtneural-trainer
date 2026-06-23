@@ -72,6 +72,8 @@ type TrainingOptions = {
   earlyStoppingPatience: number;
   earlyStoppingMinDelta: number;
   maxWindows: number;
+  resampleTrainingWindows: boolean;
+  resampleIntervalEpochs: number;
 };
 
 type TrainingRecipeOption = {
@@ -85,6 +87,8 @@ type TrainingRecipeOption = {
   learningRate: number;
   sequenceLength: number;
   maxWindows: number;
+  resampleTrainingWindows: boolean;
+  resampleIntervalEpochs: number;
   earlyStoppingPatience: number;
   earlyStoppingMinDelta: number;
 };
@@ -248,6 +252,8 @@ const builtInTrainingRecipes = [
     learningRate: 0.001,
     sequenceLength: 4096,
     maxWindows: 512,
+    resampleTrainingWindows: false,
+    resampleIntervalEpochs: 1,
     earlyStoppingPatience: 0,
     earlyStoppingMinDelta: 0.0001,
   },
@@ -262,6 +268,8 @@ const builtInTrainingRecipes = [
     learningRate: 0.0007,
     sequenceLength: 8192,
     maxWindows: 4096,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
     earlyStoppingPatience: 12,
     earlyStoppingMinDelta: 0.00005,
   },
@@ -276,6 +284,8 @@ const builtInTrainingRecipes = [
     learningRate: 0.0005,
     sequenceLength: 8192,
     maxWindows: 8192,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
     earlyStoppingPatience: 20,
     earlyStoppingMinDelta: 0.00005,
   },
@@ -290,6 +300,8 @@ const builtInTrainingRecipes = [
     learningRate: 0.0008,
     sequenceLength: 8192,
     maxWindows: 2048,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
     earlyStoppingPatience: 10,
     earlyStoppingMinDelta: 0.00005,
   },
@@ -304,6 +316,8 @@ const builtInTrainingRecipes = [
     learningRate: 0.0007,
     sequenceLength: 8192,
     maxWindows: 4096,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
     earlyStoppingPatience: 12,
     earlyStoppingMinDelta: 0.00005,
   },
@@ -318,6 +332,8 @@ const builtInTrainingRecipes = [
     learningRate: 0.001,
     sequenceLength: 8192,
     maxWindows: 2048,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
     earlyStoppingPatience: 10,
     earlyStoppingMinDelta: 0.0001,
   },
@@ -332,6 +348,8 @@ const builtInTrainingRecipes = [
     learningRate: 0.001,
     sequenceLength: 8192,
     maxWindows: 2048,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
     earlyStoppingPatience: 6,
     earlyStoppingMinDelta: 0.0001,
   },
@@ -476,6 +494,8 @@ export default function App() {
       learning_rate: options.learningRate,
       sequence_length: options.sequenceLength,
       max_windows: options.maxWindows,
+      resample_training_windows: options.resampleTrainingWindows,
+      resample_interval_epochs: options.resampleIntervalEpochs,
       early_stopping_patience: options.earlyStoppingPatience,
       early_stopping_min_delta: options.earlyStoppingMinDelta,
     });
@@ -698,6 +718,8 @@ export default function App() {
                         early_stopping_patience: options.earlyStoppingPatience,
                         early_stopping_min_delta: options.earlyStoppingMinDelta,
                         max_windows: options.maxWindows,
+                        resample_training_windows: options.resampleTrainingWindows,
+                        resample_interval_epochs: options.resampleIntervalEpochs,
                       });
                       await commitProject(nextProject, "train");
                     } catch (caught) {
@@ -1816,6 +1838,12 @@ function TrainView({
     defaultTrainingRecipe.earlyStoppingMinDelta,
   );
   const [maxWindows, setMaxWindows] = useState(defaultTrainingRecipe.maxWindows);
+  const [resampleTrainingWindows, setResampleTrainingWindows] = useState(
+    defaultTrainingRecipe.resampleTrainingWindows,
+  );
+  const [resampleIntervalEpochs, setResampleIntervalEpochs] = useState(
+    defaultTrainingRecipe.resampleIntervalEpochs,
+  );
   const [resumeFromRunId, setResumeFromRunId] = useState<string | null>(null);
   const [recipeName, setRecipeName] = useState("");
   const [recipeNotice, setRecipeNotice] = useState<string | null>(null);
@@ -1846,6 +1874,8 @@ function TrainView({
     earlyStoppingPatience,
     earlyStoppingMinDelta,
     maxWindows,
+    resampleTrainingWindows,
+    resampleIntervalEpochs,
   };
   const selectedCustomRecipe = customRecipes.find((recipe) => recipe.id === selectedRecipeId);
   const hasRecipeName = recipeName.trim().length > 0;
@@ -1929,6 +1959,8 @@ function TrainView({
     setLearningRate(recipe.learningRate);
     setSequenceLength(recipe.sequenceLength);
     setMaxWindows(recipe.maxWindows);
+    setResampleTrainingWindows(recipe.resampleTrainingWindows);
+    setResampleIntervalEpochs(recipe.resampleIntervalEpochs);
     setEarlyStoppingPatience(recipe.earlyStoppingPatience);
     setEarlyStoppingMinDelta(recipe.earlyStoppingMinDelta);
     setRecipeName(recipe.source === "custom" ? recipe.name : "");
@@ -1955,6 +1987,8 @@ function TrainView({
         nextPreset === "wavenet_tcn_quality" ? 8192 : 4096,
       ),
     );
+    setResampleTrainingWindows(true);
+    setResampleIntervalEpochs(1);
     setEarlyStoppingPatience(20);
     setEarlyStoppingMinDelta(0.00005);
     setRecipeName("");
@@ -2247,6 +2281,34 @@ function TrainView({
               }}
             />
           </label>
+          <label className="toggle-row training-toggle">
+            <input
+              type="checkbox"
+              checked={resampleTrainingWindows}
+              onChange={(event) => {
+                markManualRecipeEdit();
+                setResampleTrainingWindows(event.target.checked);
+              }}
+            />
+            <span>
+              Rotate training windows
+              <small>Keep validation/test fixed while sampling new training chunks.</small>
+            </span>
+          </label>
+          <label>
+            Rotation interval
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={resampleIntervalEpochs}
+              disabled={!resampleTrainingWindows}
+              onChange={(event) => {
+                markManualRecipeEdit();
+                setResampleIntervalEpochs(clampNumber(event.target.valueAsNumber, 1, 50));
+              }}
+            />
+          </label>
         </div>
         <CaptureTrainingGuidance project={project} />
         <button
@@ -2263,6 +2325,8 @@ function TrainView({
               earlyStoppingPatience,
               earlyStoppingMinDelta,
               maxWindows,
+              resampleTrainingWindows,
+              resampleIntervalEpochs,
               resumeFromRunId,
             })
           }
@@ -3867,6 +3931,8 @@ function trainingRecipeFromCustom(recipe: TrainingRecipe): TrainingRecipeOption 
     learningRate: recipe.learning_rate,
     sequenceLength: recipe.sequence_length,
     maxWindows: recipe.max_windows,
+    resampleTrainingWindows: recipe.resample_training_windows,
+    resampleIntervalEpochs: recipe.resample_interval_epochs,
     earlyStoppingPatience: recipe.early_stopping_patience,
     earlyStoppingMinDelta: recipe.early_stopping_min_delta,
   };

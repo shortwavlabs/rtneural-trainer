@@ -1181,6 +1181,12 @@ dd,
   gap: 10px;
 }
 
+.training-toggle {
+  align-self: end;
+  min-height: 42px;
+  padding: 8px 0;
+}
+
 .training-guidance {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }

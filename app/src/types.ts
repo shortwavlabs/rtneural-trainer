@@ -163,6 +163,8 @@ export interface TrainingRecipe {
   learning_rate: number;
   sequence_length: number;
   max_windows: number;
+  resample_training_windows: boolean;
+  resample_interval_epochs: number;
   early_stopping_patience: number;
   early_stopping_min_delta: number;
   created_at: string;
@@ -232,6 +234,8 @@ export interface StartTrainingRequest {
   early_stopping_patience: number;
   early_stopping_min_delta: number;
   max_windows: number;
+  resample_training_windows: boolean;
+  resample_interval_epochs: number;
 }
 
 export interface SaveTrainingRecipeRequest {
@@ -243,6 +247,8 @@ export interface SaveTrainingRecipeRequest {
   learning_rate: number;
   sequence_length: number;
   max_windows: number;
+  resample_training_windows: boolean;
+  resample_interval_epochs: number;
   early_stopping_patience: number;
   early_stopping_min_delta: number;
 }

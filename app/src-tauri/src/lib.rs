@@ -200,6 +200,8 @@ struct TrainingRecipe {
     learning_rate: f64,
     sequence_length: u32,
     max_windows: u32,
+    resample_training_windows: bool,
+    resample_interval_epochs: u32,
     early_stopping_patience: u32,
     early_stopping_min_delta: f64,
     created_at: String,
@@ -291,6 +293,10 @@ struct StartTrainingRequest {
     early_stopping_min_delta: f64,
     #[serde(default = "default_training_max_windows")]
     max_windows: u32,
+    #[serde(default)]
+    resample_training_windows: bool,
+    #[serde(default = "default_window_resample_interval_epochs")]
+    resample_interval_epochs: u32,
     #[serde(default = "default_training_batch_size")]
     batch_size: u32,
     #[serde(default = "default_training_learning_rate")]
@@ -310,6 +316,10 @@ struct SaveTrainingRecipeRequest {
     learning_rate: f64,
     sequence_length: u32,
     max_windows: u32,
+    #[serde(default)]
+    resample_training_windows: bool,
+    #[serde(default = "default_window_resample_interval_epochs")]
+    resample_interval_epochs: u32,
     early_stopping_patience: u32,
     early_stopping_min_delta: f64,
 }
@@ -1175,6 +1185,9 @@ fn start_training(
     let early_stopping_min_delta =
         normalize_early_stopping_min_delta(payload.early_stopping_min_delta);
     let max_windows = normalize_training_max_windows(payload.max_windows);
+    let resample_training_windows = payload.resample_training_windows;
+    let resample_interval_epochs =
+        normalize_window_resample_interval_epochs(payload.resample_interval_epochs);
     let batch_size = normalize_training_batch_size(payload.batch_size);
     let learning_rate = normalize_training_learning_rate(payload.learning_rate);
     let sequence_length = normalize_training_sequence_length(payload.sequence_length);
@@ -1261,6 +1274,8 @@ fn start_training(
             "learning_rate": learning_rate,
             "sequence_length": sequence_length,
             "max_windows": max_windows,
+            "resample_training_windows": resample_training_windows,
+            "resample_interval_epochs": resample_interval_epochs,
             "early_stopping_patience": early_stopping_patience,
             "early_stopping_min_delta": early_stopping_min_delta,
             "seed": 1337
@@ -1848,7 +1863,8 @@ fn load_training_recipes(db: &Connection) -> Result<Vec<TrainingRecipe>, String>
     let mut stmt = db
         .prepare(
             "SELECT id, name, model_preset, epochs, batch_size, learning_rate, sequence_length,
-                    max_windows, early_stopping_patience, early_stopping_min_delta,
+                    max_windows, resample_training_windows, resample_interval_epochs,
+                    early_stopping_patience, early_stopping_min_delta,
                     created_at, updated_at
              FROM training_recipes
              ORDER BY updated_at DESC, name ASC",
@@ -1865,10 +1881,12 @@ fn load_training_recipes(db: &Connection) -> Result<Vec<TrainingRecipe>, String>
                 learning_rate: row.get(5)?,
                 sequence_length: row.get(6)?,
                 max_windows: row.get(7)?,
-                early_stopping_patience: row.get(8)?,
-                early_stopping_min_delta: row.get(9)?,
-                created_at: row.get(10)?,
-                updated_at: row.get(11)?,
+                resample_training_windows: row.get(8)?,
+                resample_interval_epochs: row.get(9)?,
+                early_stopping_patience: row.get(10)?,
+                early_stopping_min_delta: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             })
         })
         .map_err(to_error)?;
@@ -1884,8 +1902,9 @@ fn upsert_training_recipe(db: &Connection, recipe: &TrainingRecipe) -> Result<()
     db.execute(
         "INSERT INTO training_recipes
          (id, name, model_preset, epochs, batch_size, learning_rate, sequence_length,
-          max_windows, early_stopping_patience, early_stopping_min_delta, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+          max_windows, resample_training_windows, resample_interval_epochs,
+          early_stopping_patience, early_stopping_min_delta, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             model_preset = excluded.model_preset,
@@ -1894,6 +1913,8 @@ fn upsert_training_recipe(db: &Connection, recipe: &TrainingRecipe) -> Result<()
             learning_rate = excluded.learning_rate,
             sequence_length = excluded.sequence_length,
             max_windows = excluded.max_windows,
+            resample_training_windows = excluded.resample_training_windows,
+            resample_interval_epochs = excluded.resample_interval_epochs,
             early_stopping_patience = excluded.early_stopping_patience,
             early_stopping_min_delta = excluded.early_stopping_min_delta,
             updated_at = excluded.updated_at",
@@ -1906,6 +1927,8 @@ fn upsert_training_recipe(db: &Connection, recipe: &TrainingRecipe) -> Result<()
             recipe.learning_rate,
             recipe.sequence_length,
             recipe.max_windows,
+            recipe.resample_training_windows,
+            recipe.resample_interval_epochs,
             recipe.early_stopping_patience,
             recipe.early_stopping_min_delta,
             recipe.created_at,
@@ -2029,6 +2052,10 @@ fn default_early_stopping_min_delta() -> f64 {
 
 fn default_training_max_windows() -> u32 {
     512
+}
+
+fn default_window_resample_interval_epochs() -> u32 {
+    1
 }
 
 fn default_training_batch_size() -> u32 {
@@ -2189,6 +2216,13 @@ fn normalize_training_max_windows(value: u32) -> u32 {
     value.clamp(32, 16_384)
 }
 
+fn normalize_window_resample_interval_epochs(value: u32) -> u32 {
+    if value == 0 {
+        return default_window_resample_interval_epochs();
+    }
+    value.clamp(1, 50)
+}
+
 fn normalize_training_batch_size(value: u32) -> u32 {
     if value == 0 {
         return default_training_batch_size();
@@ -2262,6 +2296,10 @@ fn normalize_training_recipe(payload: SaveTrainingRecipeRequest) -> Result<Train
         learning_rate: normalize_training_learning_rate(payload.learning_rate),
         sequence_length: normalize_training_sequence_length(payload.sequence_length),
         max_windows: normalize_training_max_windows(payload.max_windows),
+        resample_training_windows: payload.resample_training_windows,
+        resample_interval_epochs: normalize_window_resample_interval_epochs(
+            payload.resample_interval_epochs,
+        ),
         early_stopping_patience: normalize_early_stopping_patience(payload.early_stopping_patience),
         early_stopping_min_delta: normalize_early_stopping_min_delta(
             payload.early_stopping_min_delta,
@@ -2427,6 +2465,15 @@ const MIGRATIONS: &[(&str, &str)] = &[
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
+    "#,
+    ),
+    (
+        "003_training_recipe_window_resampling",
+        r#"
+    ALTER TABLE training_recipes
+        ADD COLUMN resample_training_windows INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE training_recipes
+        ADD COLUMN resample_interval_epochs INTEGER NOT NULL DEFAULT 1;
     "#,
     ),
 ];
@@ -5214,6 +5261,8 @@ mod tests {
             learning_rate: 0.0005,
             sequence_length: 2048,
             max_windows: 4096,
+            resample_training_windows: true,
+            resample_interval_epochs: 2,
             early_stopping_patience: 12,
             early_stopping_min_delta: 0.00005,
         })
@@ -5226,6 +5275,8 @@ mod tests {
         assert_eq!(saved[0].model_preset, "conv_gru_hybrid");
         assert_eq!(saved[0].epochs, 80);
         assert_eq!(saved[0].sequence_length, 2048);
+        assert!(saved[0].resample_training_windows);
+        assert_eq!(saved[0].resample_interval_epochs, 2);
 
         let updated = normalize_training_recipe(SaveTrainingRecipeRequest {
             id: Some(recipe.id.clone()),
@@ -5236,6 +5287,8 @@ mod tests {
             learning_rate: f64::NAN,
             sequence_length: 0,
             max_windows: 99_999,
+            resample_training_windows: false,
+            resample_interval_epochs: 999,
             early_stopping_patience: 999,
             early_stopping_min_delta: 2.0,
         })
@@ -5251,6 +5304,8 @@ mod tests {
         assert_eq!(saved[0].learning_rate, default_training_learning_rate());
         assert_eq!(saved[0].sequence_length, default_training_sequence_length());
         assert_eq!(saved[0].max_windows, 16_384);
+        assert!(!saved[0].resample_training_windows);
+        assert_eq!(saved[0].resample_interval_epochs, 50);
         assert_eq!(saved[0].early_stopping_patience, 100);
         assert_eq!(saved[0].early_stopping_min_delta, 1.0);
 
