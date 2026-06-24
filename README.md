@@ -28,7 +28,8 @@ streaming validation checkpoints, early stopping controls, learning-rate
 plateau decay, recurrent state-drift diagnostics, runtime inspection,
 target/prediction/residual playback, transient-aware latency candidate review
 with window agreement, golden RTNeural JSON fixtures, native parity checks,
-block-size/channel native benchmark reports, and debug/release smoke scripts.
+block-size/channel native benchmark reports, export-time ASR aliasing reports,
+smoothed-tanh WaveNet research presets, and debug/release smoke scripts.
 
 Still deferred: signed/notarized release distribution, richer waveform/spectrum
 inspection, a full tiny train/export smoke inside an installed bundle, UI smoke
@@ -265,6 +266,11 @@ the fastest passing backend. Run
 `pnpm --filter rtneural-trainer-app build:validators` before export when you
 want the local matrix to include every available native backend.
 
+Python export also writes `aliasing-report.json`, a warning-only ASR
+diagnostic that renders deterministic sine probes through the exported RTNeural
+JSON. The desktop package metadata surfaces it as the export `aliasing` report
+beside validation and benchmark results.
+
 ## Use The Trainer CLI
 
 Run CLI commands from `trainer/` with `uv run`:
@@ -384,9 +390,15 @@ Current Keras-first presets are:
   quality probe.
 - `wavenet_tcn_balanced`: the current default amp quality path, matching the
   proven legacy `wavenet_tcn` architecture.
+- `wavenet_tcn_balanced_tanh15`: research balanced WaveNet with smoothed
+  `tanh(x / 1.5)` training, exported as standard RTNeural `tanh`.
+- `wavenet_tcn_balanced_tanh18`: research balanced WaveNet with smoothed
+  `tanh(x / 1.8)` training for ASR comparisons.
 - `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement
   runs, especially crunch/rhythm/high-gain tones. Benchmark before treating
   quality exports as plugin-ready.
+- `wavenet_tcn_quality_tanh18`: research quality WaveNet with smoothed
+  `tanh(x / 1.8)` training.
 - `wavenet_tcn_separable_fast`: experimental grouped/dilated Conv1D plus 1x1
   pointwise WaveNet variant. It has Python/native parity coverage, but current
   dynamic RTNeural benchmarks do not beat `wavenet_tcn_balanced`; use it only
@@ -402,7 +414,9 @@ The PyTorch compatibility backend is currently limited to the LSTM presets.
 
 Research notes from the PANAMA paper and related WaveNet amp-modeling work are
 captured in
-[docs/Research-PANAMA-WaveNet-Active-Learning.md](docs/Research-PANAMA-WaveNet-Active-Learning.md).
+[docs/Research-PANAMA-WaveNet-Active-Learning.md](docs/Research-PANAMA-WaveNet-Active-Learning.md)
+and
+[docs/Research-WaveNet-Amp-Simulation-Papers-2026-06-24.md](docs/Research-WaveNet-Amp-Simulation-Papers-2026-06-24.md).
 
 ### 3. Evaluate
 
@@ -451,6 +465,7 @@ The export folder receives:
 - `model.rtneural.json`
 - `validation-report.json`
 - `benchmark-report.json`
+- `aliasing-report.json`
 - `native-benchmark-matrix.json` when exported from the desktop app
 - `parity-snapshot.json`
 - `parity-snapshot-input.wav`
@@ -632,6 +647,7 @@ Tauri bundle outputs, staged sidecars, and
 - [PANAMA / WaveNet findings](docs/Research-PANAMA-WaveNet-Active-Learning.md)
 - [NAM / WaveNet performance findings](docs/Research-NAM-Performance-And-WaveNet.md)
 - [Clean/crunch/rhythm capture baseline](docs/Research-Clean-Crunch-Rhythm-Capture-Baseline.md)
+- [WaveNet amp simulation paper review](docs/Research-WaveNet-Amp-Simulation-Papers-2026-06-24.md)
 - [Implementation guide](docs/Implementation-Guide-RTNeural-Training-Desktop-App.md)
 - [Audio capture guidelines](docs/Audio-Capture-Guidelines.md)
 - [RTNeural upstream](https://github.com/jatinchowdhury18/RTNeural)

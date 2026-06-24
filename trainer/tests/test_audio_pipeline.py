@@ -9,6 +9,7 @@ from pathlib import Path
 
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.data.prepare import analyze_latency, prepare_audio
+from rttrainer.metrics.aliasing import analyze_signal_aliasing
 from rttrainer.metrics.audio_metrics import compute_metrics
 from rttrainer.training.dataset import build_windowed_dataset, resample_windowed_training_data
 
@@ -215,6 +216,44 @@ class AudioPipelineTests(unittest.TestCase):
         metrics = compute_metrics([0.0, 0.2, -0.2], [0.0, 0.2, -0.2])
         self.assertEqual(metrics["esr"], 0.0)
         self.assertEqual(metrics["rmse"], 0.0)
+
+    def test_aliasing_metric_stays_low_for_clean_sine(self) -> None:
+        sample_count = 4096
+        fundamental_bin = 257
+        samples = [
+            math.sin(2.0 * math.pi * fundamental_bin * index / sample_count)
+            for index in range(sample_count)
+        ]
+
+        report = analyze_signal_aliasing(
+            samples,
+            sample_rate=48_000,
+            fundamental_bin=fundamental_bin,
+        )
+
+        self.assertLess(float(report["asr"]), 1.0e-12)
+
+    def test_aliasing_metric_increases_for_hard_nonlinearity(self) -> None:
+        sample_count = 4096
+        fundamental_bin = 257
+        sine = [
+            math.sin(2.0 * math.pi * fundamental_bin * index / sample_count)
+            for index in range(sample_count)
+        ]
+        clipped = [soft_clip(sample * 8.0) for sample in sine]
+
+        clean_report = analyze_signal_aliasing(
+            sine,
+            sample_rate=48_000,
+            fundamental_bin=fundamental_bin,
+        )
+        clipped_report = analyze_signal_aliasing(
+            clipped,
+            sample_rate=48_000,
+            fundamental_bin=fundamental_bin,
+        )
+
+        self.assertGreater(float(clipped_report["asr"]), float(clean_report["asr"]))
 
     def test_long_dataset_samples_windows_across_capture(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

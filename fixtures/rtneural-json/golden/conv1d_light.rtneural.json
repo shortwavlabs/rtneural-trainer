@@ -119,6 +119,8 @@
   "metadata": {
     "architecture": "conv1d_light",
     "backend": "keras",
+    "conv_activation": "tanh",
+    "conv_activation_alpha": 1.0,
     "latency_samples": 0,
     "loss": {
       "esr": 0.0,

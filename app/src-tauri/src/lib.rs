@@ -33,7 +33,10 @@ const MODEL_PRESETS: &[&str] = &[
     "wavenet_tcn_fast",
     "wavenet_tcn",
     "wavenet_tcn_balanced",
+    "wavenet_tcn_balanced_tanh15",
+    "wavenet_tcn_balanced_tanh18",
     "wavenet_tcn_quality",
+    "wavenet_tcn_quality_tanh18",
     "wavenet_tcn_separable_fast",
     "conv_gru_hybrid",
 ];
@@ -500,6 +503,7 @@ struct FinalExportPackageInput<'a> {
     package_path: &'a Path,
     validation_path: &'a Path,
     benchmark_path: &'a Path,
+    aliasing_path: &'a Path,
     benchmark_matrix_path: &'a Path,
 }
 
@@ -1493,6 +1497,7 @@ fn export_run_blocking(
     let package_path = export_dir.join("package.json");
     let validation_path = export_dir.join("validation-report.json");
     let benchmark_path = export_dir.join("benchmark-report.json");
+    let aliasing_path = export_dir.join("aliasing-report.json");
     let benchmark_matrix_path = export_dir.join("native-benchmark-matrix.json");
     let manifest_path = export_dir.join("export-manifest.json");
     let run_dir = project_dir.join("runs").join(&run.id);
@@ -1689,6 +1694,7 @@ fn export_run_blocking(
         package_path: &package_path,
         validation_path: &validation_path,
         benchmark_path: &benchmark_path,
+        aliasing_path: &aliasing_path,
         benchmark_matrix_path: &benchmark_matrix_path,
     })?;
 
@@ -3083,6 +3089,7 @@ fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Re
         read_optional_json_value(input.package_path).unwrap_or_else(|| serde_json::json!({}));
     let validation_report = read_optional_json_value(input.validation_path);
     let benchmark_report = read_optional_json_value(input.benchmark_path);
+    let aliasing_report = read_optional_json_value(input.aliasing_path);
     let benchmark_matrix_report = read_optional_json_value(input.benchmark_matrix_path);
     let model_json = read_optional_json_value(input.model_path);
     let model_metadata = model_json
@@ -3133,6 +3140,12 @@ fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Re
             input.export_dir,
             "benchmark_report",
             input.benchmark_path,
+            "application/json",
+        ),
+        export_artifact_metadata(
+            input.export_dir,
+            "aliasing_report",
+            input.aliasing_path,
             "application/json",
         ),
         export_artifact_metadata(
@@ -3191,12 +3204,14 @@ fn write_final_export_package_metadata(input: FinalExportPackageInput<'_>) -> Re
         "model_path": relative_path_string(input.export_dir, input.model_path),
         "validation_path": relative_path_string(input.export_dir, input.validation_path),
         "benchmark_path": relative_path_string(input.export_dir, input.benchmark_path),
+        "aliasing_path": relative_path_string(input.export_dir, input.aliasing_path),
         "benchmark_matrix_path": relative_path_string(input.export_dir, input.benchmark_matrix_path),
         "parity_snapshot": parity_snapshot,
         "package_path": relative_path_string(input.export_dir, input.package_path),
         "quality": input.run.metrics,
         "validation": validation_report,
         "benchmark": benchmark_report,
+        "aliasing": aliasing_report,
         "benchmark_matrix": benchmark_matrix_report,
         "generated_by": {
             "app": "RTNeural Trainer",
@@ -4882,6 +4897,7 @@ mod tests {
         let package_path = export_dir.join("package.json");
         let validation_path = export_dir.join("validation-report.json");
         let benchmark_path = export_dir.join("benchmark-report.json");
+        let aliasing_path = export_dir.join("aliasing-report.json");
         let benchmark_matrix_path = export_dir.join("native-benchmark-matrix.json");
         write_json(
             &model_path,
@@ -4909,6 +4925,15 @@ mod tests {
             }),
         )
         .expect("write benchmark report");
+        write_json(
+            &aliasing_path,
+            &serde_json::json!({
+                "status": "pass",
+                "verdict": "low_aliasing",
+                "worst_asr": 0.01
+            }),
+        )
+        .expect("write aliasing report");
         write_json(
             &benchmark_matrix_path,
             &serde_json::json!({
@@ -4987,6 +5012,7 @@ mod tests {
             package_path: &package_path,
             validation_path: &validation_path,
             benchmark_path: &benchmark_path,
+            aliasing_path: &aliasing_path,
             benchmark_matrix_path: &benchmark_matrix_path,
         })
         .expect("write final package metadata");
@@ -4996,6 +5022,7 @@ mod tests {
         assert_eq!(package["backend"], "keras");
         assert_eq!(package["validation"]["status"], "pass");
         assert_eq!(package["benchmark"]["realtime_factor"], 42.0);
+        assert_eq!(package["aliasing"]["verdict"], "low_aliasing");
         assert_eq!(package["benchmark_matrix"]["status"], "pass");
         assert_eq!(
             package["benchmark_matrix"]["fastest_passing_backend"]["id"],
@@ -5007,6 +5034,11 @@ mod tests {
             .expect("artifacts array")
             .iter()
             .any(|artifact| artifact["role"] == "parity_snapshot_manifest"));
+        assert!(package["artifacts"]
+            .as_array()
+            .expect("artifacts array")
+            .iter()
+            .any(|artifact| artifact["role"] == "aliasing_report"));
         assert!(package["artifacts"]
             .as_array()
             .expect("artifacts array")

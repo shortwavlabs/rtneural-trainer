@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+SCALED_TANH_ALPHAS = (1.5, 1.8)
+
 
 @dataclass(frozen=True)
 class PresetConfig:
@@ -16,6 +18,8 @@ class PresetConfig:
     dense_units: int | None = None
     batchnorm: bool = False
     prelu: bool = False
+    conv_activation: str = "tanh"
+    conv_activation_alpha: float = 1.0
     output_activation: str | None = "tanh"
     conv_dilations: tuple[int, ...] = ()
     default_loss: str = "mse"
@@ -28,6 +32,7 @@ def wavenet_tcn_preset(
     num_layers: int,
     conv_filters: int,
     conv_dilations: tuple[int, ...],
+    conv_activation_alpha: float = 1.0,
 ) -> PresetConfig:
     return PresetConfig(
         preset_id=preset_id,
@@ -39,6 +44,7 @@ def wavenet_tcn_preset(
         kernel_size=3,
         conv_filters=conv_filters,
         conv_dilations=conv_dilations,
+        conv_activation_alpha=conv_activation_alpha,
         default_loss="mrstft_preemphasis",
     )
 
@@ -155,12 +161,36 @@ PRESETS: dict[str, PresetConfig] = {
         conv_filters=16,
         conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128),
     ),
+    "wavenet_tcn_balanced_tanh15": wavenet_tcn_preset(
+        "wavenet_tcn_balanced_tanh15",
+        hidden_size=16,
+        num_layers=8,
+        conv_filters=16,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128),
+        conv_activation_alpha=1.5,
+    ),
+    "wavenet_tcn_balanced_tanh18": wavenet_tcn_preset(
+        "wavenet_tcn_balanced_tanh18",
+        hidden_size=16,
+        num_layers=8,
+        conv_filters=16,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128),
+        conv_activation_alpha=1.8,
+    ),
     "wavenet_tcn_quality": wavenet_tcn_preset(
         "wavenet_tcn_quality",
         hidden_size=20,
         num_layers=10,
         conv_filters=20,
         conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
+    ),
+    "wavenet_tcn_quality_tanh18": wavenet_tcn_preset(
+        "wavenet_tcn_quality_tanh18",
+        hidden_size=20,
+        num_layers=10,
+        conv_filters=20,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
+        conv_activation_alpha=1.8,
     ),
     "wavenet_tcn_separable_fast": wavenet_tcn_separable_preset(
         "wavenet_tcn_separable_fast",
@@ -223,6 +253,7 @@ def build_model(config: PresetConfig):
 def build_keras_model(config: PresetConfig, keras):
     layers = keras.layers
     model_layers = [keras.Input(shape=(None, config.input_size), name="audio_input")]
+    conv_activation = keras_conv_activation(config, keras)
 
     if config.architecture == "dense":
         model_layers.extend(
@@ -283,7 +314,7 @@ def build_keras_model(config: PresetConfig, keras):
                     kernel_size=config.kernel_size,
                     dilation_rate=dilations[min(block_index, len(dilations) - 1)],
                     padding="causal",
-                    activation=None if config.batchnorm or config.prelu else "tanh",
+                    activation=None if config.batchnorm or config.prelu else conv_activation,
                     name=f"conv1d{suffix}",
                 )
             )
@@ -314,7 +345,7 @@ def build_keras_model(config: PresetConfig, keras):
                         kernel_size=config.kernel_size,
                         dilation_rate=dilation,
                         padding="causal",
-                        activation="tanh",
+                        activation=conv_activation,
                         name=f"conv1d_expand{suffix}",
                     )
                 )
@@ -336,7 +367,7 @@ def build_keras_model(config: PresetConfig, keras):
                         kernel_size=1,
                         dilation_rate=1,
                         padding="causal",
-                        activation="tanh",
+                        activation=conv_activation,
                         name=f"pointwise_conv1d{suffix}",
                     ),
                 ]
@@ -377,3 +408,32 @@ def build_keras_model(config: PresetConfig, keras):
         raise ValueError(f"Unsupported Keras preset architecture: {config.architecture}")
 
     return keras.Sequential(model_layers, name=config.preset_id)
+
+
+def keras_conv_activation(config: PresetConfig, keras):
+    if config.conv_activation != "tanh":
+        return config.conv_activation
+    if config.conv_activation_alpha == 1.0:
+        return "tanh"
+    return scaled_tanh_activation(keras, config.conv_activation_alpha)
+
+
+def scaled_tanh_activation(keras, alpha: float):  # type: ignore[no-untyped-def]
+    alpha = float(alpha)
+
+    def scaled_tanh(value):  # type: ignore[no-untyped-def]
+        return keras.activations.tanh(value / alpha)
+
+    scaled_tanh.__name__ = scaled_tanh_name(alpha)
+    return scaled_tanh
+
+
+def scaled_tanh_custom_objects(keras) -> dict[str, object]:  # type: ignore[no-untyped-def]
+    return {
+        scaled_tanh_name(alpha): scaled_tanh_activation(keras, alpha)
+        for alpha in SCALED_TANH_ALPHAS
+    }
+
+
+def scaled_tanh_name(alpha: float) -> str:
+    return f"scaled_tanh_{str(float(alpha)).replace('.', '_')}"

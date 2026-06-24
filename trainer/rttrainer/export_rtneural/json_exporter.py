@@ -6,6 +6,7 @@ from typing import Any
 
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.export_rtneural.keras_exporter import ArrayEncoder, save_keras_model_json
+from rttrainer.metrics.aliasing import analyze_rtneural_json_aliasing
 from rttrainer.metrics.audio_metrics import compute_metrics
 from rttrainer.models.presets import get_preset
 from rttrainer.training.device import require_torch
@@ -84,6 +85,13 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
     benchmark_path = export_dir / "benchmark-report.json"
     write_json(benchmark_path, benchmark)
 
+    aliasing_path = export_dir / "aliasing-report.json"
+    aliasing = analyze_rtneural_json_aliasing(
+        model_json_path=model_path,
+        sample_rate=sample_rate,
+        report_path=aliasing_path,
+    )
+
     created_at = now()
     package = {
         "schema_version": 2,
@@ -106,6 +114,7 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
             artifact_metadata(export_dir, "model", model_path, "application/json"),
             artifact_metadata(export_dir, "validation_report", validation_path, "application/json"),
             artifact_metadata(export_dir, "benchmark_report", benchmark_path, "application/json"),
+            artifact_metadata(export_dir, "aliasing_report", aliasing_path, "application/json"),
             artifact_metadata(
                 export_dir,
                 "parity_snapshot_manifest",
@@ -128,11 +137,13 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         "model_path": model_path.name,
         "validation_path": validation_path.name,
         "benchmark_path": benchmark_path.name,
+        "aliasing_path": aliasing_path.name,
         "parity_snapshot": parity_snapshot,
         "package_path": "package.json",
         "quality": checkpoint.get("metrics", {}),
         "validation": validation,
         "benchmark": benchmark,
+        "aliasing": aliasing,
         "training": {
             "preset": preset.preset_id,
             "backend": checkpoint.get("backend", "pytorch"),
@@ -163,8 +174,10 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         "model_path": str(model_path),
         "validation_path": str(validation_path),
         "benchmark_path": str(benchmark_path),
+        "aliasing_path": str(aliasing_path),
         "package_path": str(package_path),
         "validation": validation,
+        "aliasing": aliasing,
         "parity_snapshot": parity_snapshot,
     }
 
@@ -290,6 +303,7 @@ def build_keras_rtneural_json(
     latency_samples: int,
     checkpoint_metrics: dict[str, Any],
 ) -> dict[str, Any]:
+    preset = get_preset(preset_id)
     model_json = json.loads(json.dumps(save_keras_model_json(model), cls=ArrayEncoder))
     for layer in model_json.get("layers", []):
         if layer.get("type") == "lstm":
@@ -305,6 +319,8 @@ def build_keras_rtneural_json(
             layer["input_size"] = len(kernel)
             layer["output_size"] = len(kernel[0]) if kernel else 0
         elif layer.get("type") == "conv1d":
+            if preset.conv_activation == "tanh" and preset.conv_activation_alpha != 1.0:
+                fold_scaled_tanh_conv1d_activation(layer, preset.conv_activation_alpha)
             kernel, _bias = layer["weights"]
             groups = int(layer.get("groups", 1) or 1)
             layer["input_size"] = (len(kernel[0]) if kernel else 0) * groups
@@ -324,8 +340,40 @@ def build_keras_rtneural_json(
         "backend": "keras",
         "loss": checkpoint_metrics,
         "rtneural_commit": RTNEURAL_COMMIT,
+        "conv_activation": preset.conv_activation,
+        "conv_activation_alpha": preset.conv_activation_alpha,
     }
+    if preset.conv_activation == "tanh" and preset.conv_activation_alpha != 1.0:
+        model_json["metadata"]["activation_export"] = {
+            "strategy": "fold_scaled_tanh_into_conv1d",
+            "trained_activation": f"tanh(x / {preset.conv_activation_alpha:g})",
+            "exported_activation": "tanh",
+        }
     return model_json
+
+
+def fold_scaled_tanh_conv1d_activation(layer: dict[str, Any], alpha: float) -> None:
+    weights = layer.get("weights")
+    if not isinstance(weights, list) or not weights:
+        return
+    scale = 1.0 / float(alpha)
+    layer["weights"] = [
+        scale_nested_numbers(weight, scale)
+        for weight in weights
+    ]
+    layer["activation"] = "tanh"
+    layer["activation_fold"] = {
+        "source": f"tanh(x / {alpha:g})",
+        "scale": scale,
+    }
+
+
+def scale_nested_numbers(value: Any, scale: float) -> Any:
+    if isinstance(value, (int, float)):
+        return float(value) * scale
+    if isinstance(value, list):
+        return [scale_nested_numbers(item, scale) for item in value]
+    return value
 
 
 def default_parity_tolerance(preset_id: str) -> float:

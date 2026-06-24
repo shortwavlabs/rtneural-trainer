@@ -220,6 +220,20 @@ const presets: PresetOption[] = [
     backends: ["keras"],
   },
   {
+    id: "wavenet_tcn_balanced_tanh15",
+    label: "WaveNet Tanh 1.5",
+    detail: "Balanced WaveNet, smoothed tanh",
+    cpu: "Research",
+    backends: ["keras"],
+  },
+  {
+    id: "wavenet_tcn_balanced_tanh18",
+    label: "WaveNet Tanh 1.8",
+    detail: "Balanced WaveNet, smoother tanh",
+    cpu: "Research",
+    backends: ["keras"],
+  },
+  {
     id: "wavenet_tcn",
     label: "WaveNet Balanced",
     detail: "8x dilated causal Conv1D",
@@ -232,6 +246,13 @@ const presets: PresetOption[] = [
     label: "WaveNet Quality",
     detail: "10x dilated causal Conv1D",
     cpu: "Max CPU",
+    backends: ["keras"],
+  },
+  {
+    id: "wavenet_tcn_quality_tanh18",
+    label: "WaveNet Quality Tanh 1.8",
+    detail: "Quality WaveNet, smoother tanh",
+    cpu: "Research",
     backends: ["keras"],
   },
   {
@@ -316,6 +337,22 @@ const builtInTrainingRecipes = [
     name: "WaveNet separable",
     description: "Experimental grouped-Conv1D WaveNet for RTNeural runtime research.",
     modelPreset: "wavenet_tcn_separable_fast",
+    epochs: 120,
+    batchSize: 16,
+    learningRate: 0.0007,
+    sequenceLength: 8192,
+    maxWindows: 4096,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
+    earlyStoppingPatience: 12,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_aliasing_probe",
+    source: "built_in",
+    name: "WaveNet anti-alias probe",
+    description: "Research run using smoothed tanh to compare ESR against export ASR.",
+    modelPreset: "wavenet_tcn_balanced_tanh18",
     epochs: 120,
     batchSize: 16,
     learningRate: 0.0007,
@@ -3446,6 +3483,11 @@ function ExportList({
               status={getNestedString(item.package_metadata, ["benchmark_matrix", "status"])}
               detail={benchmarkMatrixSummary(item.package_metadata)}
             />
+            <ReportPill
+              label="Aliasing"
+              status={getNestedString(item.package_metadata, ["aliasing", "status"])}
+              detail={aliasingSummary(item.package_metadata)}
+            />
           </div>
           <div className="artifact-grid">
             <span>{compactPath(item.model_path)}</span>
@@ -4562,6 +4604,13 @@ function formatMetric(value: number) {
   return value < 0.01 ? value.toExponential(2) : value.toFixed(4);
 }
 
+function formatPercent(value: number) {
+  const percentage = value * 100;
+  if (percentage >= 100) return `${percentage.toFixed(0)}%`;
+  if (percentage >= 10) return `${percentage.toFixed(1)}%`;
+  return `${percentage.toFixed(2)}%`;
+}
+
 function formatLearningRate(value: number) {
   return value < 0.001 ? value.toExponential(2) : value.toFixed(4);
 }
@@ -4654,6 +4703,25 @@ function benchmarkMatrixSummary(metadata: Record<string, unknown> | null) {
       : "no passing backend",
     headroom ? headroom.split("_").join(" ") : null,
     `${availableCount}/${backends.length} available`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function aliasingSummary(metadata: Record<string, unknown> | null) {
+  const aliasing = getNestedObject(metadata, ["aliasing"]);
+  if (!aliasing) return "waiting for ASR";
+
+  const verdict = getString(aliasing, "verdict");
+  const worstAsr = getNumber(aliasing, "worst_asr");
+  const averageAsr = getNumber(aliasing, "average_asr");
+  const tests = getArray(aliasing, "tests");
+
+  return [
+    verdict ? verdict.split("_").join(" ") : null,
+    worstAsr !== null ? `worst ASR ${formatPercent(worstAsr)}` : null,
+    averageAsr !== null ? `avg ${formatPercent(averageAsr)}` : null,
+    tests.length ? `${tests.length} probes` : null,
   ]
     .filter(Boolean)
     .join(" · ");

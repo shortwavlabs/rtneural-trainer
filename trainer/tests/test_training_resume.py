@@ -8,6 +8,7 @@ from rttrainer.utils import read_json, write_json
 from rttrainer.training.runner import (
     correlation_coefficient,
     default_learning_rate_plateau_patience,
+    estimate_realtime_factor,
     keras_device_preference_for_preset,
     numeric_metrics,
     quality_assessment,
@@ -170,7 +171,19 @@ class TrainingResumeTests(unittest.TestCase):
             "mrstft_preemphasis",
         )
         self.assertEqual(
+            resolve_training_loss_name({}, get_preset("wavenet_tcn_balanced_tanh15")),
+            "mrstft_preemphasis",
+        )
+        self.assertEqual(
+            resolve_training_loss_name({}, get_preset("wavenet_tcn_balanced_tanh18")),
+            "mrstft_preemphasis",
+        )
+        self.assertEqual(
             resolve_training_loss_name({}, get_preset("wavenet_tcn_quality")),
+            "mrstft_preemphasis",
+        )
+        self.assertEqual(
+            resolve_training_loss_name({}, get_preset("wavenet_tcn_quality_tanh18")),
             "mrstft_preemphasis",
         )
         self.assertEqual(
@@ -181,6 +194,20 @@ class TrainingResumeTests(unittest.TestCase):
     def test_training_loss_rejects_unknown_values(self) -> None:
         with self.assertRaises(ValueError):
             resolve_training_loss_name({"loss": "magic"})
+
+    def test_smoothed_tanh_wavenet_uses_matching_runtime_estimate(self) -> None:
+        self.assertEqual(
+            estimate_realtime_factor(get_preset("wavenet_tcn_balanced_tanh15")),
+            estimate_realtime_factor(get_preset("wavenet_tcn_balanced")),
+        )
+        self.assertEqual(
+            estimate_realtime_factor(get_preset("wavenet_tcn_balanced_tanh18")),
+            estimate_realtime_factor(get_preset("wavenet_tcn_balanced")),
+        )
+        self.assertEqual(
+            estimate_realtime_factor(get_preset("wavenet_tcn_quality_tanh18")),
+            estimate_realtime_factor(get_preset("wavenet_tcn_quality")),
+        )
 
     def test_quality_assessment_marks_strong_wavenet_preview_good(self) -> None:
         assessment = quality_assessment(
@@ -315,7 +342,10 @@ class TrainingResumeTests(unittest.TestCase):
             "wavenet_tcn_fast",
             "wavenet_tcn",
             "wavenet_tcn_balanced",
+            "wavenet_tcn_balanced_tanh15",
+            "wavenet_tcn_balanced_tanh18",
             "wavenet_tcn_quality",
+            "wavenet_tcn_quality_tanh18",
             "wavenet_tcn_separable_fast",
         ):
             with self.subTest(preset=preset_id):

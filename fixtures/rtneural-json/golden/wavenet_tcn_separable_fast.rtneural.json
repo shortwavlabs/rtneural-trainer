@@ -3185,6 +3185,8 @@
   "metadata": {
     "architecture": "wavenet_tcn_separable_fast",
     "backend": "keras",
+    "conv_activation": "tanh",
+    "conv_activation_alpha": 1.0,
     "latency_samples": 0,
     "loss": {
       "esr": 0.0,

@@ -8,6 +8,7 @@ from pathlib import Path
 from rttrainer import __version__
 from rttrainer.data.prepare import prepare_audio
 from rttrainer.export_rtneural.json_exporter import export_checkpoint
+from rttrainer.metrics.aliasing import analyze_rtneural_json_aliasing
 from rttrainer.training.device import inspect_device
 from rttrainer.training.runner import evaluate_checkpoint, run_training
 from rttrainer.utils import emit, mkdir, read_json, require_path
@@ -25,6 +26,12 @@ def main(argv: list[str] | None = None) -> int:
         command_parser = subparsers.add_parser(command)
         command_parser.add_argument("--manifest", required=True)
 
+    aliasing_parser = subparsers.add_parser("aliasing")
+    aliasing_parser.add_argument("--model", required=True)
+    aliasing_parser.add_argument("--report")
+    aliasing_parser.add_argument("--sample-rate", type=int, default=48_000)
+    aliasing_parser.add_argument("--json", action="store_true", dest="as_json")
+
     args = parser.parse_args(argv)
 
     try:
@@ -34,6 +41,18 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(payload, indent=2))
             else:
                 print(f"{payload['selected_device']} ({payload['torch_status']})")
+            return 0
+
+        if args.command == "aliasing":
+            report = analyze_rtneural_json_aliasing(
+                model_json_path=Path(args.model).expanduser(),
+                sample_rate=int(args.sample_rate),
+                report_path=Path(args.report).expanduser() if args.report else None,
+            )
+            if args.as_json:
+                print(json.dumps(report, indent=2))
+            else:
+                emit({"type": "aliasing_finished", **report})
             return 0
 
         manifest = read_json(Path(args.manifest))

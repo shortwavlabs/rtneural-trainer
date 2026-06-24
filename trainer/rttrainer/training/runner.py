@@ -9,7 +9,13 @@ from typing import Any, cast
 
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.metrics.audio_metrics import compute_metrics
-from rttrainer.models.presets import PresetConfig, build_keras_model, build_model, get_preset
+from rttrainer.models.presets import (
+    PresetConfig,
+    build_keras_model,
+    build_model,
+    get_preset,
+    scaled_tanh_custom_objects,
+)
 from rttrainer.training.dataset import build_windowed_dataset, resample_windowed_training_data
 from rttrainer.training.device import choose_device, normalize_device_preference, require_torch
 from rttrainer.utils import emit, mkdir, now, read_json, write_json
@@ -1011,7 +1017,11 @@ def load_keras_checkpoint(path: Path):
             "metrics": {},
         }
     with tf.device(tensorflow_device_scope(tf, checkpoint.get("device"))):
-        model = tf.keras.models.load_model(path, compile=False)
+        model = tf.keras.models.load_model(
+            path,
+            compile=False,
+            custom_objects=scaled_tanh_custom_objects(tf.keras),
+        )
     checkpoint["backend"] = "keras"
     checkpoint["model_path"] = str(path)
     return model, checkpoint
@@ -1860,9 +1870,14 @@ def estimate_realtime_factor(preset: PresetConfig) -> float:
     # Placeholder until native RTNeural benchmarking is wired to the trainer.
     if preset.preset_id == "wavenet_tcn_fast":
         return 8.0
-    if preset.preset_id in {"wavenet_tcn", "wavenet_tcn_balanced"}:
+    if preset.preset_id in {
+        "wavenet_tcn",
+        "wavenet_tcn_balanced",
+        "wavenet_tcn_balanced_tanh15",
+        "wavenet_tcn_balanced_tanh18",
+    }:
         return 3.0
-    if preset.preset_id == "wavenet_tcn_quality":
+    if preset.preset_id in {"wavenet_tcn_quality", "wavenet_tcn_quality_tanh18"}:
         return 1.5
     if preset.preset_id == "wavenet_tcn_separable_fast":
         return 5.0

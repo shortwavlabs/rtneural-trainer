@@ -1581,7 +1581,7 @@ dd,
 
 .report-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1612,6 +1612,10 @@ dd,
 
 .report-pill.fail strong {
   color: #ffaaa0;
+}
+
+.report-pill.warning strong {
+  color: #f5c86d;
 }
 
 .report-pill small {

@@ -12,7 +12,8 @@ from typing import Any, Protocol, cast
 
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.export_rtneural.json_exporter import default_parity_tolerance
-from rttrainer.models.presets import PRESETS
+from rttrainer.models.presets import PRESETS, build_keras_model
+from rttrainer.training.runner import load_keras_checkpoint, save_keras_model_checkpoint
 from rttrainer.validation.parity import run_exported_json
 
 
@@ -143,6 +144,24 @@ class RTNeuralGoldenFixtureTests(unittest.TestCase):
                         max_abs_error(expected, actual),
                         default_parity_tolerance(preset_id),
                     )
+
+    def test_scaled_tanh_checkpoint_round_trips_through_keras_save(self) -> None:
+        import numpy as np
+
+        golden_module = require_golden_fixture_module()
+        tf = golden_module.require_tensorflow()
+        model = build_keras_model(PRESETS["wavenet_tcn_balanced_tanh18"], tf.keras)
+        tensor = np.asarray([0.1, -0.2, 0.3, -0.1], dtype=np.float32).reshape(1, 4, 1)
+        expected = model(tensor, training=False).numpy().reshape(-1).tolist()
+
+        with tempfile.TemporaryDirectory(prefix="rttrainer-scaled-tanh-save-") as tmp:
+            model_path = Path(tmp) / "checkpoints" / "best-model.keras"
+            model_path.parent.mkdir(parents=True)
+            save_keras_model_checkpoint(model, model_path)
+            reloaded, _checkpoint = load_keras_checkpoint(model_path)
+            actual = reloaded(tensor, training=False).numpy().reshape(-1).tolist()
+
+        self.assertLessEqual(max_abs_error(expected, actual), 1.0e-7)
 
     @unittest.skipUnless(
         native_validator_available(),

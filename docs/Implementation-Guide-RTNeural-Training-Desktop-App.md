@@ -26,7 +26,7 @@ Implemented:
    runtime inspection, capture import, preparation, alignment, training,
    evaluation, export, notes, and progress streaming.
 2. `uv`-managed Python `rttrainer` sidecar with `prepare`, `train`, `evaluate`,
-   `export`, and `inspect-device` commands.
+   `export`, `aliasing`, and `inspect-device` commands.
 3. TensorFlow/Keras-first training and RTNeural JSON export path, with optional
    PyTorch support only for curated LSTM presets.
 4. Dense-only, GRU, LSTM, causal Conv1D, safe BatchNorm/PReLU, and Conv+GRU
@@ -44,8 +44,9 @@ Implemented:
 8. Offline preview playback for target, prediction, residual, and recurrent
    chunk-reset diagnostic WAVs, plus peak-envelope waveform comparison.
 9. Rich export package metadata, validation report display, selected native
-   benchmark report display, full native backend benchmark matrix packaging,
-   fastest-backend/headroom export UI, and open-export-folder support.
+   benchmark report display, ASR aliasing report display, full native backend
+   benchmark matrix packaging, fastest-backend/headroom export UI, and
+   open-export-folder support.
 10. Development sidecar shims, production sidecar packaging, release sidecar
     smoke tests, Tauri bundle smoke tests, and release artifact manifests.
 11. First-run generated sample project, setup/empty states, visible focus
@@ -292,7 +293,10 @@ Implemented presets:
 | `conv1d_stack_prelu` | Stacked dilated causal Conv1D/PReLU with bounded output and pre-emphasis MSE default loss | Fast finite-memory fallback and sanity check |
 | `wavenet_tcn_fast` | Smaller WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Faster high-gain probe |
 | `wavenet_tcn_balanced` | Proven WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Default amp quality path; benchmark before export |
+| `wavenet_tcn_balanced_tanh15` | Balanced WaveNet trained with smoothed `tanh(x / 1.5)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
+| `wavenet_tcn_balanced_tanh18` | Balanced WaveNet trained with smoothed `tanh(x / 1.8)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
 | `wavenet_tcn_quality` | Wider/deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Slower crunch/rhythm/refinement path; benchmark before export |
+| `wavenet_tcn_quality_tanh18` | Quality WaveNet trained with smoothed `tanh(x / 1.8)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
 | `wavenet_tcn_separable_fast` | Experimental grouped dilated Conv1D plus 1x1 pointwise WaveNet variant with bounded output and MR-STFT/pre-emphasis default loss | Runtime research only; parity-safe but not faster than balanced in current dynamic RTNeural benchmarks |
 | `wavenet_tcn` | Legacy balanced WaveNet-style preset | Existing run/checkpoint compatibility |
 | `conv_gru_hybrid` | Conv1D front-end + GRU with bounded dense output | Richer Keras temporal preset |
@@ -805,6 +809,7 @@ exports/<export-id>/
   metrics.json
   validation-report.json
   benchmark-report.json
+  aliasing-report.json
   native-validation-report.json
   native-benchmark-report.json
   export-events.jsonl
@@ -843,7 +848,8 @@ Acceptance criteria:
 - Export fails if benchmark does not meet the selected target tier.
 - Export can be regenerated from the saved run without retraining.
 - Export package metadata includes validation/benchmark report summaries,
-  artifact metadata, compatibility flags, and `.aidax` status marked deferred.
+  ASR aliasing diagnostics, artifact metadata, compatibility flags, and `.aidax`
+  status marked deferred.
 
 ## 7. Phase 2: Desktop MVP
 
@@ -1380,7 +1386,10 @@ fixtures/rtneural-json/golden/
   wavenet_tcn.rtneural.json
   wavenet_tcn_fast.rtneural.json
   wavenet_tcn_balanced.rtneural.json
+  wavenet_tcn_balanced_tanh15.rtneural.json
+  wavenet_tcn_balanced_tanh18.rtneural.json
   wavenet_tcn_quality.rtneural.json
+  wavenet_tcn_quality_tanh18.rtneural.json
   wavenet_tcn_separable_fast.rtneural.json
   conv_gru_hybrid.rtneural.json
 ```
@@ -1519,7 +1528,10 @@ PyTorch, or export logic changes.
 | `conv1d_stack_prelu` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `wavenet_tcn_fast` | Required | Later | Required | Required | Required | Required | v1-plus |
 | `wavenet_tcn_balanced` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `wavenet_tcn_balanced_tanh15` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
+| `wavenet_tcn_balanced_tanh18` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
 | `wavenet_tcn_quality` | Required | Later | Required | Required | Required | Required | v1-plus |
+| `wavenet_tcn_quality_tanh18` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
 | `wavenet_tcn_separable_fast` | Required | Later | Required | Required | Required | Required | Experimental runtime research |
 | `wavenet_tcn` | Required | Later | Required | Required | Required | Required | Legacy alias |
 | `conv_gru_hybrid` | Required | Later | Required | Required | Required | Required | v1-plus |

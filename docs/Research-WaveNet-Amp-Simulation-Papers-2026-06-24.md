@@ -56,6 +56,62 @@ Our current WaveNet presets already use `mrstft_preemphasis` as the default
 loss. That is good. The next gap is anti-alias evaluation and activation
 experimentation.
 
+## Implementation Status
+
+Implemented in the trainer app after this review:
+
+- `rttrainer aliasing --model model.rtneural.json --report aliasing-report.json`
+  renders deterministic sine probes through RTNeural JSON and computes ASR.
+- `rttrainer export` now writes `aliasing-report.json`, includes it in
+  `package.json`, and the Tauri export metadata rewrite preserves it beside
+  validation, benchmark, and native backend matrix reports.
+- The desktop export UI now surfaces an `Aliasing` report pill with status,
+  verdict, worst ASR, average ASR, and probe count.
+- Added RTNeural-safe smoothed-tanh WaveNet research presets:
+  - `wavenet_tcn_balanced_tanh15`
+  - `wavenet_tcn_balanced_tanh18`
+  - `wavenet_tcn_quality_tanh18`
+- These presets train with `tanh(x / alpha)` but export as ordinary RTNeural
+  `tanh` by folding `1 / alpha` into the preceding Conv1D kernel and bias.
+- Golden RTNeural JSON fixtures now cover the scaled-tanh presets with Python
+  parity and native validator parity.
+- Added `scripts/search_rtneural_presets.py` to generate a repeatable search
+  plan or run train/export comparisons across the WaveNet, smoothed-tanh
+  WaveNet, separable WaveNet, and stacked Conv presets.
+
+Still deferred:
+
+- Listening-calibrated ASR thresholds. ASR is warning-only for now.
+- Plugin-side anti-aliasing or oversampling. The app can measure/report ASR,
+  but the plugin runtime still needs its own performance and aliasing review.
+- Full architecture NAS with newly generated architectures. The first script
+  searches registered RTNeural-safe presets rather than inventing new presets
+  dynamically.
+
+## First Smoothed-Tanh Result
+
+Rhythm2 follow-up runs on `project_98f406e8108d423ab624bc8ca5b1fcb7` gave the
+first useful check on the anti-aliasing idea:
+
+| Preset | Preview ESR | RMSE | Corr | Worst ASR | Average ASR | Corrected Est. RTF | Interpretation |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `wavenet_tcn_balanced` | `0.1463` | `0.0610` | `0.9245` | `0.1463` | `0.0643` | `3.0x` | Best waveform fit in this rerun. |
+| `wavenet_tcn_balanced_tanh15` | `0.1873` | `0.0690` | `0.9025` | `0.4302` | `0.1803` | `3.0x` | Better smoothed-tanh fit, but ASR worsened. |
+| `wavenet_tcn_balanced_tanh18` | `0.2058` | `0.0724` | `0.8934` | `0.1104` | `0.0498` | `3.0x` | Lower ASR than baseline, weaker waveform fit. |
+
+The result supports the paper's main warning: smoothing activation functions is
+not a free quality improvement. On this capture, `alpha = 1.5` gave the better
+prediction metrics among smoothed-tanh variants, but it also produced the worst
+ASR. `alpha = 1.8` did what the paper suggested on aliasing, but at a visible
+ESR/RMSE cost. Treat `tanh18` as the actual anti-aliasing probe and `tanh15` as
+an intermediate tone-quality experiment.
+
+The smoothed-tanh presets do not reduce runtime by themselves. They export to
+the same RTNeural layer structure as balanced WaveNet, with Conv1D weights
+scaled before a normal `tanh`, so their runtime class is the balanced WaveNet
+class. A `120x` display from the first run review was a runtime-estimator bug,
+not a real native benchmark result.
+
 ## Actionable Findings
 
 ### 1. Add An Aliasing-To-Signal Ratio Gate
@@ -118,7 +174,7 @@ existing native validator.
 
 Recommended experiment:
 
-- Add hidden/research presets:
+- Add research presets:
   - `wavenet_tcn_balanced_tanh15`
   - `wavenet_tcn_balanced_tanh18`
   - `wavenet_tcn_quality_tanh18`
@@ -126,8 +182,8 @@ Recommended experiment:
 - Train on the captures where WaveNet already worked well: rhythm, lead,
   overdrive pedal.
 - Compare ESR, MR-STFT, ASR, prediction preview, and native benchmark.
-- Only expose these in the main UI if they beat or clearly complement the
-  current balanced/quality presets.
+- Keep these labeled as research presets until listening tests show a repeatable
+  benefit over the current balanced/quality presets.
 
 Do not jump to gated WaveNet yet. The anti-alias paper notes that gated variants
 can minimize ESR well but tend to introduce more aliasing. Gated blocks also
@@ -243,14 +299,13 @@ For the future plugin:
 
 ### Near Term
 
-1. Add ASR calculation as a standalone metric script or trainer command.
-2. Add ASR fields to export/report metadata, initially behind a warning-only
-   UI.
-3. Add scaled-tanh WaveNet research presets using export-time weight folding.
-4. Test scaled tanh against current `wavenet_tcn_balanced` and
-   `wavenet_tcn_quality` on the known rhythm/lead/pedal captures.
-5. Add a small preset-search script that can train/export/benchmark a grid of
-   RTNeural-safe WaveNet candidates.
+1. Continue testing scaled tanh against current `wavenet_tcn_balanced` and
+   `wavenet_tcn_quality` on lead/pedal captures, with rhythm2 as the first data
+   point.
+2. Run `scripts/search_rtneural_presets.py` on the same captures to compare
+   ESR, ASR, native parity, and native benchmark metadata.
+3. Calibrate ASR report language against listening notes before turning it into
+   a hard export gate.
 
 ### Medium Term
 

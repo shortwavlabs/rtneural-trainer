@@ -94,6 +94,27 @@ substantially worse than the preview metrics. This suggests a mix of higher
 model-capacity demand, dense nonlinear behavior, and possibly capture segments
 whose dynamics are not evenly represented by the current training windows.
 
+Follow-up rhythm2 smoothed-tanh rerun, after adding ASR export diagnostics:
+
+| Run | Preset | Preview ESR | RMSE | Corr | Residual RMS | Est. RTF | Stream Val Score | Worst ASR | Result |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `run_2fae65f91e754b0c942ffeed3cc4b0f2` | `wavenet_tcn_balanced` | `0.1463` | `0.0610` | `0.9245` | `-24.29 dBFS` | `3.0x` | `0.3320` | `0.1463` | Best waveform metrics in this rerun. |
+| `run_43464bcdeb00499d8f6b15154c920aaa` | `wavenet_tcn_balanced_tanh15` | `0.1873` | `0.0690` | `0.9025` | `-23.22 dBFS` | `3.0x` | `0.4082` | `0.4302` | Better of the smoothed-tanh quality runs, but higher ASR. |
+| `run_505fd2d5a4a948baaf8cbd3a733fac93` | `wavenet_tcn_balanced_tanh18` | `0.2058` | `0.0724` | `0.8934` | `-22.81 dBFS` | `3.0x` | `0.4269` | `0.1104` | Weaker waveform metrics, but best ASR. |
+
+Important correction: the first UI/report pass showed the smoothed-tanh presets
+at `120x` estimated RTF. That was a trainer estimate bug caused by the new
+preset IDs falling through to the generic Conv1D tier. The exported graphs have
+the same layer shape as `wavenet_tcn_balanced`; after fixing the estimator, they
+correctly report the balanced-class `3.0x` estimate. Temporary exports for all
+three runs passed RTNeural JSON parity with max absolute error below `0.00001`.
+
+This is still useful evidence. `tanh15` sounds/metrics-wise sits between fast
+and balanced, while `tanh18` behaves more like an anti-aliasing probe: worse
+ESR/RMSE than `tanh15`, but lower ASR than even the balanced baseline. The
+smoothed activations should stay in research status until listening tests tell
+us whether the lower-ASR trade-off is audible on sustained high notes.
+
 ### Edge Of Breakup
 
 | Preset | Preview ESR | RMSE | Corr | Residual RMS | Est. RTF | Best Epoch | Result |
@@ -171,7 +192,8 @@ CPU budget matters.
 
    `wavenet_tcn_quality` remained the best rhythm model and did not early-stop.
    Continue-from-best with a lower learning rate is justified, especially before
-   comparing exports.
+   comparing exports. The rhythm2 smoothed-tanh rerun also shows that activation
+   smoothing creates a real ESR-versus-ASR trade-off rather than a simple upgrade.
 
 4. Lead needs a special review path.
 

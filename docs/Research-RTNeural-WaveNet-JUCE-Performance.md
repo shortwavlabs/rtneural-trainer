@@ -70,6 +70,21 @@ Follow-up trained lead-capture result:
 This makes the separable preset more interesting than the fixture benchmark
 alone suggested. It can reach comparable quality with a much smaller JSON model,
 but the current dynamic RTNeural path still pays for the extra layer count.
+
+Rhythm2 smoothed-tanh follow-up:
+
+| Preset | Preview ESR | RMSE | Worst ASR | Est. RTF | Runtime Note |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `wavenet_tcn_balanced` | `0.1463` | `0.0610` | `0.1463` | `3.0x` | Baseline balanced graph. |
+| `wavenet_tcn_balanced_tanh15` | `0.1873` | `0.0690` | `0.4302` | `3.0x` | Same graph cost after export-time activation folding. |
+| `wavenet_tcn_balanced_tanh18` | `0.2058` | `0.0724` | `0.1104` | `3.0x` | Same graph cost, lower ASR than baseline. |
+
+The smoothed-tanh presets are not a performance optimization. They train with a
+different activation slope, then export by scaling Conv1D weights before a
+standard RTNeural `tanh`. That changes model behavior and ASR, but it does not
+remove layers, filters, or activation calls. Any earlier `120x` estimate for
+these presets was the trainer falling through to the generic Conv1D estimate;
+the corrected estimate is balanced WaveNet class.
 That keeps the main recommendation unchanged: use balanced as the practical
 default, keep separable for static/fused/plugin-side experiments.
 
@@ -465,7 +480,10 @@ For built-in presets, generate static RTNeural model types:
 
 - `wavenet_tcn_fast`
 - `wavenet_tcn_balanced`
+- `wavenet_tcn_balanced_tanh15`
+- `wavenet_tcn_balanced_tanh18`
 - `wavenet_tcn_quality`
+- `wavenet_tcn_quality_tanh18`
 - `conv1d_stack_prelu`
 
 Then compare:
