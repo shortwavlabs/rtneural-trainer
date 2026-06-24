@@ -509,6 +509,23 @@ UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
   ../scripts/generate_golden_rtneural_fixtures.py
 ```
 
+Compare completed training runs and optionally re-export them with ASR and
+native RTNeural benchmark checks:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run --project trainer --extra tensorflow python \
+  scripts/compare_training_runs.py \
+  --out /tmp/rttrainer-run-comparison \
+  --export \
+  --native \
+  /path/to/run_a \
+  /path/to/run_b
+```
+
+The script writes `comparison.md` and `comparison.json`, keeping generated
+exports under the comparison output folder instead of modifying the original
+project.
+
 ## Downstream Plugin Reference
 
 [RTNeural-example](https://github.com/jatinchowdhury18/RTNeural-example) is a

@@ -4719,12 +4719,20 @@ function aliasingSummary(metadata: Record<string, unknown> | null) {
 
   return [
     verdict ? verdict.split("_").join(" ") : null,
+    aliasingInterpretation(verdict),
     worstAsr !== null ? `worst ASR ${formatPercent(worstAsr)}` : null,
     averageAsr !== null ? `avg ${formatPercent(averageAsr)}` : null,
     tests.length ? `${tests.length} probes` : null,
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+function aliasingInterpretation(verdict: string | null) {
+  if (verdict === "low_aliasing") return "confirm by ear";
+  if (verdict === "review_aliasing") return "listen for foldback";
+  if (verdict === "high_aliasing") return "warning, compare presets";
+  return null;
 }
 
 function compactPath(path: string) {

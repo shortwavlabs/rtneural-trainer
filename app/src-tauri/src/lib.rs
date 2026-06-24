@@ -193,6 +193,41 @@ struct TrainingRun {
     log_path: String,
 }
 
+fn estimated_realtime_factor_for_preset(preset: &str) -> Option<f64> {
+    match preset {
+        "wavenet_tcn_fast" => Some(8.0),
+        "wavenet_tcn"
+        | "wavenet_tcn_balanced"
+        | "wavenet_tcn_balanced_tanh15"
+        | "wavenet_tcn_balanced_tanh18" => Some(3.0),
+        "wavenet_tcn_quality" | "wavenet_tcn_quality_tanh18" => Some(1.5),
+        "wavenet_tcn_separable_fast" => Some(5.0),
+        _ => None,
+    }
+}
+
+fn normalize_training_metrics_for_preset(
+    preset: &str,
+    metrics: Option<TrainingMetrics>,
+) -> Option<TrainingMetrics> {
+    metrics.map(|mut metrics| {
+        if let Some(realtime_factor) = estimated_realtime_factor_for_preset(preset) {
+            metrics.realtime_factor = realtime_factor;
+        }
+        metrics
+    })
+}
+
+fn parse_training_metrics_json(
+    preset: &str,
+    metrics_json: Option<String>,
+) -> Result<Option<TrainingMetrics>, String> {
+    let metrics = metrics_json
+        .map(|value| serde_json::from_str(&value).map_err(to_error))
+        .transpose()?;
+    Ok(normalize_training_metrics_for_preset(preset, metrics))
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct TrainingRecipe {
     id: String,
@@ -2710,6 +2745,7 @@ fn load_training_runs(
             run_dir,
         ) = row.map_err(to_error)?;
         let run_dir = artifact_path(project_dir, &run_dir);
+        let metrics = parse_training_metrics_json(&preset, metrics_json)?;
         runs.push(TrainingRun {
             id,
             preset,
@@ -2719,9 +2755,7 @@ fn load_training_runs(
             epochs,
             created_at,
             updated_at,
-            metrics: metrics_json
-                .map(|value| serde_json::from_str(&value).map_err(to_error))
-                .transpose()?,
+            metrics,
             log_path: artifact_path(project_dir, &log_path).display().to_string(),
         });
     }
@@ -2921,6 +2955,7 @@ fn insert_training_run(
 }
 
 fn update_training_run_success(db: &Connection, run: &TrainingRun) -> Result<(), String> {
+    let metrics = normalize_training_metrics_for_preset(&run.preset, run.metrics.clone());
     db.execute(
         "UPDATE training_runs
          SET status = ?1, device = ?2, epochs = ?3, updated_at = ?4, metrics_json = ?5, error = NULL
@@ -2930,7 +2965,7 @@ fn update_training_run_success(db: &Connection, run: &TrainingRun) -> Result<(),
             run.device,
             run.epochs,
             run.updated_at,
-            optional_json(&run.metrics)?,
+            optional_json(&metrics)?,
             run.id
         ],
     )
@@ -4829,6 +4864,30 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_smoothed_tanh_wavenet_metrics_use_wavenet_runtime_estimate() {
+        let metrics = TrainingMetrics {
+            esr: 0.18,
+            mae: 0.1,
+            rmse: 0.07,
+            peak_residual: 0.6,
+            rms_residual: 0.07,
+            realtime_factor: 120.0,
+        };
+
+        let normalized = normalize_training_metrics_for_preset(
+            "wavenet_tcn_balanced_tanh15",
+            Some(metrics.clone()),
+        )
+        .expect("normalized metrics");
+        assert_eq!(normalized.realtime_factor, 3.0);
+
+        let quality =
+            normalize_training_metrics_for_preset("wavenet_tcn_quality_tanh18", Some(metrics))
+                .expect("normalized quality metrics");
+        assert_eq!(quality.realtime_factor, 1.5);
+    }
 
     #[test]
     fn wav_preview_summary_reads_pcm16_peaks() {

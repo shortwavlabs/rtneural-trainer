@@ -136,16 +136,16 @@ def aliasing_notes(verdict: str) -> list[str]:
     if verdict == "low_aliasing":
         return [
             "ASR is low for the deterministic sine probes.",
-            "Use this as a comparison metric, then confirm with high-note listening tests.",
+            "Use this as a comparison metric; final quality still depends on ESR, residuals, and listening tests.",
         ]
     if verdict == "review_aliasing":
         return [
             "ASR is elevated on at least one sine probe.",
-            "Compare against the same capture exported from another preset before treating this as a blocker.",
+            "Compare against another preset on the same capture, then listen for foldback grit on sustained high notes.",
         ]
     return [
         "ASR is high on at least one sine probe.",
-        "Listen for foldback grit on sustained high notes and consider a smoothed-tanh or smaller WaveNet candidate.",
+        "Treat this as a warning, not an automatic rejection; compare preview audio, ESR, and a smoothed-tanh or smaller WaveNet candidate.",
     ]
 
 

@@ -302,8 +302,10 @@ For the future plugin:
 1. Continue testing scaled tanh against current `wavenet_tcn_balanced` and
    `wavenet_tcn_quality` on lead/pedal captures, with rhythm2 as the first data
    point.
-2. Run `scripts/search_rtneural_presets.py` on the same captures to compare
-   ESR, ASR, native parity, and native benchmark metadata.
+2. Use `scripts/search_rtneural_presets.py` when launching a small preset sweep,
+   then run `scripts/compare_training_runs.py --export --native` on the
+   completed run folders to compare ESR, ASR, native parity, and native
+   benchmark metadata in one report.
 3. Calibrate ASR report language against listening notes before turning it into
    a hard export gate.
 
