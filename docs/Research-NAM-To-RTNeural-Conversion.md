@@ -315,9 +315,16 @@ Useful lessons:
    useful clue because our failed long sequential preset likely suffered from
    tanh saturation. For the current sequential RTNeural-safe path, a PReLU or
    LeakyReLU-style WaveNet experiment is lower risk than a bigger tanh stack.
-   This is now represented by the `wavenet_tcn_a2_prelu` research preset, which
-   keeps export compatibility while testing A2-like dilations, mixed kernels,
-   and PReLU hidden nonlinearities.
+   This is now represented by the `wavenet_tcn_a2_prelu` high-gain candidate,
+   which keeps export compatibility while testing A2-like dilations, mixed
+   kernels, and PReLU hidden nonlinearities.
+
+   First RHYTHM4 result: this clue proved more important than expected.
+   `wavenet_tcn_a2_prelu` reached ESR `0.0440` in one 180-epoch run and cut
+   average ASR to `0.0205`, compared with ESR `0.0646` and average ASR `0.0419`
+   for the best `wavenet_tcn_quality_tanh15` continuation chain. That makes the
+   PReLU/mixed-kernel/non-power dilation combination the current high-gain
+   winner, even before implementing true residual/skip A2 graph support.
 
 6. **Quality scaling should be a product feature.**
 

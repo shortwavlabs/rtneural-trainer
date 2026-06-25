@@ -265,6 +265,22 @@ warns, so listening for foldback on high notes remains necessary, but this is
 the first smoothed-tanh result here that improves both waveform fit and aliasing
 risk against the same quality baseline.
 
+A2-inspired update: `wavenet_tcn_a2_prelu` beat the full tanh15 continuation
+chain in one fresh 180-epoch run. Run
+`run_e61c249debfa4f04a140cf0ff9d7f4ff` selected its best checkpoint at the end
+of training, with no early-stop plateau. Its export
+`export_59748d4bbcf24f97bd414fc4b3365699` passed native RTNeural validation
+(`2.23e-5` max abs error) and benchmarked at `6.54x` worst-case realtime on the
+Eigen backend. The package metrics were ESR `0.0440`, MAE `0.0104`, RMSE
+`0.0196`, and state-continuous correlation `0.9778`. Compared with the best
+quality-tanh15 export, this improved ESR by about `32%`, average ASR by about
+`51%` (`0.0419` to `0.0205`), and worst ASR by about `47%` (`0.0670` to
+`0.0354`). The trade-off is runtime and size: A2 PReLU uses 12 Conv1D/PReLU
+blocks, a 2,481-sample receptive field, and an `832 KB` JSON, versus tanh15's
+10 Conv1D blocks, 2,047-sample receptive field, `416 KB` JSON, and `11.74x`
+worst-case realtime. It is still plugin-ready on this machine, but no longer
+belongs in the "just research" bucket for high-gain captures.
+
 ## Capture Health
 
 | Capture | Project | Target | Target RMS | RMS Delta vs DI | Latency | Confidence | Notes |

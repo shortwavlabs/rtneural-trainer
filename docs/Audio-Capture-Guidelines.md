@@ -188,11 +188,13 @@ the same 151.6 second DI2 performance. The practical training rule is now:
 - Use `wavenet_tcn_quality` when maximum fidelity matters, when balanced leaves
   audible residual detail, or for dense crunch/rhythm/pedal tones.
 - Try `wavenet_tcn_quality_tanh15` when a quality WaveNet sounds close but the
-  residual or export warning points to high-band fizz/aliasing. It is an A/B
-  research preset, not a replacement for the proven quality baseline yet.
-- Try `wavenet_tcn_a2_prelu` only as an architecture experiment after a strong
-  quality/tanh15 baseline exists. It borrows A2-style dilations, mixed kernels,
-  and PReLU, but it is not a direct NAM A2 graph.
+  residual or export warning points to high-band fizz/aliasing and the A2 PReLU
+  runtime cost is too high.
+- Try `wavenet_tcn_a2_prelu` for dense high-gain rhythm when quality/tanh15
+  leaves audible upper-band residual or ASR warnings. On RHYTHM4, one A2 PReLU
+  run beat the best multi-run tanh15 result and cut average ASR roughly in half.
+  It borrows A2-style dilations, mixed kernels, and PReLU, but it is not a
+  direct NAM A2 graph.
 - Treat `wavenet_tcn_high_gain` as hidden research only. The first DI4/RHYTHM4
   test showed the longer sequential tanh stack underpowered the prediction and
   did not beat `wavenet_tcn_quality`.

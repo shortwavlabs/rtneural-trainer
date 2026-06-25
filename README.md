@@ -412,10 +412,11 @@ Current Keras-first presets are:
   normal UI recommendations and kept only for architecture research.
 - `wavenet_tcn_quality_tanh18`: research quality WaveNet with smoothed
   `tanh(x / 1.8)` training.
-- `wavenet_tcn_a2_prelu`: A2-inspired research WaveNet with mixed `6`/`15`
+- `wavenet_tcn_a2_prelu`: A2-inspired high-gain candidate with mixed `6`/`15`
   sample Conv1D kernels, non-power-of-two dilations, and PReLU hidden
-  nonlinearities. It is RTNeural-safe, but it does not include true A2
-  residual/skip topology.
+  nonlinearities. On RHYTHM4 it beat the best multi-run tanh15 export in one
+  run and roughly halved average ASR. It is RTNeural-safe, but it does not
+  include true A2 residual/skip topology.
 - `wavenet_tcn_separable_fast`: experimental grouped/dilated Conv1D plus 1x1
   pointwise WaveNet variant. It has Python/native parity coverage, but current
   dynamic RTNeural benchmarks do not beat `wavenet_tcn_balanced`; use it only
