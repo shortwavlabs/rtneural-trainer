@@ -413,7 +413,7 @@ Current Keras-first presets are:
   normal UI recommendations and kept only for architecture research.
 - `wavenet_tcn_quality_tanh18`: research quality WaveNet with smoothed
   `tanh(x / 1.8)` training.
-- `wavenet_tcn_a2_prelu`: A2-inspired high-gain candidate with mixed `6`/`15`
+- `wavenet_tcn_a2_prelu`: current high-gain A2-inspired candidate with mixed `6`/`15`
   sample Conv1D kernels, non-power-of-two dilations, and PReLU hidden
   nonlinearities. On RHYTHM4 it beat the best multi-run tanh15 export in one
   run and roughly halved average ASR. It is RTNeural-safe, but it does not
@@ -568,6 +568,15 @@ Useful patterns from that repo:
 The example also reinforces the Keras-first exporter direction: its Python model
 script builds a TensorFlow/Keras Sequential network and exports with RTNeural's
 Python `model_utils`.
+
+This repo also includes `plugin/rtneural-loader`, a small JUCE AU/VST3/Standalone
+debug plugin for DAW smoke tests. It can load an exported package folder or a
+raw RTNeural JSON, restores the selected model path when the host session
+reopens, loads an optional cabinet impulse response, shows package metadata,
+and exposes input gain, output gain, model bypass, cab IR enable, low/mid/high
+EQ, and a peak indicator. The first Logic Pro tests loaded the continued
+RHYTHM4 A2 PReLU export successfully; four instances at a `32` sample buffer
+showed minimal apparent CPU increase on the MacBook Pro M5 Max test machine.
 
 ## Test And Verify
 

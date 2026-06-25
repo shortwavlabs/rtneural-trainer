@@ -174,6 +174,14 @@ Interpretation:
 - First plugin smoke passed: the AU loader opened the continued A2 export in
   Logic Pro, showed minimal apparent CPU in a single-instance test, and the
   live model sounded good.
+- Follow-up Logic smoke ran four instances of the same A2 export at a `32`
+  sample buffer with barely visible CPU increase on the MacBook Pro M5 Max test
+  machine. This makes A2 PReLU a practical high-gain plugin candidate on the
+  reference machine, not just an offline trainer win.
+- The debug plugin now restores the selected model path when a host session
+  reopens, loads package folders directly, displays export metadata, and exposes
+  input/output gain, bypass, low/mid/high EQ, and a peak indicator. Product
+  packaging still needs more robust model asset management than path restore.
 
 ## RHYTHM3B ASR Calibration Note
 

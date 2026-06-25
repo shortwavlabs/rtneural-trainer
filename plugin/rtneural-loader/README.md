@@ -2,9 +2,19 @@
 
 Tiny JUCE plugin for auditioning RTNeural JSON exports in a DAW.
 
-This is intentionally plain: one output volume knob and one file chooser button
-that loads a `.json` / `.rtneural.json` model. If no model is loaded, audio is
-passed through with the volume control applied.
+This is intentionally plain, but it is now useful enough for real DAW smoke
+tests:
+
+- load an exported package folder or a raw `.json` / `.rtneural.json` model;
+- load an optional cabinet impulse response (`.wav`, `.aif`, `.aiff`, `.flac`);
+- restore the last loaded path when a DAW session reopens;
+- show export metadata such as preset, ESR, ASR, validation, native benchmark
+  headroom, sample rate, latency, and receptive field;
+- expose input gain, output gain, model bypass, cab IR enable, and a simple
+  low/mid/high EQ shell;
+- show a lightweight output peak/clip indicator.
+
+If no model is loaded, audio is passed through with output trim applied.
 
 ## Build
 
@@ -35,10 +45,19 @@ cmake -S plugin/rtneural-loader -B plugin/rtneural-loader/build -DRTNEURAL_LOADE
 ## Notes
 
 - Model loading happens from the editor button on the message thread.
-- The audio thread only reads the latest loaded model pointer and applies output
-  gain.
+- DAW state stores the selected model path, package path, parameters, and model
+  name, plus the selected impulse response path. On session restore, the plugin
+  reloads the model and IR if the paths still exist.
+- The audio thread only reads the latest loaded model pointer, cached EQ
+  coefficients, the prepared convolution stage, atomics, and sample data.
 - Loaded model objects are retained for the lifetime of the processor so a model
   swap cannot delete an object still being read by the audio callback.
+- Package-folder loading expects `model.rtneural.json` at the selected folder
+  root. Metadata is read opportunistically from `validation-report.json`,
+  `benchmark-report.json`, `aliasing-report.json`, and `package.json`.
+- The IR stage runs after model inference and EQ, matching an amp-head into
+  cabinet flow. IRs are loaded with JUCE `dsp::Convolution`, trimmed and
+  normalised on load.
 - This is a test harness, not the final AIDA-X-style player UI.
 
 ## First Smoke Result
@@ -51,6 +70,14 @@ Validated on June 25, 2026:
   `export_d56825caf0394b4bad518fdba58a9ddc/model.rtneural.json`.
 - Single-instance CPU appeared minimal in Logic, and the live model sounded
   good.
+- A later Logic smoke ran four plugin instances at a `32` sample buffer with
+  minimal apparent CPU increase on the MacBook Pro M5 Max test machine.
+- The hardened loader build added path restore, package-folder loading,
+  metadata display, input/output gain, bypass, low/mid/high EQ, and an output
+  peak indicator; `auval -v aufx RtL1 SwLv` still passes.
+- A follow-up build added a cabinet IR loader with a DAW-persisted IR path and
+  `Cab IR` enable parameter; `auval -v aufx RtL1 SwLv` still passes.
 
-Next checks: small Logic buffers (`32`, `64`, `128` samples), duplicated plugin
-instances, 96 kHz sessions, and testing on less powerful machines.
+Next checks: reload a saved Logic project to verify model path restore in the
+host, test `64`/`128` buffers, test 96 kHz sessions, and try less powerful
+machines.

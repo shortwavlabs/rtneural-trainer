@@ -293,6 +293,14 @@ and the live model sounded good. This is the first end-to-end proof that the
 trainer's high-gain A2-style result translates into a DAW plugin, not just the
 offline preview.
 
+DAW stress update: the same A2 export later ran in four Logic Pro tracks at a
+`32` sample buffer with barely visible CPU increase on the MacBook Pro M5 Max
+test machine. The debug AU loader has also been hardened to reload the selected
+path on host session restore, load export package folders directly, surface
+model metadata, and expose input/output gain, bypass, low/mid/high EQ, and a
+peak indicator. Saved-session restore still depends on the model path existing;
+the eventual product plugin should manage model/package assets more explicitly.
+
 ## Capture Health
 
 | Capture | Project | Target | Target RMS | RMS Delta vs DI | Latency | Confidence | Notes |

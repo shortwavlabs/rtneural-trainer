@@ -4,7 +4,10 @@
 
 #include "PluginProcessor.h"
 
-class RTNeuralLoaderAudioProcessorEditor final : public juce::AudioProcessorEditor
+#include <array>
+
+class RTNeuralLoaderAudioProcessorEditor final : public juce::AudioProcessorEditor,
+                                                private juce::Timer
 {
 public:
     explicit RTNeuralLoaderAudioProcessorEditor(RTNeuralLoaderAudioProcessor& processor);
@@ -14,20 +17,41 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
     void openModelChooser();
-    void updateModelLabels(const juce::String& status);
+    void openImpulseResponseChooser();
+    void updateModelLabels();
+    void configureGainSlider(juce::Slider& slider, const juce::String& name);
+    void configureInfoLabel(juce::Label& label, float fontSize = 12.0f, bool bold = false);
 
     RTNeuralLoaderAudioProcessor& processorRef;
 
     juce::Label titleLabel;
+    juce::Label subtitleLabel;
+    juce::Slider inputSlider;
     juce::Slider outputSlider;
-    juce::TextButton loadButton { "Load Model" };
+    juce::Slider lowSlider;
+    juce::Slider midSlider;
+    juce::Slider highSlider;
+    juce::TextButton loadButton { "Load Export" };
+    juce::TextButton loadIrButton { "Load IR" };
+    juce::TextButton irButton { "IR On" };
+    juce::TextButton bypassButton { "Bypass" };
     juce::Label statusLabel;
     juce::Label pathLabel;
+    juce::Label irLabel;
+    juce::Label safetyLabel;
+    juce::Label peakLabel;
+    std::array<juce::Label, 8> infoLabels;
     std::unique_ptr<juce::FileChooser> fileChooser;
 
+    juce::AudioProcessorValueTreeState::SliderAttachment inputAttachment;
     juce::AudioProcessorValueTreeState::SliderAttachment outputAttachment;
+    juce::AudioProcessorValueTreeState::SliderAttachment lowAttachment;
+    juce::AudioProcessorValueTreeState::SliderAttachment midAttachment;
+    juce::AudioProcessorValueTreeState::SliderAttachment highAttachment;
+    juce::AudioProcessorValueTreeState::ButtonAttachment irAttachment;
+    juce::AudioProcessorValueTreeState::ButtonAttachment bypassAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(RTNeuralLoaderAudioProcessorEditor)
 };
-
