@@ -70,6 +70,7 @@ Implemented in the trainer app after this review:
 - Added RTNeural-safe smoothed-tanh WaveNet research presets:
   - `wavenet_tcn_balanced_tanh15`
   - `wavenet_tcn_balanced_tanh18`
+  - `wavenet_tcn_quality_tanh15`
   - `wavenet_tcn_quality_tanh18`
 - These presets train with `tanh(x / alpha)` but export as ordinary RTNeural
   `tanh` by folding `1 / alpha` into the preceding Conv1D kernel and bias.
@@ -232,6 +233,7 @@ Recommended experiment:
 - Add research presets:
   - `wavenet_tcn_balanced_tanh15`
   - `wavenet_tcn_balanced_tanh18`
+  - `wavenet_tcn_quality_tanh15`
   - `wavenet_tcn_quality_tanh18`
 - Keep the architecture identical to current balanced/quality WaveNet.
 - Train on the captures where WaveNet already worked well: rhythm, lead,

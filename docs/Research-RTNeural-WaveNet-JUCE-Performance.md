@@ -520,6 +520,7 @@ For built-in presets, generate static RTNeural model types:
 - `wavenet_tcn_balanced_tanh15`
 - `wavenet_tcn_balanced_tanh18`
 - `wavenet_tcn_quality`
+- `wavenet_tcn_quality_tanh15`
 - `wavenet_tcn_quality_tanh18`
 - `conv1d_stack_prelu`
 
@@ -555,6 +556,29 @@ Current result:
 - Native parity passes.
 - Dynamic JSON RTF did not improve over `wavenet_tcn_balanced`.
 - Next meaningful test is static/plugin-side, not more trainer-side copy.
+
+### Phase 3B: Quality Smoothed-Tanh Experiment
+
+Status: implemented in the trainer app as a safe architecture probe.
+
+Added research preset:
+
+- `wavenet_tcn_quality_tanh15`
+
+This keeps the proven sequential quality Conv1D graph and only changes the
+training activation to `tanh(x / 1.5)`. Export folds the scale into the Conv1D
+weights and writes ordinary RTNeural `tanh`, so native validation and plugin
+runtime compatibility stay in the same class as `wavenet_tcn_quality`.
+
+Reason for trying it:
+
+- The best RHYTHM4 quality export plateaued with most remaining residual energy
+  in upper bands.
+- Earlier balanced smoothed-tanh tests showed `alpha = 1.5` was the better
+  waveform-fit compromise than `alpha = 1.8`, though not a guaranteed aliasing
+  win.
+- It avoids the deeper-stack activation collapse seen in the hidden
+  `wavenet_tcn_high_gain` preset.
 
 ### Phase 4: Product Runtime Gate
 

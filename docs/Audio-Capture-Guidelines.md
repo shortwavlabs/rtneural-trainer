@@ -187,6 +187,9 @@ the same 151.6 second DI2 performance. The practical training rule is now:
 - Start amp and pedal captures with `wavenet_tcn_balanced`.
 - Use `wavenet_tcn_quality` when maximum fidelity matters, when balanced leaves
   audible residual detail, or for dense crunch/rhythm/pedal tones.
+- Try `wavenet_tcn_quality_tanh15` when a quality WaveNet sounds close but the
+  residual or export warning points to high-band fizz/aliasing. It is an A/B
+  research preset, not a replacement for the proven quality baseline yet.
 - Treat `wavenet_tcn_high_gain` as hidden research only. The first DI4/RHYTHM4
   test showed the longer sequential tanh stack underpowered the prediction and
   did not beat `wavenet_tcn_quality`.

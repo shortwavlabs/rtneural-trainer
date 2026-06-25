@@ -1881,7 +1881,11 @@ def estimate_realtime_factor(preset: PresetConfig) -> float:
         "wavenet_tcn_balanced_tanh18",
     }:
         return 3.0
-    if preset.preset_id in {"wavenet_tcn_quality", "wavenet_tcn_quality_tanh18"}:
+    if preset.preset_id in {
+        "wavenet_tcn_quality",
+        "wavenet_tcn_quality_tanh15",
+        "wavenet_tcn_quality_tanh18",
+    }:
         return 1.5
     if preset.preset_id == "wavenet_tcn_high_gain":
         return 1.2

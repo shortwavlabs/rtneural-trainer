@@ -240,6 +240,15 @@ quality result. Preview analysis showed no latency offset and no simple gain
 fix; the hidden Conv1D activations stayed tiny, which points to optimization
 collapse in the deeper non-residual tanh stack.
 
+Continuation update: the later `wavenet_tcn_quality` run
+`run_1fabc58f146a47a5bc9ac9a47e5b7592` pushed this same RHYTHM4 capture to
+test ESR `0.0713`, correlation `0.9640`, and native validation max abs error
+`2.35e-5`. The preview was strong, but the residual stayed most visible in the
+upper bands and the export raised an ASR warning. That makes
+`wavenet_tcn_quality_tanh15` the next safe architecture probe: it keeps the
+successful quality receptive field and RTNeural layer graph while testing a
+gentler training tanh before considering larger residual/gated WaveNet work.
+
 ## Capture Health
 
 | Capture | Project | Target | Target RMS | RMS Delta vs DI | Latency | Confidence | Notes |

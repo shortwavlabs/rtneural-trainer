@@ -397,6 +397,9 @@ Current Keras-first presets are:
 - `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement
   runs, especially crunch/rhythm/high-gain tones. Benchmark before treating
   quality exports as plugin-ready.
+- `wavenet_tcn_quality_tanh15`: research quality WaveNet with smoothed
+  `tanh(x / 1.5)` training. This keeps the proven quality receptive field while
+  probing whether a gentler nonlinearity reduces high-band residual and aliasing.
 - `wavenet_tcn_high_gain`: experimental rhythm/high-gain WaveNet with a
   4095-sample receptive field and `3.5e-4` default learning rate. The first
   DI4/RHYTHM4 check underperformed `wavenet_tcn_quality`, so it is hidden from

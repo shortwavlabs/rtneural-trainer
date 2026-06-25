@@ -251,6 +251,13 @@ const presets: PresetOption[] = [
     backends: ["keras"],
   },
   {
+    id: "wavenet_tcn_quality_tanh15",
+    label: "WaveNet Quality Tanh 1.5",
+    detail: "Quality WaveNet, smoothed tanh",
+    cpu: "Research",
+    backends: ["keras"],
+  },
+  {
     id: "wavenet_tcn_high_gain",
     label: "WaveNet High Gain",
     detail: "11x dilated causal Conv1D",
@@ -315,6 +322,22 @@ const builtInTrainingRecipes = [
     name: "WaveNet quality",
     description: "Slower high-gain refinement when balanced is still audible.",
     modelPreset: "wavenet_tcn_quality",
+    epochs: 180,
+    batchSize: 16,
+    learningRate: 0.0005,
+    sequenceLength: 8192,
+    maxWindows: 8192,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
+    earlyStoppingPatience: 20,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_quality_tanh15",
+    source: "built_in",
+    name: "WaveNet quality tanh 1.5",
+    description: "Quality WaveNet with gentler tanh for high-band residual research.",
+    modelPreset: "wavenet_tcn_quality_tanh15",
     epochs: 180,
     batchSize: 16,
     learningRate: 0.0005,
@@ -2101,7 +2124,7 @@ function TrainView({
     setMaxWindows(
       Math.max(
         recommendedWindowBudget(project),
-        nextPreset === "wavenet_tcn_quality" || nextPreset === "wavenet_tcn_high_gain"
+        isQualityWaveNetPreset(nextPreset) || nextPreset === "wavenet_tcn_high_gain"
           ? 8192
           : 4096,
       ),
@@ -4225,6 +4248,10 @@ function isWaveNetPreset(preset: string) {
   return preset === "wavenet_tcn" || preset.startsWith("wavenet_tcn_");
 }
 
+function isQualityWaveNetPreset(preset: string) {
+  return preset === "wavenet_tcn_quality" || preset.startsWith("wavenet_tcn_quality_");
+}
+
 function bestWaveNetResumeRun(runs: TrainingRun[], backend: RuntimeBackend) {
   const candidates = runs.filter((run) => {
     if (run.status !== "completed" || !run.metrics) return false;
@@ -4244,7 +4271,7 @@ function qualityContinuationPreset(preset: string) {
 }
 
 function qualityContinuationLearningRate(preset: string) {
-  if (preset === "wavenet_tcn_quality" || preset === "wavenet_tcn_high_gain") {
+  if (isQualityWaveNetPreset(preset) || preset === "wavenet_tcn_high_gain") {
     return 0.00015;
   }
   if (preset === "wavenet_tcn_fast") return 0.0003;

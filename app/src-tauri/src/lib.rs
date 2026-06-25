@@ -36,8 +36,9 @@ const MODEL_PRESETS: &[&str] = &[
     "wavenet_tcn_balanced_tanh15",
     "wavenet_tcn_balanced_tanh18",
     "wavenet_tcn_quality",
-    "wavenet_tcn_high_gain",
+    "wavenet_tcn_quality_tanh15",
     "wavenet_tcn_quality_tanh18",
+    "wavenet_tcn_high_gain",
     "wavenet_tcn_separable_fast",
     "conv_gru_hybrid",
 ];
@@ -201,7 +202,9 @@ fn estimated_realtime_factor_for_preset(preset: &str) -> Option<f64> {
         | "wavenet_tcn_balanced"
         | "wavenet_tcn_balanced_tanh15"
         | "wavenet_tcn_balanced_tanh18" => Some(3.0),
-        "wavenet_tcn_quality" | "wavenet_tcn_quality_tanh18" => Some(1.5),
+        "wavenet_tcn_quality" | "wavenet_tcn_quality_tanh15" | "wavenet_tcn_quality_tanh18" => {
+            Some(1.5)
+        }
         "wavenet_tcn_high_gain" => Some(1.2),
         "wavenet_tcn_separable_fast" => Some(5.0),
         _ => None,
@@ -5068,8 +5071,13 @@ mod tests {
                 .expect("normalized quality metrics");
         assert_eq!(quality.realtime_factor, 1.5);
 
+        let quality_tanh15 =
+            normalize_training_metrics_for_preset("wavenet_tcn_quality_tanh15", Some(quality))
+                .expect("normalized quality tanh 1.5 metrics");
+        assert_eq!(quality_tanh15.realtime_factor, 1.5);
+
         let high_gain =
-            normalize_training_metrics_for_preset("wavenet_tcn_high_gain", Some(quality))
+            normalize_training_metrics_for_preset("wavenet_tcn_high_gain", Some(quality_tanh15))
                 .expect("normalized high-gain metrics");
         assert_eq!(high_gain.realtime_factor, 1.2);
     }
@@ -5713,6 +5721,10 @@ mod tests {
         assert_eq!(
             normalize_model_preset("wavenet_tcn_high_gain"),
             Ok("wavenet_tcn_high_gain")
+        );
+        assert_eq!(
+            normalize_model_preset("wavenet_tcn_quality_tanh15"),
+            Ok("wavenet_tcn_quality_tanh15")
         );
 
         let recipe = normalize_training_recipe(SaveTrainingRecipeRequest {

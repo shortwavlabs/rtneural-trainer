@@ -187,6 +187,14 @@ PRESETS: dict[str, PresetConfig] = {
         conv_filters=20,
         conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
     ),
+    "wavenet_tcn_quality_tanh15": wavenet_tcn_preset(
+        "wavenet_tcn_quality_tanh15",
+        hidden_size=20,
+        num_layers=10,
+        conv_filters=20,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
+        conv_activation_alpha=1.5,
+    ),
     "wavenet_tcn_high_gain": wavenet_tcn_preset(
         "wavenet_tcn_high_gain",
         hidden_size=20,

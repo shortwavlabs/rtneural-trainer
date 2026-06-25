@@ -296,6 +296,7 @@ Implemented presets:
 | `wavenet_tcn_balanced_tanh15` | Balanced WaveNet trained with smoothed `tanh(x / 1.5)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
 | `wavenet_tcn_balanced_tanh18` | Balanced WaveNet trained with smoothed `tanh(x / 1.8)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
 | `wavenet_tcn_quality` | Wider/deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Slower crunch/rhythm/refinement path; benchmark before export |
+| `wavenet_tcn_quality_tanh15` | Quality WaveNet trained with smoothed `tanh(x / 1.5)` and exported by folding the scale into Conv1D weights | High-band residual and ASR research |
 | `wavenet_tcn_high_gain` | 11-layer WaveNet-style dilated causal Conv1D stack with 4095-sample receptive field and `3.5e-4` default learning rate | Hidden research preset; first DI4/RHYTHM4 run underperformed quality and showed deeper-stack optimization collapse |
 | `wavenet_tcn_quality_tanh18` | Quality WaveNet trained with smoothed `tanh(x / 1.8)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
 | `wavenet_tcn_separable_fast` | Experimental grouped dilated Conv1D plus 1x1 pointwise WaveNet variant with bounded output and MR-STFT/pre-emphasis default loss | Runtime research only; parity-safe but not faster than balanced in current dynamic RTNeural benchmarks |
@@ -1390,8 +1391,9 @@ fixtures/rtneural-json/golden/
   wavenet_tcn_balanced_tanh15.rtneural.json
   wavenet_tcn_balanced_tanh18.rtneural.json
   wavenet_tcn_quality.rtneural.json
-  wavenet_tcn_high_gain.rtneural.json
+  wavenet_tcn_quality_tanh15.rtneural.json
   wavenet_tcn_quality_tanh18.rtneural.json
+  wavenet_tcn_high_gain.rtneural.json
   wavenet_tcn_separable_fast.rtneural.json
   conv_gru_hybrid.rtneural.json
 ```
@@ -1533,8 +1535,9 @@ PyTorch, or export logic changes.
 | `wavenet_tcn_balanced_tanh15` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
 | `wavenet_tcn_balanced_tanh18` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
 | `wavenet_tcn_quality` | Required | Later | Required | Required | Required | Required | v1-plus |
-| `wavenet_tcn_high_gain` | Required | Later | Required | Required | Required | Required | Hidden rhythm/high-gain research |
+| `wavenet_tcn_quality_tanh15` | Required | Later | Required | Required | Required | Required | High-band residual and ASR research |
 | `wavenet_tcn_quality_tanh18` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
+| `wavenet_tcn_high_gain` | Required | Later | Required | Required | Required | Required | Hidden rhythm/high-gain research |
 | `wavenet_tcn_separable_fast` | Required | Later | Required | Required | Required | Required | Experimental runtime research |
 | `wavenet_tcn` | Required | Later | Required | Required | Required | Required | Legacy alias |
 | `conv_gru_hybrid` | Required | Later | Required | Required | Required | Required | v1-plus |
