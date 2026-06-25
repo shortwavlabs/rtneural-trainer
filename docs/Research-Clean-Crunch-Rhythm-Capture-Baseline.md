@@ -22,6 +22,9 @@ The practical default should be:
   captures.
 - Use `wavenet_tcn_quality` for crunch, rhythm, dense overdrive pedal captures,
   and any capture where balanced still leaves audible residual detail.
+- Keep `wavenet_tcn_high_gain` hidden as a research-only preset until a
+  residual/skip/gated long-receptive-field variant replaces the current plain
+  sequential tanh stack.
 - Treat lead captures as a special review path when latency confidence is low
   or the target is very compressed.
 - Keep `wavenet_tcn_fast` as a quick WaveNet probe.
@@ -212,6 +215,30 @@ natural harmonics, and high-register bends. If the model sounds good in those
 cases, the export is a valid test candidate; if the warning is audible, the next
 product-side experiment is plugin oversampling or a higher-sample-rate export
 path.
+
+## Short RHYTHM4 Check
+
+Project `project_ab40008405d546398afff4a8d6a8dde7` used the shorter
+`DI4.wav` / `RHYTHM4.wav` pair. It was 158.8 seconds long, 48 kHz stereo
+dual-mono prepared as mono float32, with input peak `-6.30 dBFS`, target peak
+`-10.59 dBFS`, target RMS `-21.23 dBFS`, and no clipping. The effective
+latency estimate was `9 samples`, but confidence stayed low at `0.41`, so
+alignment still deserves review on this capture family.
+
+| Preset | ESR | RMSE | Correlation | Epochs | Best Epoch | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `wavenet_tcn_balanced` | `0.6309` | `0.0740` | `0.6109` | `14` | `2` | Plateaued immediately; too small for this rhythm tone. |
+| `wavenet_tcn_quality` | `0.1369` | `0.0345` | `0.9295` | `120` | `120` | Continued improving and exported successfully. |
+| `wavenet_tcn_high_gain` | `0.6310` | `0.0740` | `0.6142` | `37` | `13` | Underperformed quality; hidden from normal recommendations. |
+
+This reinforces two lessons. First, captures do not need to be extremely long:
+roughly 2.5-4 minutes can be enough if the performance is varied and trimmed.
+Second, dense raw amp-head rhythm still exposes a capacity/optimization floor
+in `wavenet_tcn_balanced`. The longer `wavenet_tcn_high_gain` variant did not
+fix that floor: it matched the failed balanced result instead of the successful
+quality result. Preview analysis showed no latency offset and no simple gain
+fix; the hidden Conv1D activations stayed tiny, which points to optimization
+collapse in the deeper non-residual tanh stack.
 
 ## Capture Health
 

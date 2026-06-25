@@ -23,6 +23,7 @@ class PresetConfig:
     output_activation: str | None = "tanh"
     conv_dilations: tuple[int, ...] = ()
     default_loss: str = "mse"
+    default_learning_rate: float = 1.0e-3
 
 
 def wavenet_tcn_preset(
@@ -33,6 +34,7 @@ def wavenet_tcn_preset(
     conv_filters: int,
     conv_dilations: tuple[int, ...],
     conv_activation_alpha: float = 1.0,
+    default_learning_rate: float = 1.0e-3,
 ) -> PresetConfig:
     return PresetConfig(
         preset_id=preset_id,
@@ -46,6 +48,7 @@ def wavenet_tcn_preset(
         conv_dilations=conv_dilations,
         conv_activation_alpha=conv_activation_alpha,
         default_loss="mrstft_preemphasis",
+        default_learning_rate=default_learning_rate,
     )
 
 
@@ -183,6 +186,14 @@ PRESETS: dict[str, PresetConfig] = {
         num_layers=10,
         conv_filters=20,
         conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
+    ),
+    "wavenet_tcn_high_gain": wavenet_tcn_preset(
+        "wavenet_tcn_high_gain",
+        hidden_size=20,
+        num_layers=11,
+        conv_filters=20,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024),
+        default_learning_rate=3.5e-4,
     ),
     "wavenet_tcn_quality_tanh18": wavenet_tcn_preset(
         "wavenet_tcn_quality_tanh18",

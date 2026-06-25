@@ -251,6 +251,14 @@ const presets: PresetOption[] = [
     backends: ["keras"],
   },
   {
+    id: "wavenet_tcn_high_gain",
+    label: "WaveNet High Gain",
+    detail: "11x dilated causal Conv1D",
+    cpu: "Research",
+    backends: ["keras"],
+    hidden: true,
+  },
+  {
     id: "wavenet_tcn_quality_tanh18",
     label: "WaveNet Quality Tanh 1.8",
     detail: "Quality WaveNet, smoother tanh",
@@ -2093,7 +2101,9 @@ function TrainView({
     setMaxWindows(
       Math.max(
         recommendedWindowBudget(project),
-        nextPreset === "wavenet_tcn_quality" ? 8192 : 4096,
+        nextPreset === "wavenet_tcn_quality" || nextPreset === "wavenet_tcn_high_gain"
+          ? 8192
+          : 4096,
       ),
     );
     setResampleTrainingWindows(true);
@@ -4162,7 +4172,9 @@ function qualityContinuationPreset(preset: string) {
 }
 
 function qualityContinuationLearningRate(preset: string) {
-  if (preset === "wavenet_tcn_quality") return 0.00015;
+  if (preset === "wavenet_tcn_quality" || preset === "wavenet_tcn_high_gain") {
+    return 0.00015;
+  }
   if (preset === "wavenet_tcn_fast") return 0.0003;
   return 0.0002;
 }

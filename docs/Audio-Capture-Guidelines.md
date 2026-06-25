@@ -187,6 +187,9 @@ the same 151.6 second DI2 performance. The practical training rule is now:
 - Start amp and pedal captures with `wavenet_tcn_balanced`.
 - Use `wavenet_tcn_quality` when maximum fidelity matters, when balanced leaves
   audible residual detail, or for dense crunch/rhythm/pedal tones.
+- Treat `wavenet_tcn_high_gain` as hidden research only. The first DI4/RHYTHM4
+  test showed the longer sequential tanh stack underpowered the prediction and
+  did not beat `wavenet_tcn_quality`.
 - Treat `conv1d_stack_prelu` as a fast CPU fallback and sanity check, not the
   main quality lane.
 - Use `wavenet_tcn_fast` as a quick WaveNet probe, not as the final model for
@@ -205,6 +208,9 @@ Second-generation DI3 findings refine this rule:
 - Very long captures train more slowly because the trainer samples windows
   across the file. For production captures, 90-180 seconds remains the better
   default unless the extra material is clearly useful.
+- DI4/RHYTHM4 confirmed the practical upper bound: about 2.5-4 minutes is
+  enough for a serious high-gain run when the performance includes varied
+  picking, palm mutes, single notes, chords, harmonics, and transitions.
 - For dense raw amp-head rhythm tones, WaveNet balanced can still underfit even
   after trimming silence. The `DI3-B_1.wav` / `RHYTHM3-B.wav` pair only became
   a good candidate with `wavenet_tcn_quality`.

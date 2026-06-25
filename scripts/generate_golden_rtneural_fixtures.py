@@ -34,6 +34,7 @@ GOLDEN_FIXTURE_SEEDS = {
     "wavenet_tcn_balanced_tanh15": 23,
     "wavenet_tcn_balanced_tanh18": 24,
     "wavenet_tcn_quality_tanh18": 25,
+    "wavenet_tcn_high_gain": 26,
 }
 
 

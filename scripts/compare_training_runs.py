@@ -22,6 +22,7 @@ WAVENET_RUNTIME_ESTIMATES = {
     "wavenet_tcn_balanced_tanh18": 3.0,
     "wavenet_tcn_quality": 1.5,
     "wavenet_tcn_quality_tanh18": 1.5,
+    "wavenet_tcn_high_gain": 1.2,
     "wavenet_tcn_separable_fast": 5.0,
 }
 
@@ -561,6 +562,8 @@ def run_notes(
     notes: list[str] = []
     if preset == "wavenet_tcn_balanced":
         notes.append("balanced baseline")
+    if preset == "wavenet_tcn_high_gain":
+        notes.append("longer receptive-field high-gain probe")
     if "tanh15" in preset:
         notes.append("smoothed tanh quality probe")
     if "tanh18" in preset:

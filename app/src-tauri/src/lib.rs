@@ -36,6 +36,7 @@ const MODEL_PRESETS: &[&str] = &[
     "wavenet_tcn_balanced_tanh15",
     "wavenet_tcn_balanced_tanh18",
     "wavenet_tcn_quality",
+    "wavenet_tcn_high_gain",
     "wavenet_tcn_quality_tanh18",
     "wavenet_tcn_separable_fast",
     "conv_gru_hybrid",
@@ -201,6 +202,7 @@ fn estimated_realtime_factor_for_preset(preset: &str) -> Option<f64> {
         | "wavenet_tcn_balanced_tanh15"
         | "wavenet_tcn_balanced_tanh18" => Some(3.0),
         "wavenet_tcn_quality" | "wavenet_tcn_quality_tanh18" => Some(1.5),
+        "wavenet_tcn_high_gain" => Some(1.2),
         "wavenet_tcn_separable_fast" => Some(5.0),
         _ => None,
     }
@@ -4205,22 +4207,41 @@ fn run_rttrainer_args(
     context: SidecarContext,
 ) -> Result<StreamingProcessOutput, String> {
     if let Some(python) = external_python_executable(state)? {
+        let working_dir = rttrainer_python_working_dir(state);
         emit_sidecar_line(
             app,
             &context,
             "system",
-            &format!("using external Python {}", python.display()),
+            &format!(
+                "using external Python {} from {}",
+                python.display(),
+                working_dir.display()
+            ),
         );
         let mut process = StdCommand::new(&python);
         process
-            .current_dir(&state.workspace_root)
+            .current_dir(working_dir)
             .arg("-m")
             .arg("rttrainer")
             .args(args);
         return run_streaming_process(app, &context, process);
     }
 
+    if should_use_local_rttrainer_source(state) {
+        emit_sidecar_line(
+            app,
+            &context,
+            "system",
+            &format!(
+                "using local rttrainer source via uv from {}",
+                state.workspace_root.join("trainer").display()
+            ),
+        );
+        return run_local_rttrainer_source(app, state, action, args, context);
+    }
+
     if bundled_sidecar_exists(RTTRAINER_SIDECAR) {
+        emit_sidecar_line(app, &context, "system", "using bundled rttrainer sidecar");
         let process = app
             .shell()
             .sidecar(RTTRAINER_SIDECAR)
@@ -4229,6 +4250,20 @@ fn run_rttrainer_args(
         return run_streaming_shell_command(app, &context, process);
     }
 
+    run_local_rttrainer_source(app, state, action, args, context)
+}
+
+fn should_use_local_rttrainer_source(state: &AppState) -> bool {
+    cfg!(debug_assertions) && state.workspace_root.join("trainer/rttrainer").is_dir()
+}
+
+fn run_local_rttrainer_source(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    action: &str,
+    args: &[String],
+    context: SidecarContext,
+) -> Result<StreamingProcessOutput, String> {
     let trainer_dir = state.workspace_root.join("trainer");
     let cache_dir = state.workspace_root.join(".uv-cache");
     let mut process = StdCommand::new("uv");
@@ -4241,6 +4276,14 @@ fn run_rttrainer_args(
     }
     process.arg("python").arg("-m").arg("rttrainer").args(args);
     run_streaming_process(app, &context, process)
+}
+
+fn rttrainer_python_working_dir(state: &AppState) -> PathBuf {
+    let trainer_dir = state.workspace_root.join("trainer");
+    if trainer_dir.join("rttrainer").is_dir() {
+        return trainer_dir;
+    }
+    state.workspace_root.clone()
 }
 
 fn uv_extras_for_rttrainer(action: &str, args: &[String]) -> Vec<&'static str> {
@@ -5024,6 +5067,11 @@ mod tests {
             normalize_training_metrics_for_preset("wavenet_tcn_quality_tanh18", Some(metrics))
                 .expect("normalized quality metrics");
         assert_eq!(quality.realtime_factor, 1.5);
+
+        let high_gain =
+            normalize_training_metrics_for_preset("wavenet_tcn_high_gain", Some(quality))
+                .expect("normalized high-gain metrics");
+        assert_eq!(high_gain.realtime_factor, 1.2);
     }
 
     #[test]
@@ -5613,6 +5661,32 @@ mod tests {
     }
 
     #[test]
+    fn external_python_prefers_local_trainer_source_when_available() {
+        let mut db = Connection::open_in_memory().expect("open in-memory sqlite");
+        configure_database(&mut db).expect("migrate sqlite");
+        let root = std::env::temp_dir().join(format!(
+            "rttrainer-python-workdir-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        let package_dir = root.join("trainer/rttrainer");
+        fs::create_dir_all(&package_dir).expect("create local trainer source");
+
+        let state = AppState {
+            db_path: PathBuf::from(":memory:"),
+            projects_dir: root.join("projects"),
+            workspace_root: root.clone(),
+            db: Mutex::new(db),
+            active_jobs: Mutex::new(HashMap::new()),
+        };
+
+        assert_eq!(rttrainer_python_working_dir(&state), root.join("trainer"));
+        assert!(should_use_local_rttrainer_source(&state));
+        fs::remove_dir_all(root.join("trainer")).expect("remove local trainer source");
+        assert_eq!(rttrainer_python_working_dir(&state), root);
+        assert!(!should_use_local_rttrainer_source(&state));
+    }
+
+    #[test]
     fn wavenet_balanced_alias_can_resume_legacy_runs() {
         assert!(resume_presets_compatible(
             "wavenet_tcn",
@@ -5636,6 +5710,10 @@ mod tests {
     fn training_recipes_round_trip_through_sqlite() {
         let mut db = Connection::open_in_memory().expect("open in-memory sqlite");
         configure_database(&mut db).expect("migrate sqlite");
+        assert_eq!(
+            normalize_model_preset("wavenet_tcn_high_gain"),
+            Ok("wavenet_tcn_high_gain")
+        );
 
         let recipe = normalize_training_recipe(SaveTrainingRecipeRequest {
             id: None,

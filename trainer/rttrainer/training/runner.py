@@ -54,7 +54,9 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     seed = int(manifest.get("seed", 1337))
     requested_epochs = int(manifest.get("epochs", 20))
     batch_size = int(manifest.get("batch_size", 16))
-    requested_learning_rate = float(manifest.get("learning_rate", 1e-3))
+    requested_learning_rate = float(
+        manifest.get("learning_rate", preset.default_learning_rate)
+    )
     loss_name = resolve_training_loss_name(manifest, preset)
     sequence_length = int(manifest.get("sequence_length", 1024))
     max_windows = int(manifest.get("max_windows", 512))
@@ -480,7 +482,9 @@ def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
     seed = int(manifest.get("seed", 1337))
     requested_epochs = int(manifest.get("epochs", 20))
     batch_size = int(manifest.get("batch_size", 16))
-    requested_learning_rate = float(manifest.get("learning_rate", 1e-3))
+    requested_learning_rate = float(
+        manifest.get("learning_rate", preset.default_learning_rate)
+    )
     loss_name = resolve_training_loss_name(manifest, preset)
     sequence_length = int(manifest.get("sequence_length", 1024))
     max_windows = int(manifest.get("max_windows", 512))
@@ -1879,6 +1883,8 @@ def estimate_realtime_factor(preset: PresetConfig) -> float:
         return 3.0
     if preset.preset_id in {"wavenet_tcn_quality", "wavenet_tcn_quality_tanh18"}:
         return 1.5
+    if preset.preset_id == "wavenet_tcn_high_gain":
+        return 1.2
     if preset.preset_id == "wavenet_tcn_separable_fast":
         return 5.0
     return 180.0 if preset.hidden_size <= 12 else 120.0

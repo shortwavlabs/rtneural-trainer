@@ -85,6 +85,28 @@ is. The plugin-side roadmap should therefore keep oversampling or higher-rate
 model support in scope for high-gain WaveNet, even when native RTNeural
 benchmark headroom is comfortable.
 
+DI4/RHYTHM4 adds a shorter-capture control point. At 158.8 seconds, the file
+trained faster than the longer DI3/RHYTHM3B captures while still preserving
+enough variation to separate presets. `wavenet_tcn_balanced` plateaued early
+at ESR `0.6309`, while `wavenet_tcn_quality` continued to epoch 120 and reached
+ESR `0.1369` with correlation `0.9295`. Its export passed native parity with
+max error `2.4e-5` and benchmarked at roughly `12x` worst-case Eigen realtime,
+but the aliasing probe warned most strongly around 5 kHz.
+
+That result motivated `wavenet_tcn_high_gain`: one extra dilation stage
+(`1024`, receptive field `4095` samples / `85.3 ms`) and a lower default
+learning rate (`3.5e-4`). The first DI4/RHYTHM4 run did not validate the idea:
+it stopped at epoch 37 with ESR `0.6310`, correlation `0.6142`, and essentially
+the same failure mode as `wavenet_tcn_balanced`. Preview analysis put the best
+target/prediction lag at `0 samples`, and optimal gain scaling only improved
+ESR from `0.6310` to about `0.6228`, so this was not a simple alignment or
+level miss. Layer probes showed the hidden Conv1D activations staying around
+`0.015-0.020` RMS, while the successful quality checkpoint reached roughly
+`0.47-0.64` RMS in deeper layers. The current conclusion is that adding a
+plain eleventh tanh Conv1D layer creates an optimization wall. Longer receptive
+field work should move toward residual/skip/gated blocks or a stronger warmup
+schedule instead of another sequential dilation layer.
+
 Rhythm2 smoothed-tanh follow-up:
 
 | Preset | Preview ESR | RMSE | Worst ASR | Est. RTF | Runtime Note |
@@ -137,6 +159,7 @@ The app's WaveNet presets are sequential Keras models exported to RTNeural JSON:
 | `wavenet_tcn_fast` | 6 | 12 | 3 | `1..32` | 127 samples |
 | `wavenet_tcn_balanced` | 8 | 16 | 3 | `1..128` | 511 samples |
 | `wavenet_tcn_quality` | 10 | 20 | 3 | `1..512` | 2047 samples |
+| `wavenet_tcn_high_gain` | 11 | 20 | 3 | `1..1024` | 4095 samples |
 | `wavenet_tcn_separable_fast` | 15 Conv1D ops | 16 | 3 plus 1 | `1..128` | 511 samples |
 
 The model graph is intentionally simple:
