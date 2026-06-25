@@ -1,6 +1,6 @@
 # Clean, Crunch, Rhythm, Edge, Lead, And Pedal Capture Baseline
 
-Reviewed: 2026-06-24
+Reviewed: 2026-06-25
 
 This note summarizes the first comparable clean, crunch, heavy rhythm,
 edge-of-breakup, lead, and overdrive pedal training passes after the latest
@@ -120,6 +120,98 @@ The CLEAN3 run validates three newer workflow changes:
 - WaveNet balanced is strong enough for clean production captures, not just high
   gain. Quality may still win a metric shootout, but balanced exported with far
   more native headroom than the minimum needed for real-time use.
+
+## Second-Generation RHYTHM3B Check
+
+Project `project_f94c77d3aefe4f5e8abbaf3a86cfcf6a` is the first successful
+second-generation heavy rhythm result after the long RHYTHM3 capture struggled
+with balanced WaveNet. It used the trimmed `DI3-B_1.wav` / `RHYTHM3-B.wav`
+pair, float32 prepared WAVs, the `wavenet_tcn_quality` preset, and export
+package `export_0459ae977d3e4e38b891718b94ec3305`.
+
+### Capture And Prep
+
+| Field | Value |
+| --- | --- |
+| Project name | `Test Rhythm 3B` |
+| Dry input | `DI3-B_1.wav` |
+| Target | `RHYTHM3-B.wav` |
+| Duration | `444.25 s` |
+| Format | 48 kHz, stereo dual-mono mixed to mono |
+| DI peak / RMS | `-5.44 dBFS` / `-29.86 dBFS` |
+| Target peak / RMS | `-9.49 dBFS` / `-20.25 dBFS` |
+| RMS delta | `+9.62 dB` |
+| Clipping | none |
+| Prepared sample format | float32 WAV |
+| Latency | estimated `10 samples` |
+| Latency confidence / agreement | `0.40` / `42%` |
+| Top candidates | `10`, `399`, `-478`, `2`, `301` samples |
+
+The capture is technically healthy: no clipping, reasonable headroom, and a
+target RMS that makes sense for a dense raw amp-head rhythm tone. The latency
+estimate remains weak, though. The preamble and trimming helped, but they did
+not make this high-gain rhythm tone an easy alignment case.
+
+### Training Result
+
+| Field | Value |
+| --- | --- |
+| Run | `run_9a920dd9be4347369519547ada5d9395` |
+| Preset | `wavenet_tcn_quality` |
+| Device | `tensorflow-gpu:/physical_device:GPU:0` |
+| Requested epochs | `120` |
+| Best checkpoint epoch | `119` |
+| Loss | `mrstft_preemphasis` |
+| Preview/state-continuous ESR | `0.11670` |
+| Stream validation ESR | `0.11075` |
+| Window validation ESR | `0.10639` |
+| RMSE | `0.03575` |
+| Continuous correlation | `0.94049` |
+| Quality verdict | good export candidate |
+
+This run is the important correction to the earlier RHYTHM3B balanced result.
+Balanced underfit badly on this capture, even after trimming silence and
+preserving float32 prep. Quality mode crossed into useful territory and was
+still improving late in the run, with the best checkpoint at epoch `119`.
+
+### Export Result
+
+| Gate | Result |
+| --- | --- |
+| Export package | `export_0459ae977d3e4e38b891718b94ec3305` |
+| RTNeural validation | pass |
+| Validation RMSE | `0.00000934` |
+| Validation max abs error | `0.00002556` |
+| Native benchmark | pass |
+| Worst-case native RTF | `11.78x` stereo, block size `128` |
+| Model size | `413,571 bytes` |
+| Receptive field | `2047 samples` / `42.65 ms` |
+| Export latency | `10 samples` / `0.21 ms` |
+| Aliasing verdict | review aliasing |
+| Average ASR | `0.02516` |
+| Worst ASR | `0.06779` at ~`5 kHz` probe |
+
+The export is compatible and fast enough for native testing. The aliasing
+warning is the main caveat. The `1.25 kHz` and `2.5 kHz` probes were low, while
+the ~`5 kHz` probe landed in the review band. A follow-up amplitude sweep from
+`0.05` to `0.75` input amplitude kept worst ASR around `0.051-0.070`, so this is
+not merely the default sine probe driving the model too hard.
+
+### Interpretation
+
+RHYTHM3B confirms that raw high-gain rhythm should default to
+`wavenet_tcn_quality` when the user wants production quality. Balanced is still
+the correct first run for many profiles, but this capture shows a real capacity
+floor: silence trimming, float32 prep, and better DI material were not enough
+for balanced to model the upper saturation/fizz region.
+
+The ASR warning should be handled by listening, not by rejecting the export.
+Because the capture is an amp head without a cabinet, upper harmonic/fizz
+content is exposed. Listen for metallic foldback on sustained high notes,
+natural harmonics, and high-register bends. If the model sounds good in those
+cases, the export is a valid test candidate; if the warning is audible, the next
+product-side experiment is plugin oversampling or a higher-sample-rate export
+path.
 
 ## Capture Health
 

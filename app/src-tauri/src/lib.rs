@@ -1575,7 +1575,8 @@ fn export_run_blocking(
             "backend": run_backend,
             "sample_rate": sample_rate,
             "latency_samples": latency_samples,
-            "parity_tolerance": 0.0001
+            "parity_tolerance": 0.0001,
+            "parity_snapshot_samples": 48_000
         }),
     )?;
 
@@ -1638,6 +1639,10 @@ fn export_run_blocking(
         update_export_status(&db, &export_id, &ExportStatus::Validating, None)?;
     }
 
+    let (native_validation_input_path, native_validation_reference_path) =
+        resolve_export_parity_snapshot_paths(&package_path, &export_dir)?
+            .unwrap_or_else(|| (test_input_path.clone(), prediction_path.clone()));
+
     let validate_job_id = create_job(
         state,
         "native_validate",
@@ -1653,9 +1658,9 @@ fn export_run_blocking(
             "--model".to_string(),
             model_path.display().to_string(),
             "--input".to_string(),
-            test_input_path.display().to_string(),
+            native_validation_input_path.display().to_string(),
             "--reference".to_string(),
-            prediction_path.display().to_string(),
+            native_validation_reference_path.display().to_string(),
             "--report".to_string(),
             validation_path.display().to_string(),
             "--tolerance".to_string(),
@@ -3527,6 +3532,45 @@ fn artifact_path(project_dir: &Path, stored_path: &str) -> PathBuf {
     }
 }
 
+fn resolve_export_parity_snapshot_paths(
+    package_path: &Path,
+    export_dir: &Path,
+) -> Result<Option<(PathBuf, PathBuf)>, String> {
+    let Some(package) = read_optional_json_value(package_path) else {
+        return Ok(None);
+    };
+    let Some(snapshot) = package.get("parity_snapshot") else {
+        return Ok(None);
+    };
+    let input_path = snapshot
+        .get("input_path")
+        .and_then(serde_json::Value::as_str);
+    let expected_output_path = snapshot
+        .get("expected_output_path")
+        .and_then(serde_json::Value::as_str);
+
+    let (Some(input_path), Some(expected_output_path)) = (input_path, expected_output_path) else {
+        return Ok(None);
+    };
+
+    let input_path = artifact_path(export_dir, input_path);
+    let expected_output_path = artifact_path(export_dir, expected_output_path);
+    if !input_path.is_file() {
+        return Err(format!(
+            "Export parity snapshot input is missing: {}",
+            input_path.display()
+        ));
+    }
+    if !expected_output_path.is_file() {
+        return Err(format!(
+            "Export parity snapshot expected output is missing: {}",
+            expected_output_path.display()
+        ));
+    }
+
+    Ok(Some((input_path, expected_output_path)))
+}
+
 fn ensure_artifact_inside(project_dir: &Path, path: &Path) -> Result<(), String> {
     let root = project_dir.canonicalize().map_err(to_error)?;
     let target = path.canonicalize().map_err(to_error)?;
@@ -5080,6 +5124,39 @@ mod tests {
         assert!(target_summary.peak > 0.01);
         assert!(input_summary.waveform.iter().any(|bin| bin.max > 0.0));
         assert!(input_summary.waveform.iter().any(|bin| bin.min < 0.0));
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn export_parity_snapshot_paths_resolve_from_package_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "rttrainer-export-snapshot-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        let export_dir = root.join("exports/export_test");
+        fs::create_dir_all(&export_dir).expect("create export dir");
+        let input_path = export_dir.join("parity-snapshot-input.wav");
+        let expected_path = export_dir.join("parity-snapshot-expected.wav");
+        fs::write(&input_path, b"input").expect("write input snapshot");
+        fs::write(&expected_path, b"expected").expect("write expected snapshot");
+        let package_path = export_dir.join("package.json");
+        write_json(
+            &package_path,
+            &serde_json::json!({
+                "parity_snapshot": {
+                    "input_path": "parity-snapshot-input.wav",
+                    "expected_output_path": "parity-snapshot-expected.wav"
+                }
+            }),
+        )
+        .expect("write package");
+
+        let resolved = resolve_export_parity_snapshot_paths(&package_path, &export_dir)
+            .expect("resolve paths");
+        let (resolved_input, resolved_expected) = resolved.expect("snapshot paths");
+        assert_eq!(resolved_input, input_path);
+        assert_eq!(resolved_expected, expected_path);
 
         fs::remove_dir_all(root).ok();
     }

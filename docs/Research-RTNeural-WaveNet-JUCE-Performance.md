@@ -1,7 +1,7 @@
 # RTNeural WaveNet And JUCE Plugin Performance Notes
 
 Reviewed: 2026-06-22
-Updated: 2026-06-22
+Updated: 2026-06-25
 
 ## Short Answer
 
@@ -70,6 +70,20 @@ Follow-up trained lead-capture result:
 This makes the separable preset more interesting than the fixture benchmark
 alone suggested. It can reach comparable quality with a much smaller JSON model,
 but the current dynamic RTNeural path still pays for the extra layer count.
+
+Second-generation rhythm quality export:
+
+| Preset | Test ESR | RMSE | Correlation | Eigen Worst RTF | Model Size | ASR | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `wavenet_tcn_quality` | `0.11670` | `0.03575` | `0.94049` | `11.78x` | `414 KB` | `0.0678` | Good high-gain rhythm candidate; ASR review warning at ~5 kHz. |
+
+This is the first quality WaveNet export from the trimmed RHYTHM3B capture that
+both sounded promising and passed native validation. The result supports keeping
+`wavenet_tcn_quality` as the production lane for hard raw amp-head rhythm
+profiles. Runtime is not the immediate blocker on this machine; aliasing review
+is. The plugin-side roadmap should therefore keep oversampling or higher-rate
+model support in scope for high-gain WaveNet, even when native RTNeural
+benchmark headroom is comfortable.
 
 Rhythm2 smoothed-tanh follow-up:
 

@@ -197,6 +197,25 @@ overdrive pedal captures. Quality clearly won crunch and rhythm. Lead was the
 outlier: balanced and quality tied, and balanced was the practical winner
 because it had better runtime margin.
 
+Second-generation DI3 findings refine this rule:
+
+- A long, varied DI can work very well. `DI3.wav` plus the re-exported
+  `CLEAN3.wav` trained cleanly with WaveNet balanced and exported with excellent
+  native parity, comfortable RTNeural runtime, and low ASR.
+- Very long captures train more slowly because the trainer samples windows
+  across the file. For production captures, 90-180 seconds remains the better
+  default unless the extra material is clearly useful.
+- For dense raw amp-head rhythm tones, WaveNet balanced can still underfit even
+  after trimming silence. The `DI3-B_1.wav` / `RHYTHM3-B.wav` pair only became
+  a good candidate with `wavenet_tcn_quality`.
+- The transient preamble is still worth doing, but it does not make latency
+  trivial for heavy tones. `RHYTHM3-B.wav` estimated `10 samples` with only
+  `0.40` confidence and `42%` window agreement, so heavy captures still deserve
+  manual review before long training.
+- The app now preserves prepared audio as 32-bit float WAV. That avoids
+  avoidable quantization in prep and is appropriate for captures exported from
+  DAWs such as Logic.
+
 ## Interpreting Warnings
 
 `capture_headroom_low`:
@@ -219,6 +238,42 @@ for rhythm and lead tones.
 `long_capture`:
 The capture is long enough that the trainer will sample windows across it. Use a
 larger window budget for better coverage.
+
+`review_aliasing`:
+The RTNeural export passed parity and benchmark checks, but sine-probe ASR was
+elevated. This is an export/model diagnostic, not a capture-format failure.
+Listen for metallic foldback or unnatural fizz on sustained high notes,
+harmonics, and high-register bends. The current rhythm quality export measured
+worst ASR `0.0678` at the ~`5 kHz` probe, which is in the review band
+(`0.02-0.08`), not the high-aliasing band. It should be accepted or rejected by
+listening, not by the ASR warning alone.
+
+ASR warnings are more likely on raw high-gain amp-head captures because there is
+no cabinet rolloff to hide upper harmonics. A future plugin should test
+oversampling or higher-rate models for these exports, but the capture habit is
+still the same: avoid clipping, keep levels consistent, and record enough clean
+transient evidence for alignment.
+
+## Current DI3 Calibration Notes
+
+The DI3 family is more varied and longer than the DI2 family. It is useful for
+stress-testing production behavior, but it also shows where we should avoid
+over-recording.
+
+| Pair | Duration | DI peak / RMS | Target peak / RMS | Latency | Training read |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `DI3.wav` / `CLEAN3.wav` | `613.08 s` | `-5.56 / -31.50 dBFS` | `-5.09 / -23.63 dBFS` | known `13 samples` | WaveNet balanced exported as an excellent clean candidate. |
+| `DI3-B_1.wav` / `RHYTHM3-B.wav` | `444.25 s` | `-5.44 / -29.86 dBFS` | `-9.49 / -20.25 dBFS` | estimated `10 samples`, low confidence | WaveNet balanced underfit; WaveNet quality reached a good export candidate. |
+
+Takeaways:
+
+- The DI level is healthy and unclipped.
+- The heavy rhythm target is quieter by peak but much louder by RMS, which is
+  expected for dense saturation.
+- Long captures need higher window budgets, but length alone does not solve a
+  hard high-gain tone. Model capacity and latency review still matter.
+- A shorter focused DI4-style capture is worth testing against the same target
+  class to see whether it reaches similar quality with less training time.
 
 ## Current DI2 Calibration Notes
 

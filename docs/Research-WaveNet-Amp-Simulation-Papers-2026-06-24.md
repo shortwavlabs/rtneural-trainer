@@ -1,6 +1,6 @@
 # WaveNet Amp Simulation Paper Review
 
-Reviewed: 2026-06-24
+Reviewed: 2026-06-25
 
 Input file: `/Users/shortwavlabs/Downloads/extract-data-2026-06-24.json`
 
@@ -111,6 +111,61 @@ the same RTNeural layer structure as balanced WaveNet, with Conv1D weights
 scaled before a normal `tanh`, so their runtime class is the balanced WaveNet
 class. A `120x` display from the first run review was a runtime-estimator bug,
 not a real native benchmark result.
+
+## RHYTHM3B ASR Calibration Note
+
+The second-generation RHYTHM3B quality export gives the first useful
+listening-calibration target for ASR warnings on a successful high-gain model:
+
+| Field | Value |
+| --- | --- |
+| Project | `project_f94c77d3aefe4f5e8abbaf3a86cfcf6a` |
+| Run | `run_9a920dd9be4347369519547ada5d9395` |
+| Export | `export_0459ae977d3e4e38b891718b94ec3305` |
+| Preset | `wavenet_tcn_quality` |
+| Preview/state-continuous ESR | `0.11670` |
+| Stream validation ESR | `0.11075` |
+| Native RTNeural parity | pass, max abs error `0.00002556` |
+| Native Eigen worst RTF | `11.78x` |
+| Worst ASR | `0.06779` |
+| Average ASR | `0.02516` |
+| ASR verdict | `review_aliasing` |
+
+The warning was driven almost entirely by the ~`5 kHz` sine probe:
+
+| Probe | ASR | Interpretation |
+| ---: | ---: | --- |
+| ~`1.25 kHz` | `0.00177` | Low. |
+| ~`2.5 kHz` | `0.00593` | Low. |
+| ~`5 kHz` | `0.06779` | Review by ear. |
+
+An amplitude sweep showed the same basic behavior:
+
+| Sine amplitude | Worst ASR |
+| ---: | ---: |
+| `0.05` | `0.05131` |
+| `0.10` | `0.05891` |
+| `0.20` | `0.06672` |
+| `0.30` | `0.06968` |
+| `0.50` | `0.06779` |
+| `0.75` | `0.06593` |
+
+This means the warning is not just an artifact of the default `0.5` probe being
+too hot. The model likely has real high-frequency foldback risk on raw
+high-gain material. It is still below the current `high_aliasing` threshold of
+`0.08`, so the correct behavior is to surface the warning and listen for
+metallic foldback on sustained high notes, bends, and harmonics.
+
+Product implication:
+
+- Keep ASR warning-only for now.
+- Treat `0.02-0.08` as "listen carefully", not "reject".
+- Treat raw high-gain amp-head exports as the main ASR stress case because no
+  cabinet filter hides the upper harmonics.
+- Plugin-side oversampling or a higher-sample-rate model path remains the most
+  likely long-term fix when ASR is audible.
+- Smoothed-tanh presets remain research candidates, not proven replacements:
+  previous rhythm2 tests lowered ASR for `tanh18` but hurt ESR/RMSE.
 
 ## Actionable Findings
 
