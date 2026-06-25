@@ -638,6 +638,7 @@ First RHYTHM4 export result:
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | `wavenet_tcn_quality_tanh15` | `run_cc3dc9235cf7426b8529c546003e0e75` | `0.0646` | `0.0670` | `0.0419` | `11.74x` | `416 KB` | Best prior high-gain export after long continuation chain. |
 | `wavenet_tcn_a2_prelu` | `run_e61c249debfa4f04a140cf0ff9d7f4ff` | `0.0440` | `0.0354` | `0.0205` | `6.54x` | `832 KB` | One 180-epoch run, native parity pass, still plugin-ready on this workstation. |
+| `wavenet_tcn_a2_prelu` continued | `run_0c18cca414014233bf5cd3824768021a` | `0.0381` | `0.0201` | `0.0145` | `6.62x` | `833 KB` | Best current export; Logic AU smoke sounded good with low apparent single-instance CPU. |
 
 This changes the architecture ranking: A2 PReLU is now the strongest high-gain
 candidate by both ESR and ASR, while dynamic RTNeural runtime cost is the main
@@ -645,6 +646,18 @@ trade-off. The plugin-side opportunity is to preserve this quality while
 reducing cost through the editable `rtneural-extended` fork: fused Conv1D/PReLU
 blocks, static model generation, residual/skip graph support, or a custom
 A2-style runtime block.
+
+First DAW smoke:
+
+- Built `plugin/rtneural-loader`, a minimal JUCE AU/VST3/Standalone loader with
+  one output gain knob and a file picker for RTNeural JSON.
+- Installed the AU to `~/Library/Audio/Plug-Ins/Components` and validated it
+  with `auval -v aufx RtL1 SwLv`.
+- Logic Pro loaded the AU and the continued A2 PReLU export. In the initial
+  single-instance test, CPU use appeared minimal and the live model sounded
+  good.
+- Next plugin-side performance checks: 32/64/128 sample buffers, multiple
+  duplicated instances, 48/96 kHz sessions, and modest-machine testing.
 
 ### Phase 4: Product Runtime Gate
 

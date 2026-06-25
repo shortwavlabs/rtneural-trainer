@@ -281,6 +281,18 @@ blocks, a 2,481-sample receptive field, and an `832 KB` JSON, versus tanh15's
 worst-case realtime. It is still plugin-ready on this machine, but no longer
 belongs in the "just research" bucket for high-gain captures.
 
+Continuation and plugin smoke update: continuation run
+`run_0c18cca414014233bf5cd3824768021a` improved the A2 PReLU result further.
+The exported package `export_d56825caf0394b4bad518fdba58a9ddc` reached ESR
+`0.0381`, MAE `0.0096`, RMSE `0.0182`, state-continuous correlation `0.9808`,
+average ASR `0.0145`, and worst ASR `0.0201`. Native RTNeural validation passed
+with `2.21e-5` max abs error, and the Eigen benchmark remained in the same
+range at `6.62x` worst-case realtime. The AU test plugin loaded this export in
+Logic Pro, reported minimal apparent CPU use in the first single-instance test,
+and the live model sounded good. This is the first end-to-end proof that the
+trainer's high-gain A2-style result translates into a DAW plugin, not just the
+offline preview.
+
 ## Capture Health
 
 | Capture | Project | Target | Target RMS | RMS Delta vs DI | Latency | Confidence | Notes |

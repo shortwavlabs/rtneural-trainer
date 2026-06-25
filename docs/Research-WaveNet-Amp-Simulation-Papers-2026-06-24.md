@@ -154,20 +154,26 @@ nonlinearities.
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | `wavenet_tcn_quality_tanh15` | `run_cc3dc9235cf7426b8529c546003e0e75` | `0.0646` | `0.0237` | `0.9674` | `0.0670` | `0.0419` | `11.74x` |
 | `wavenet_tcn_a2_prelu` | `run_e61c249debfa4f04a140cf0ff9d7f4ff` | `0.0440` | `0.0196` | `0.9778` | `0.0354` | `0.0205` | `6.54x` |
+| `wavenet_tcn_a2_prelu` continued | `run_0c18cca414014233bf5cd3824768021a` | `0.0381` | `0.0182` | `0.9808` | `0.0201` | `0.0145` | `6.62x` |
 
 Interpretation:
 
 - A2 PReLU beat the best tanh15 export by about `32%` ESR in one 180-epoch run,
-  while tanh15 needed a continuation chain ending around epoch `691`.
-- Average ASR was almost exactly cut in half, and worst ASR dropped by about
-  `47%`. This is the clearest evidence so far that the A2-inspired architecture
-  helps high-gain aliasing/fizz behavior, not just waveform fit.
+  while tanh15 needed a continuation chain ending around epoch `691`. A later
+  A2 continuation pushed ESR down to `0.0381`.
+- The first A2 export cut average ASR almost exactly in half; the continuation
+  pushed average ASR to `0.0145` and worst ASR to `0.0201`. This is the
+  clearest evidence so far that the A2-inspired architecture helps high-gain
+  aliasing/fizz behavior, not just waveform fit.
 - The model is heavier: native Eigen runtime dropped from `11.74x` to `6.54x`,
   and the JSON grew from roughly `416 KB` to `832 KB`. It remains comfortably
   real-time on this workstation, but runtime should be tracked before plugin
   promotion.
 - The export still reports `review_aliasing`, so ASR remains warning-only. The
   practical gate is target/prediction/residual listening plus native benchmark.
+- First plugin smoke passed: the AU loader opened the continued A2 export in
+  Logic Pro, showed minimal apparent CPU in a single-instance test, and the
+  live model sounded good.
 
 ## RHYTHM3B ASR Calibration Note
 

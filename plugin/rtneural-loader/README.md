@@ -41,3 +41,16 @@ cmake -S plugin/rtneural-loader -B plugin/rtneural-loader/build -DRTNEURAL_LOADE
   swap cannot delete an object still being read by the audio callback.
 - This is a test harness, not the final AIDA-X-style player UI.
 
+## First Smoke Result
+
+Validated on June 25, 2026:
+
+- AU installed to `~/Library/Audio/Plug-Ins/Components/RTNeural Loader.component`.
+- `auval -v aufx RtL1 SwLv` passed.
+- Logic Pro loaded the AU and opened the continued RHYTHM4 A2 PReLU export:
+  `export_d56825caf0394b4bad518fdba58a9ddc/model.rtneural.json`.
+- Single-instance CPU appeared minimal in Logic, and the live model sounded
+  good.
+
+Next checks: small Logic buffers (`32`, `64`, `128` samples), duplicated plugin
+instances, 96 kHz sessions, and testing on less powerful machines.
