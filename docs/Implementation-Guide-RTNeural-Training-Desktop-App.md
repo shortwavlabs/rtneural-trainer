@@ -193,6 +193,10 @@ repo. Pinning early matters because parity failures are often version-sensitive.
    - On the current workstation, prefer the local checkout at
      `/Users/shortwavlabs/Workspace/rt-neural/RTNeural` and fall back to fetching
      only when the local clone is absent.
+   - That local checkout is the Shortwav Labs fork,
+     [`shortwavlabs/rtneural-extended`](https://github.com/shortwavlabs/rtneural-extended),
+     so plugin/runtime work may extend RTNeural directly when the current
+     sequential JSON graph is too limiting.
 4. Record expected Python package versions:
    - `numpy`
    - `tensorflow>=2.16,<2.19` for canonical Keras export fixtures and
@@ -299,6 +303,7 @@ Implemented presets:
 | `wavenet_tcn_quality_tanh15` | Quality WaveNet trained with smoothed `tanh(x / 1.5)` and exported by folding the scale into Conv1D weights | High-band residual and ASR research |
 | `wavenet_tcn_high_gain` | 11-layer WaveNet-style dilated causal Conv1D stack with 4095-sample receptive field and `3.5e-4` default learning rate | Hidden research preset; first DI4/RHYTHM4 run underperformed quality and showed deeper-stack optimization collapse |
 | `wavenet_tcn_quality_tanh18` | Quality WaveNet trained with smoothed `tanh(x / 1.8)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
+| `wavenet_tcn_a2_prelu` | A2-inspired sequential Conv1D/PReLU stack with mixed `6`/`15` sample kernels and non-power-of-two dilations | RHYTHM4 architecture research; parity-safe but not true residual A2 |
 | `wavenet_tcn_separable_fast` | Experimental grouped dilated Conv1D plus 1x1 pointwise WaveNet variant with bounded output and MR-STFT/pre-emphasis default loss | Runtime research only; parity-safe but not faster than balanced in current dynamic RTNeural benchmarks |
 | `wavenet_tcn` | Legacy balanced WaveNet-style preset | Existing run/checkpoint compatibility |
 | `conv_gru_hybrid` | Conv1D front-end + GRU with bounded dense output | Richer Keras temporal preset |
@@ -1394,6 +1399,7 @@ fixtures/rtneural-json/golden/
   wavenet_tcn_quality_tanh15.rtneural.json
   wavenet_tcn_quality_tanh18.rtneural.json
   wavenet_tcn_high_gain.rtneural.json
+  wavenet_tcn_a2_prelu.rtneural.json
   wavenet_tcn_separable_fast.rtneural.json
   conv_gru_hybrid.rtneural.json
 ```
@@ -1538,6 +1544,7 @@ PyTorch, or export logic changes.
 | `wavenet_tcn_quality_tanh15` | Required | Later | Required | Required | Required | Required | High-band residual and ASR research |
 | `wavenet_tcn_quality_tanh18` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
 | `wavenet_tcn_high_gain` | Required | Later | Required | Required | Required | Required | Hidden rhythm/high-gain research |
+| `wavenet_tcn_a2_prelu` | Required | Later | Required | Required | Required | Required | A2-inspired architecture research |
 | `wavenet_tcn_separable_fast` | Required | Later | Required | Required | Required | Required | Experimental runtime research |
 | `wavenet_tcn` | Required | Later | Required | Required | Required | Required | Legacy alias |
 | `conv_gru_hybrid` | Required | Later | Required | Required | Required | Required | v1-plus |

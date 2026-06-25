@@ -1889,6 +1889,8 @@ def estimate_realtime_factor(preset: PresetConfig) -> float:
         return 1.5
     if preset.preset_id == "wavenet_tcn_high_gain":
         return 1.2
+    if preset.preset_id == "wavenet_tcn_a2_prelu":
+        return 1.2
     if preset.preset_id == "wavenet_tcn_separable_fast":
         return 5.0
     return 180.0 if preset.hidden_size <= 12 else 120.0

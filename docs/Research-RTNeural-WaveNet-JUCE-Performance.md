@@ -136,6 +136,11 @@ Local RTNeural repositories:
 - `/Users/shortwavlabs/Workspace/rt-neural/RTNeural-example`
 - `/Users/shortwavlabs/Workspace/rt-neural/RTNeural-compare`
 
+The local RTNeural checkout is the Shortwav Labs fork
+[`shortwavlabs/rtneural-extended`](https://github.com/shortwavlabs/rtneural-extended),
+so future work can modify RTNeural itself when the app/plugin needs graph,
+layer, or fused-kernel support that upstream dynamic JSON does not expose.
+
 Project files reviewed:
 
 - `trainer/rttrainer/models/presets.py`
@@ -614,7 +619,18 @@ these ideas should be split into two lanes:
    non-power-of-two dilations, and maybe mixed kernels where the exporter can
    still emit ordinary Conv1D layers.
 2. Plugin/native work: residual/skip graph support, custom fused WaveNet
-   blocks, or native NAM/NeuralAudio support.
+   blocks, or native NAM/NeuralAudio support. Because the local RTNeural checkout
+   is our editable fork, this can happen inside RTNeural itself instead of only
+   in the downstream plugin.
+
+Implemented trainer-safe probe:
+
+- `wavenet_tcn_a2_prelu`: 12 sequential Conv1D/PReLU blocks, mixed `6`/`15`
+  sample kernels, A2-style dilations
+  `[1, 3, 7, 17, 41, 101, 239, 1, 3, 7, 17, 41]`, `16` filters, MR-STFT
+  pre-emphasis loss, and `3.5e-4` default learning rate. This is intended for
+  RHYTHM4 comparison against `wavenet_tcn_quality_tanh15`; it is not a lossless
+  A2 graph replacement.
 
 ### Phase 4: Product Runtime Gate
 

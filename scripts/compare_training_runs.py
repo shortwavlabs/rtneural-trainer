@@ -24,6 +24,7 @@ WAVENET_RUNTIME_ESTIMATES = {
     "wavenet_tcn_quality_tanh15": 1.5,
     "wavenet_tcn_quality_tanh18": 1.5,
     "wavenet_tcn_high_gain": 1.2,
+    "wavenet_tcn_a2_prelu": 1.2,
     "wavenet_tcn_separable_fast": 5.0,
 }
 

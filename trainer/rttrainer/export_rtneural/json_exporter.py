@@ -331,7 +331,7 @@ def build_keras_rtneural_json(
                 layer["input_size"] = shape[-1]
                 layer["output_size"] = shape[-1]
 
-    model_json["metadata"] = {
+    metadata = {
         "schema_version": 1,
         "schema": "rttrainer-rtneural-json-v0",
         "sample_rate": sample_rate,
@@ -343,6 +343,9 @@ def build_keras_rtneural_json(
         "conv_activation": preset.conv_activation,
         "conv_activation_alpha": preset.conv_activation_alpha,
     }
+    if preset.conv_kernel_sizes:
+        metadata["conv_kernel_sizes"] = list(preset.conv_kernel_sizes)
+    model_json["metadata"] = metadata
     if preset.conv_activation == "tanh" and preset.conv_activation_alpha != 1.0:
         model_json["metadata"]["activation_export"] = {
             "strategy": "fold_scaled_tanh_into_conv1d",

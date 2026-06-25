@@ -104,3 +104,9 @@ The user has cloned RTNeural-related reference repos locally under:
 Use those local clones before web lookups when inspecting RTNeural, the example
 plugin, or benchmark behavior.
 
+Important: `/Users/shortwavlabs/Workspace/rt-neural/RTNeural` is the user's own
+fork, [`shortwavlabs/rtneural-extended`](https://github.com/shortwavlabs/rtneural-extended).
+Treat RTNeural as editable project infrastructure when a feature clearly needs
+runtime/library support, not as an immutable upstream dependency. Keep trainer
+JSON compatibility, native validator parity, plugin/runtime implications, and
+upstream merge cost in mind before changing the fork.

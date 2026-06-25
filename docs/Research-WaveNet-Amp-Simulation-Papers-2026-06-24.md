@@ -76,6 +76,8 @@ Implemented in the trainer app after this review:
   `tanh` by folding `1 / alpha` into the preceding Conv1D kernel and bias.
 - Golden RTNeural JSON fixtures now cover the scaled-tanh presets with Python
   parity and native validator parity.
+- Added `wavenet_tcn_a2_prelu` as a separate A2-inspired, RTNeural-safe
+  architecture probe with mixed kernels, non-power-of-two dilations, and PReLU.
 - Added `scripts/search_rtneural_presets.py` to generate a repeatable search
   plan or run train/export comparisons across the WaveNet, smoothed-tanh
   WaveNet, separable WaveNet, and stacked Conv presets.

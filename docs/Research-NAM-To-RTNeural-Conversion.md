@@ -315,6 +315,9 @@ Useful lessons:
    useful clue because our failed long sequential preset likely suffered from
    tanh saturation. For the current sequential RTNeural-safe path, a PReLU or
    LeakyReLU-style WaveNet experiment is lower risk than a bigger tanh stack.
+   This is now represented by the `wavenet_tcn_a2_prelu` research preset, which
+   keeps export compatibility while testing A2-like dilations, mixed kernels,
+   and PReLU hidden nonlinearities.
 
 6. **Quality scaling should be a product feature.**
 

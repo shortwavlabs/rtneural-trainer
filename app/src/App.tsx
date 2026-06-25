@@ -273,6 +273,13 @@ const presets: PresetOption[] = [
     backends: ["keras"],
   },
   {
+    id: "wavenet_tcn_a2_prelu",
+    label: "WaveNet A2 PReLU",
+    detail: "A2 dilations, mixed kernels, PReLU",
+    cpu: "Research",
+    backends: ["keras"],
+  },
+  {
     id: "conv_gru_hybrid",
     label: "Hybrid",
     detail: "Conv1D front-end + GRU",
@@ -341,6 +348,22 @@ const builtInTrainingRecipes = [
     epochs: 180,
     batchSize: 16,
     learningRate: 0.0005,
+    sequenceLength: 8192,
+    maxWindows: 8192,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
+    earlyStoppingPatience: 20,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_a2_prelu",
+    source: "built_in",
+    name: "WaveNet A2 PReLU",
+    description: "A2-inspired non-power dilations, mixed kernels, and PReLU.",
+    modelPreset: "wavenet_tcn_a2_prelu",
+    epochs: 180,
+    batchSize: 16,
+    learningRate: 0.00035,
     sequenceLength: 8192,
     maxWindows: 8192,
     resampleTrainingWindows: true,
@@ -2124,7 +2147,7 @@ function TrainView({
     setMaxWindows(
       Math.max(
         recommendedWindowBudget(project),
-        isQualityWaveNetPreset(nextPreset) || nextPreset === "wavenet_tcn_high_gain"
+        isLongWaveNetPreset(nextPreset)
           ? 8192
           : 4096,
       ),
@@ -4252,6 +4275,14 @@ function isQualityWaveNetPreset(preset: string) {
   return preset === "wavenet_tcn_quality" || preset.startsWith("wavenet_tcn_quality_");
 }
 
+function isLongWaveNetPreset(preset: string) {
+  return (
+    isQualityWaveNetPreset(preset) ||
+    preset === "wavenet_tcn_high_gain" ||
+    preset === "wavenet_tcn_a2_prelu"
+  );
+}
+
 function bestWaveNetResumeRun(runs: TrainingRun[], backend: RuntimeBackend) {
   const candidates = runs.filter((run) => {
     if (run.status !== "completed" || !run.metrics) return false;
@@ -4274,6 +4305,7 @@ function qualityContinuationLearningRate(preset: string) {
   if (isQualityWaveNetPreset(preset) || preset === "wavenet_tcn_high_gain") {
     return 0.00015;
   }
+  if (preset === "wavenet_tcn_a2_prelu") return 0.00012;
   if (preset === "wavenet_tcn_fast") return 0.0003;
   return 0.0002;
 }

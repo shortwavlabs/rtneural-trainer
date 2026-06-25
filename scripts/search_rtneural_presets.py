@@ -25,6 +25,7 @@ DEFAULT_PRESETS = (
     "wavenet_tcn_quality",
     "wavenet_tcn_quality_tanh15",
     "wavenet_tcn_quality_tanh18",
+    "wavenet_tcn_a2_prelu",
     "wavenet_tcn_separable_fast",
     "conv1d_stack_prelu",
 )

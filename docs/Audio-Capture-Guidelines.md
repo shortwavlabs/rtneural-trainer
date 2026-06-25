@@ -190,6 +190,9 @@ the same 151.6 second DI2 performance. The practical training rule is now:
 - Try `wavenet_tcn_quality_tanh15` when a quality WaveNet sounds close but the
   residual or export warning points to high-band fizz/aliasing. It is an A/B
   research preset, not a replacement for the proven quality baseline yet.
+- Try `wavenet_tcn_a2_prelu` only as an architecture experiment after a strong
+  quality/tanh15 baseline exists. It borrows A2-style dilations, mixed kernels,
+  and PReLU, but it is not a direct NAM A2 graph.
 - Treat `wavenet_tcn_high_gain` as hidden research only. The first DI4/RHYTHM4
   test showed the longer sequential tanh stack underpowered the prediction and
   did not beat `wavenet_tcn_quality`.

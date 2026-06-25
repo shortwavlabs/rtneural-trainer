@@ -14,6 +14,7 @@ class PresetConfig:
     output_size: int
     num_layers: int
     kernel_size: int = 3
+    conv_kernel_sizes: tuple[int, ...] = ()
     conv_filters: int | None = None
     dense_units: int | None = None
     batchnorm: bool = False
@@ -211,6 +212,21 @@ PRESETS: dict[str, PresetConfig] = {
         conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
         conv_activation_alpha=1.8,
     ),
+    "wavenet_tcn_a2_prelu": PresetConfig(
+        preset_id="wavenet_tcn_a2_prelu",
+        architecture="conv1d",
+        input_size=1,
+        hidden_size=16,
+        output_size=1,
+        num_layers=12,
+        kernel_size=6,
+        conv_kernel_sizes=(6, 6, 6, 6, 6, 6, 6, 6, 15, 15, 6, 6),
+        conv_filters=16,
+        prelu=True,
+        conv_dilations=(1, 3, 7, 17, 41, 101, 239, 1, 3, 7, 17, 41),
+        default_loss="mrstft_preemphasis",
+        default_learning_rate=3.5e-4,
+    ),
     "wavenet_tcn_separable_fast": wavenet_tcn_separable_preset(
         "wavenet_tcn_separable_fast",
         hidden_size=16,
@@ -325,12 +341,15 @@ def build_keras_model(config: PresetConfig, keras):
     elif config.architecture == "conv1d":
         block_count = max(1, config.num_layers)
         dilations = config.conv_dilations or tuple(1 for _index in range(block_count))
+        kernel_sizes = config.conv_kernel_sizes or tuple(
+            config.kernel_size for _index in range(block_count)
+        )
         for block_index in range(block_count):
             suffix = "" if block_count == 1 else f"_{block_index + 1}"
             model_layers.append(
                 layers.Conv1D(
                     config.conv_filters or config.hidden_size,
-                    kernel_size=config.kernel_size,
+                    kernel_size=kernel_sizes[min(block_index, len(kernel_sizes) - 1)],
                     dilation_rate=dilations[min(block_index, len(dilations) - 1)],
                     padding="causal",
                     activation=None if config.batchnorm or config.prelu else conv_activation,

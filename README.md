@@ -220,6 +220,12 @@ the validator CMake project uses `/Users/shortwavlabs/Workspace/rt-neural/RTNeur
 by default. Override with `RTNEURAL_LOCAL_PATH=/path/to/RTNeural` if needed. If
 no local checkout is found, CMake fetches the pinned RTNeural commit.
 
+On this workstation, that local RTNeural checkout is the Shortwav Labs fork:
+[`shortwavlabs/rtneural-extended`](https://github.com/shortwavlabs/rtneural-extended).
+That means future plugin/runtime work can extend RTNeural itself when sequential
+JSON is too limiting, as long as exports still pass native parity and benchmark
+checks.
+
 ```bash
 cmake -S native/rtneural-validator -B native/rtneural-validator/build
 cmake --build native/rtneural-validator/build
@@ -406,6 +412,10 @@ Current Keras-first presets are:
   normal UI recommendations and kept only for architecture research.
 - `wavenet_tcn_quality_tanh18`: research quality WaveNet with smoothed
   `tanh(x / 1.8)` training.
+- `wavenet_tcn_a2_prelu`: A2-inspired research WaveNet with mixed `6`/`15`
+  sample Conv1D kernels, non-power-of-two dilations, and PReLU hidden
+  nonlinearities. It is RTNeural-safe, but it does not include true A2
+  residual/skip topology.
 - `wavenet_tcn_separable_fast`: experimental grouped/dilated Conv1D plus 1x1
   pointwise WaveNet variant. It has Python/native parity coverage, but current
   dynamic RTNeural benchmarks do not beat `wavenet_tcn_balanced`; use it only
