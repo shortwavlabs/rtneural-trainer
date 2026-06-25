@@ -65,6 +65,8 @@ type CaptureAnalyzePayload = {
   targetSampleRate: number;
   resample: boolean;
   channelPolicy: CaptureChannelPolicy;
+  knownLatencyEnabled: boolean;
+  knownLatencySamples: number;
 };
 
 type TrainingOptions = {
@@ -704,6 +706,9 @@ export default function App() {
                         target_sample_rate: capture.targetSampleRate,
                         resample: capture.resample,
                         channel_policy: capture.channelPolicy,
+                        known_latency_samples: capture.knownLatencyEnabled
+                          ? capture.knownLatencySamples
+                          : null,
                       });
                       await commitProject(nextProject, "align");
                     } catch (caught) {
@@ -1468,7 +1473,18 @@ function CaptureView({
   const [channelPolicy, setChannelPolicy] = useState<CaptureChannelPolicy>(
     initialCapture.channelPolicy,
   );
-  const captureValidation = validateCaptureForm(inputPath, targetPath);
+  const [knownLatencyEnabled, setKnownLatencyEnabled] = useState(
+    initialCapture.knownLatencyEnabled,
+  );
+  const [knownLatencySamples, setKnownLatencySamples] = useState(
+    initialCapture.knownLatencySamples,
+  );
+  const captureValidation = validateCaptureForm(
+    inputPath,
+    targetPath,
+    knownLatencyEnabled,
+    knownLatencySamples,
+  );
   const canPickFiles = isTauriRuntime();
 
   useEffect(() => {
@@ -1478,6 +1494,8 @@ function CaptureView({
     setResample(nextCapture.resample);
     setTargetSampleRate(nextCapture.targetSampleRate);
     setChannelPolicy(nextCapture.channelPolicy);
+    setKnownLatencyEnabled(nextCapture.knownLatencyEnabled);
+    setKnownLatencySamples(nextCapture.knownLatencySamples);
   }, [project.id]);
 
   async function pickCaptureFile(kind: "input" | "target") {
@@ -1513,6 +1531,8 @@ function CaptureView({
               targetSampleRate,
               resample,
               channelPolicy,
+              knownLatencyEnabled,
+              knownLatencySamples: Math.round(knownLatencySamples),
             });
           }}
         >
@@ -1570,6 +1590,29 @@ function CaptureView({
                 <option value="first">Use first channel</option>
                 <option value="reject">Require mono</option>
               </select>
+            </label>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={knownLatencyEnabled}
+                onChange={(event) => setKnownLatencyEnabled(event.target.checked)}
+              />
+              <span>
+                Use known latency
+                <small>Skips auto-detect for matched DAW renders.</small>
+              </span>
+            </label>
+            <label>
+              Latency samples
+              <input
+                type="number"
+                min={-48000}
+                max={48000}
+                step={1}
+                value={knownLatencySamples}
+                disabled={!knownLatencyEnabled}
+                onChange={(event) => setKnownLatencySamples(Number(event.target.value))}
+              />
             </label>
           </div>
           {captureValidation.length ? (
@@ -4459,6 +4502,7 @@ function operationLabel(operation: string) {
 function captureDefaultsForProject(project: ProjectDetail): CaptureAnalyzePayload {
   const options = project.audio?.options ?? null;
   const savedChannelPolicy = getString(options, "channel_policy");
+  const knownLatencySamples = getNumber(options, "known_latency_samples");
   return {
     inputPath: project.audio?.input.path ?? "",
     targetPath: project.audio?.target.path ?? "",
@@ -4467,6 +4511,9 @@ function captureDefaultsForProject(project: ProjectDetail): CaptureAnalyzePayloa
     channelPolicy: isCaptureChannelPolicy(savedChannelPolicy)
       ? savedChannelPolicy
       : "mixdown",
+    knownLatencyEnabled: knownLatencySamples !== null,
+    knownLatencySamples:
+      knownLatencySamples ?? project.audio?.latency_auto_samples ?? project.audio?.latency_samples ?? 0,
   };
 }
 
@@ -4474,7 +4521,12 @@ function isCaptureChannelPolicy(value: string | null): value is CaptureChannelPo
   return value === "mixdown" || value === "first" || value === "reject";
 }
 
-function validateCaptureForm(inputPath: string, targetPath: string) {
+function validateCaptureForm(
+  inputPath: string,
+  targetPath: string,
+  knownLatencyEnabled = false,
+  knownLatencySamples = 0,
+) {
   const messages: string[] = [];
   const input = inputPath.trim();
   const target = targetPath.trim();
@@ -4482,6 +4534,14 @@ function validateCaptureForm(inputPath: string, targetPath: string) {
   if (!target) messages.push("Choose or enter a processed target WAV.");
   if (input && !isWavPath(input)) messages.push("Dry input must be a .wav file.");
   if (target && !isWavPath(target)) messages.push("Processed target must be a .wav file.");
+  if (
+    knownLatencyEnabled &&
+    (!Number.isFinite(knownLatencySamples) ||
+      Math.round(knownLatencySamples) !== knownLatencySamples ||
+      Math.abs(knownLatencySamples) > 48_000)
+  ) {
+    messages.push("Known latency must be a whole number between -48000 and 48000 samples.");
+  }
   if (input && target && input === target) {
     messages.push("Dry input and processed target must be different files.");
   }

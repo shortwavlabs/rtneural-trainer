@@ -221,6 +221,7 @@ export interface UpdateAudioRequest {
   target_sample_rate: number;
   resample: boolean;
   channel_policy: CaptureChannelPolicy;
+  known_latency_samples?: number | null;
 }
 
 export interface StartTrainingRequest {

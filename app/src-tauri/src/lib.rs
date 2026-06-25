@@ -309,6 +309,8 @@ struct UpdateAudioRequest {
     resample: bool,
     #[serde(default = "default_channel_policy")]
     channel_policy: String,
+    #[serde(default)]
+    known_latency_samples: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -894,6 +896,7 @@ fn create_sample_project(
         target_sample_rate: 48_000,
         resample: false,
         channel_policy: "mixdown".to_string(),
+        known_latency_samples: None,
     };
     prepare_project_audio(&app, state.inner(), &payload)
 }
@@ -1009,6 +1012,9 @@ fn prepare_project_audio(
     ensure_distinct_capture_paths(&input_path, &target_path)?;
     let target_sample_rate = normalize_capture_sample_rate(payload.target_sample_rate)?;
     let channel_policy = normalize_channel_policy_name(&payload.channel_policy)?;
+    let known_latency_samples = payload
+        .known_latency_samples
+        .map(|samples| samples.clamp(-48_000, 48_000));
 
     let project_dir = {
         let db = state.db.lock().map_err(lock_error)?;
@@ -1029,6 +1035,7 @@ fn prepare_project_audio(
             "target_sample_rate": target_sample_rate,
             "resample": payload.resample,
             "channel_policy": channel_policy,
+            "known_latency_samples": known_latency_samples,
             "manual_latency_adjustment_samples": 0
         }),
     )?;
@@ -1107,7 +1114,15 @@ fn update_project_alignment_blocking(
     let manual_adjustment = payload
         .manual_latency_adjustment_samples
         .clamp(-48_000, 48_000);
-    let (project_dir, input_path, target_path, target_sample_rate, resample, channel_policy) = {
+    let (
+        project_dir,
+        input_path,
+        target_path,
+        target_sample_rate,
+        resample,
+        channel_policy,
+        known_latency_samples,
+    ) = {
         let db = state.db.lock().map_err(lock_error)?;
         ensure_no_active_project_job(&db, &payload.project_id)?;
         let project = load_project_detail(&db, &payload.project_id)?;
@@ -1139,6 +1154,9 @@ fn update_project_alignment_blocking(
             target_sample_rate,
             resample,
             channel_policy,
+            audio
+                .latency_auto_samples
+                .unwrap_or(audio.latency_samples - audio.manual_latency_adjustment_samples),
         )
     };
 
@@ -1160,6 +1178,7 @@ fn update_project_alignment_blocking(
             "target_sample_rate": target_sample_rate,
             "resample": resample,
             "channel_policy": channel_policy,
+            "known_latency_samples": known_latency_samples,
             "manual_latency_adjustment_samples": manual_adjustment
         }),
     )?;

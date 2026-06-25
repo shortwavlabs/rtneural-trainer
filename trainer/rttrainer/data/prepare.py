@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any, Sequence
 
 from rttrainer.data.audio_io import (
     AudioBuffer,
@@ -12,6 +13,11 @@ from rttrainer.data.audio_io import (
     write_wav_mono,
 )
 from rttrainer.utils import mkdir, write_json
+
+try:
+    import numpy as _np
+except ImportError:  # pragma: no cover - exercised only in minimal sidecar builds.
+    _np = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +68,9 @@ LATENCY_MAX_LAG_SAMPLES = 4096
 LATENCY_MAX_WINDOWS = 12
 LATENCY_FINE_RADIUS_SAMPLES = 48
 LATENCY_DISTINCT_CANDIDATE_DISTANCE = 8
+LATENCY_PREAMBLE_ANALYSIS_SAMPLES = 480_000
+LATENCY_PREAMBLE_SEARCH_RADIUS_SAMPLES = 256
+LATENCY_PREAMBLE_MAX_WINDOWS = 6
 
 
 def prepare_audio(
@@ -73,6 +82,7 @@ def prepare_audio(
     resample: bool = False,
     channel_policy: str = "mixdown",
     manual_latency_adjustment_samples: int = 0,
+    known_latency_samples: int | None = None,
 ) -> PreparedAudio:
     output_dir = mkdir(output_dir)
     normalized_channel_policy = normalize_channel_policy(channel_policy)
@@ -112,7 +122,11 @@ def prepare_audio(
             resample_enabled=resample,
         )
     )
-    latency_analysis = analyze_latency(input_audio.samples, target_audio.samples)
+    latency_analysis = (
+        known_latency_analysis(known_latency_samples)
+        if known_latency_samples is not None
+        else analyze_latency(input_audio.samples, target_audio.samples)
+    )
     latency_samples = latency_analysis.estimated_samples
     confidence = latency_analysis.confidence
     effective_latency_samples = latency_samples + int(manual_latency_adjustment_samples)
@@ -157,6 +171,7 @@ def prepare_audio(
             "resample": resample,
             "channel_policy": normalized_channel_policy,
             "manual_latency_adjustment_samples": int(manual_latency_adjustment_samples),
+            "known_latency_samples": known_latency_samples,
         },
         "latency": {
             "estimated_samples": effective_latency_samples,
@@ -488,6 +503,32 @@ def estimate_latency(input_samples: list[float], target_samples: list[float]) ->
     return analysis.estimated_samples, analysis.confidence
 
 
+def known_latency_analysis(latency_samples: int) -> LatencyAnalysis:
+    return LatencyAnalysis(
+        estimated_samples=int(latency_samples),
+        confidence=1.0,
+        method="known_latency",
+        agreement=1.0,
+        search_radius_samples=0,
+        window_length_samples=0,
+        analysis_window_count=0,
+        score_margin=1.0,
+        candidates=[
+            {
+                "samples": int(latency_samples),
+                "score": 1.0,
+                "feature_score": 1.0,
+                "signed_score": 1.0,
+                "preemphasis_score": 1.0,
+                "onset_score": 1.0,
+                "window_count": 0,
+                "vote_count": 0,
+                "agreement": 1.0,
+            }
+        ],
+    )
+
+
 def analyze_latency(input_samples: list[float], target_samples: list[float]) -> LatencyAnalysis:
     length = min(len(input_samples), len(target_samples))
     if length <= 128:
@@ -502,6 +543,24 @@ def analyze_latency(input_samples: list[float], target_samples: list[float]) -> 
             score_margin=0.0,
             candidates=[],
         )
+
+    if _np is not None:
+        preamble_length = min(length, LATENCY_PREAMBLE_ANALYSIS_SAMPLES)
+        if preamble_length >= 8_192 and preamble_length < length:
+            preamble_analysis = analyze_latency_vectorized(
+                input_samples,
+                target_samples,
+                preamble_length,
+                search_radius_limit=LATENCY_PREAMBLE_SEARCH_RADIUS_SAMPLES,
+                max_windows=LATENCY_PREAMBLE_MAX_WINDOWS,
+            )
+            if (
+                preamble_analysis.confidence >= 0.65
+                and preamble_analysis.agreement >= 0.60
+                and preamble_analysis.score_margin >= 0.01
+            ):
+                return preamble_analysis
+        return analyze_latency_vectorized(input_samples, target_samples, length)
 
     window_length = choose_latency_window_length(length)
     search_radius = min(LATENCY_MAX_LAG_SAMPLES, max(1, length // 4), max(1, window_length // 4))
@@ -536,6 +595,98 @@ def analyze_latency(input_samples: list[float], target_samples: list[float]) -> 
     fine_scores = score_latency_lags(
         input_samples[:length],
         target_samples[:length],
+        starts,
+        fine_window_length,
+        fine_lags,
+    )
+    fine_scores = add_latency_vote_agreement(fine_scores, len(starts))
+    ranked = ranked_latency_scores(
+        fine_scores,
+        max_count=8,
+        min_distance=LATENCY_DISTINCT_CANDIDATE_DISTANCE,
+    )
+    if not ranked:
+        return LatencyAnalysis(
+            estimated_samples=0,
+            confidence=0.0,
+            method="active_window_correlation",
+            agreement=0.0,
+            search_radius_samples=search_radius,
+            window_length_samples=window_length,
+            analysis_window_count=len(starts),
+            score_margin=0.0,
+            candidates=[],
+        )
+
+    best = choose_best_latency_score(fine_scores, ranked[0])
+    runner_up = next((score for score in ranked if score.lag != best.lag), None)
+    score_margin = best.score - runner_up.score if runner_up else best.score
+    confidence = latency_confidence(best.score, score_margin, best.agreement)
+    candidates = [latency_score_payload(score) for score in ranked[:5]]
+    if best.lag not in {score.lag for score in ranked[:5]}:
+        candidates.insert(0, latency_score_payload(best))
+
+    return LatencyAnalysis(
+        estimated_samples=best.lag,
+        confidence=confidence,
+        method="active_window_correlation",
+        agreement=best.agreement,
+        search_radius_samples=search_radius,
+        window_length_samples=window_length,
+        analysis_window_count=len(starts),
+        score_margin=score_margin,
+        candidates=candidates[:5],
+    )
+
+
+def analyze_latency_vectorized(
+    input_samples: Sequence[float],
+    target_samples: Sequence[float],
+    length: int,
+    *,
+    search_radius_limit: int | None = None,
+    max_windows: int = LATENCY_MAX_WINDOWS,
+) -> LatencyAnalysis:
+    if _np is None:
+        raise RuntimeError("NumPy latency analyzer requested without NumPy.")
+
+    input_array = _np.asarray(input_samples[:length], dtype=_np.float64)
+    target_array = _np.asarray(target_samples[:length], dtype=_np.float64)
+    window_length = choose_latency_window_length(length)
+    search_radius = min(LATENCY_MAX_LAG_SAMPLES, max(1, length // 4), max(1, window_length // 4))
+    if search_radius_limit is not None:
+        search_radius = min(search_radius, max(1, int(search_radius_limit)))
+    starts = select_latency_window_starts_vectorized(
+        target_array,
+        window_length=window_length,
+        max_windows=max_windows,
+    )
+    fine_window_length = min(window_length, 32_768)
+
+    if search_radius <= 256:
+        fine_lags = list(range(-search_radius, search_radius + 1))
+    else:
+        coarse_scores = coarse_latency_scores_vectorized(
+            input_array,
+            target_array,
+            starts,
+            window_length,
+            search_radius,
+        )
+        coarse_candidates = ranked_latency_scores(
+            coarse_scores,
+            max_count=8,
+            min_distance=max(1, LATENCY_FINE_RADIUS_SAMPLES // 2),
+        )
+        fine_lags = fine_lag_candidates(
+            coarse_candidates,
+            search_radius=search_radius,
+            radius=LATENCY_FINE_RADIUS_SAMPLES,
+        )
+
+    fine_scores = score_latency_lags_vectorized(
+        input_array,
+        target_array,
         starts,
         fine_window_length,
         fine_lags,
@@ -713,6 +864,104 @@ def latency_window_quality(
     return 0.40 * energy_score + 0.50 * onset_score + 0.10 * crest_score
 
 
+def select_latency_window_starts_vectorized(
+    samples: Any,
+    *,
+    window_length: int,
+    max_windows: int,
+) -> list[int]:
+    length = int(samples.shape[0])
+    if length <= window_length:
+        return [0]
+
+    step = max(1, window_length // 2)
+    max_start = length - window_length
+    candidate_starts = list(range(0, max_start + 1, step))
+    if not candidate_starts or candidate_starts[-1] != max_start:
+        candidate_starts.append(max_start)
+
+    # Prioritize the transient preamble when present; then fill the remaining
+    # slots with the strongest active windows across the capture.
+    preamble_step = max(1, min(samples.shape[0], 24_000))
+    for start in range(0, min(max_start, 480_000) + 1, preamble_step):
+        if start not in candidate_starts:
+            candidate_starts.append(start)
+
+    windows = [
+        latency_window_candidate_vectorized(samples, start, start + window_length)
+        for start in candidate_starts
+    ]
+    max_energy = max((window.energy for window in windows), default=0.0)
+    max_onset = max((window.onset_energy for window in windows), default=0.0)
+    scored_windows = [
+        replace(
+            window,
+            quality=latency_window_quality(
+                window,
+                max_energy=max_energy,
+                max_onset_energy=max_onset,
+            ),
+        )
+        for window in windows
+    ]
+
+    selected: list[int] = []
+    min_spacing = max(1, window_length // 2)
+    preamble_selected = [
+        window
+        for window in scored_windows
+        if window.start <= min(max_start, 240_000) and window.energy > 1e-12
+    ]
+    if preamble_selected:
+        selected.append(max(preamble_selected, key=lambda item: item.quality).start)
+
+    for window in sorted(scored_windows, key=lambda item: item.quality, reverse=True):
+        if window.energy <= 1e-12:
+            continue
+        if all(abs(window.start - existing) >= min_spacing for existing in selected):
+            selected.append(window.start)
+        if len(selected) >= max_windows:
+            break
+    if not selected:
+        selected.append(0)
+    return sorted(selected)
+
+
+def latency_window_candidate_vectorized(samples: Any, start: int, end: int) -> LatencyWindowCandidate:
+    if _np is None:
+        raise RuntimeError("NumPy latency analyzer requested without NumPy.")
+
+    start = max(0, start)
+    end = min(int(samples.shape[0]), end)
+    window = samples[start:end]
+    if window.size == 0:
+        return LatencyWindowCandidate(
+            start=start,
+            quality=0.0,
+            energy=0.0,
+            onset_energy=0.0,
+            crest_factor=0.0,
+        )
+
+    abs_window = _np.abs(window)
+    previous_abs = _np.empty_like(abs_window)
+    previous_abs[0] = abs(float(samples[start - 1])) if start > 0 else 0.0
+    previous_abs[1:] = abs_window[:-1]
+    onsets = _np.maximum(0.0, abs_window - previous_abs)
+    energy = float(_np.dot(window, window))
+    onset_energy = float(_np.dot(onsets, onsets))
+    peak = float(abs_window.max(initial=0.0))
+    rms = math.sqrt(energy / max(1, int(window.size)))
+    crest_factor = peak / max(rms, 1e-12)
+    return LatencyWindowCandidate(
+        start=start,
+        quality=0.0,
+        energy=energy,
+        onset_energy=onset_energy,
+        crest_factor=crest_factor,
+    )
+
+
 def coarse_latency_scores(
     input_samples: list[float],
     target_samples: list[float],
@@ -758,6 +1007,53 @@ def downsample_abs(samples: list[float], block_size: int) -> list[float]:
     return output
 
 
+def coarse_latency_scores_vectorized(
+    input_samples: Any,
+    target_samples: Any,
+    starts: list[int],
+    window_length: int,
+    search_radius: int,
+) -> list[LatencyScore]:
+    block_size = 16 if search_radius > 1024 else 8
+    input_feature = downsample_abs_vectorized(input_samples, block_size)
+    target_feature = downsample_abs_vectorized(target_samples, block_size)
+    coarse_starts = [min(start // block_size, max(0, len(target_feature) - 1)) for start in starts]
+    coarse_window_length = max(32, window_length // block_size)
+    coarse_radius = max(1, search_radius // block_size)
+    coarse_lags = list(range(-coarse_radius, coarse_radius + 1))
+    coarse_scores = score_latency_lags_vectorized(
+        input_feature,
+        target_feature,
+        coarse_starts,
+        coarse_window_length,
+        coarse_lags,
+        feature_weight=1.0,
+    )
+    return [
+        LatencyScore(
+            lag=score.lag * block_size,
+            score=score.score,
+            feature_score=score.feature_score,
+            signed_score=score.signed_score,
+            window_count=score.window_count,
+        )
+        for score in coarse_scores
+    ]
+
+
+def downsample_abs_vectorized(samples: Any, block_size: int) -> Any:
+    if _np is None:
+        raise RuntimeError("NumPy latency analyzer requested without NumPy.")
+
+    if samples.size == 0:
+        return samples
+    remainder = int(samples.size) % block_size
+    if remainder:
+        pad = block_size - remainder
+        samples = _np.pad(samples, (0, pad), mode="constant")
+    return _np.mean(_np.abs(samples.reshape(-1, block_size)), axis=1)
+
+
 def fine_lag_candidates(
     coarse_candidates: list[LatencyScore],
     *,
@@ -796,6 +1092,28 @@ def score_latency_lags(
     ]
 
 
+def score_latency_lags_vectorized(
+    input_samples: Any,
+    target_samples: Any,
+    starts: list[int],
+    window_length: int,
+    lags: list[int],
+    *,
+    feature_weight: float = 0.75,
+) -> list[LatencyScore]:
+    return [
+        score_latency_lag_vectorized(
+            input_samples,
+            target_samples,
+            starts,
+            window_length,
+            lag,
+            feature_weight=feature_weight,
+        )
+        for lag in lags
+    ]
+
+
 def score_latency_lag(
     input_samples: list[float],
     target_samples: list[float],
@@ -815,6 +1133,61 @@ def score_latency_lag(
 
     for start in starts:
         correlations = latency_window_correlations(
+            input_samples,
+            target_samples,
+            start=start,
+            window_length=window_length,
+            lag=lag,
+        )
+        if correlations is None:
+            window_scores.append(float("-inf"))
+            continue
+        feature_score, signed_score, preemphasis_score, onset_score = correlations
+        combined = combine_latency_feature_scores(
+            feature_score,
+            signed_score,
+            preemphasis_score,
+            onset_score,
+            feature_weight=feature_weight,
+        )
+        scores.append(combined)
+        feature_scores.append(feature_score)
+        signed_scores.append(signed_score)
+        preemphasis_scores.append(preemphasis_score)
+        onset_scores.append(onset_score)
+        window_scores.append(combined)
+
+    return LatencyScore(
+        lag=lag,
+        score=trimmed_mean(scores),
+        feature_score=trimmed_mean(feature_scores),
+        signed_score=trimmed_mean(signed_scores),
+        window_count=len(scores),
+        preemphasis_score=trimmed_mean(preemphasis_scores),
+        onset_score=trimmed_mean(onset_scores),
+        window_scores=tuple(window_scores),
+    )
+
+
+def score_latency_lag_vectorized(
+    input_samples: Any,
+    target_samples: Any,
+    starts: list[int],
+    window_length: int,
+    lag: int,
+    *,
+    feature_weight: float,
+) -> LatencyScore:
+    scores: list[float] = []
+    feature_scores: list[float] = []
+    signed_scores: list[float] = []
+    preemphasis_scores: list[float] = []
+    onset_scores: list[float] = []
+    window_scores: list[float] = []
+    feature_weight = max(0.0, min(1.0, feature_weight))
+
+    for start in starts:
+        correlations = latency_window_correlations_vectorized(
             input_samples,
             target_samples,
             start=start,
@@ -939,6 +1312,57 @@ def latency_window_correlations(
     return feature_score, signed_score, preemphasis_score, onset_score
 
 
+def latency_window_correlations_vectorized(
+    input_samples: Any,
+    target_samples: Any,
+    *,
+    start: int,
+    window_length: int,
+    lag: int,
+) -> tuple[float, float, float, float] | None:
+    if _np is None:
+        raise RuntimeError("NumPy latency analyzer requested without NumPy.")
+
+    if lag >= 0:
+        input_start = start
+        target_start = start + lag
+    else:
+        input_start = start - lag
+        target_start = start
+
+    length = min(
+        window_length,
+        int(input_samples.shape[0]) - input_start,
+        int(target_samples.shape[0]) - target_start,
+    )
+    if input_start < 0 or target_start < 0 or length <= 128:
+        return None
+
+    input_window = input_samples[input_start : input_start + length]
+    target_window = target_samples[target_start : target_start + length]
+    input_feature = _np.abs(input_window)
+    target_feature = _np.abs(target_window)
+
+    input_previous = _np.empty_like(input_window)
+    target_previous = _np.empty_like(target_window)
+    input_previous[0] = float(input_samples[input_start - 1]) if input_start > 0 else 0.0
+    target_previous[0] = float(target_samples[target_start - 1]) if target_start > 0 else 0.0
+    input_previous[1:] = input_window[:-1]
+    target_previous[1:] = target_window[:-1]
+
+    input_preemphasis = input_window - 0.95 * input_previous
+    target_preemphasis = target_window - 0.95 * target_previous
+    input_onset = _np.maximum(0.0, input_feature - _np.abs(input_previous))
+    target_onset = _np.maximum(0.0, target_feature - _np.abs(target_previous))
+
+    return (
+        normalized_correlation_vectorized(input_feature, target_feature),
+        normalized_correlation_vectorized(input_window, target_window),
+        normalized_correlation_vectorized(input_preemphasis, target_preemphasis),
+        normalized_correlation_vectorized(input_onset, target_onset),
+    )
+
+
 def combine_latency_feature_scores(
     feature_score: float,
     signed_score: float,
@@ -962,6 +1386,13 @@ def safe_correlation(numerator: float, x_energy: float, y_energy: float) -> floa
     if denominator <= 1e-12:
         return 0.0
     return numerator / denominator
+
+
+def normalized_correlation_vectorized(xs: Any, ys: Any) -> float:
+    numerator = float(_np.dot(xs, ys)) if _np is not None else 0.0
+    x_energy = float(_np.dot(xs, xs)) if _np is not None else 0.0
+    y_energy = float(_np.dot(ys, ys)) if _np is not None else 0.0
+    return safe_correlation(numerator, x_energy, y_energy)
 
 
 def add_latency_vote_agreement(

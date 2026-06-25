@@ -155,6 +155,31 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertEqual(latency["method"], "active_window_correlation")
         self.assertTrue(latency["candidates"])
 
+    def test_prepare_can_use_known_latency_without_auto_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "input.wav"
+            target_path = root / "target.wav"
+            dry = alternating_signal(4096)
+            target = ([0.0] * 19 + dry)[: len(dry)]
+            write_wav_mono(input_path, dry, 48_000)
+            write_wav_mono(target_path, target, 48_000)
+
+            prepared = prepare_audio(
+                input_path,
+                target_path,
+                root / "prepared",
+                known_latency_samples=19,
+                manual_latency_adjustment_samples=-2,
+            )
+
+        latency = prepared.report["latency"]
+        self.assertEqual(latency["method"], "known_latency")
+        self.assertEqual(latency["auto_estimated_samples"], 19)
+        self.assertEqual(latency["manual_adjustment_samples"], -2)
+        self.assertEqual(latency["effective_samples"], 17)
+        self.assertEqual(latency["confidence"], 1.0)
+
     def test_prepare_resamples_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

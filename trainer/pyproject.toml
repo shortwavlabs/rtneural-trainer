@@ -7,7 +7,9 @@ name = "rttrainer"
 version = "0.1.0"
 description = "Training sidecar contract for RTNeural Trainer"
 requires-python = ">=3.11,<3.13"
-dependencies = []
+dependencies = [
+    "numpy>=2.0",
+]
 
 [project.optional-dependencies]
 training = ["numpy>=2.0", "torch>=2.5"]

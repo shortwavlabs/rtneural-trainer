@@ -738,6 +738,9 @@ wheels = [
 name = "rttrainer"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "numpy" },
+]
 
 [package.optional-dependencies]
 tensorflow = [
@@ -757,6 +760,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "numpy", specifier = ">=2.0" },
     { name = "numpy", marker = "extra == 'tensorflow'", specifier = ">=2.0" },
     { name = "numpy", marker = "extra == 'training'", specifier = ">=2.0" },
     { name = "tensorflow", marker = "extra == 'tensorflow'", specifier = ">=2.16,<2.19" },

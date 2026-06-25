@@ -91,6 +91,7 @@ def run_prepare_command(manifest: dict) -> int:
             manifest.get("manual_latency_adjustment_samples")
         )
         or 0,
+        known_latency_samples=optional_int(manifest.get("known_latency_samples")),
     )
     emit(
         {
