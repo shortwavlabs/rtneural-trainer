@@ -9,6 +9,7 @@ The repo currently contains:
 - `app/`: Tauri v2 + React desktop shell.
 - `trainer/`: `uv`-managed Python sidecar and CLI.
 - `native/rtneural-validator/`: CMake-built validator/benchmark sidecar.
+- `plugin/rtneural-loader/`: tiny JUCE model-loader plugin for DAW smoke tests.
 - `scripts/`: RTNeural support and Keras fixture helper scripts.
 - `docs/`: research notes and the current implementation guide.
 
