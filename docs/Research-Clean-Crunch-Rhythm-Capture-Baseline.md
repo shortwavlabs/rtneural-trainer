@@ -249,6 +249,22 @@ upper bands and the export raised an ASR warning. That makes
 successful quality receptive field and RTNeural layer graph while testing a
 gentler training tanh before considering larger residual/gated WaveNet work.
 
+Smoothed-tanh update: `wavenet_tcn_quality_tanh15` has now beaten the plain
+quality chain on this same RHYTHM4 capture. Run
+`run_cc3dc9235cf7426b8529c546003e0e75` resumed from the previous tanh15
+checkpoint, requested `180` more epochs, stopped at epoch `691` on validation
+score plateau, and selected epoch `671`. Its final preview metrics were ESR
+`0.0646`, RMSE `0.0237`, correlation `0.9674`, and residual RMS
+`-32.51 dBFS`. The associated export
+`export_cc5a4ffee7b6400c99476acf7967feeb` passed native validation
+(`2.73e-5` max abs error) and benchmarked at `11.74x` worst-case realtime on
+the Eigen backend. Compared with the previous plain `wavenet_tcn_quality`
+export, this improved ESR by about `9.4%`, lowered worst ASR from `0.290` to
+`0.067`, and lowered average ASR from `0.100` to `0.042`. The ASR report still
+warns, so listening for foldback on high notes remains necessary, but this is
+the first smoothed-tanh result here that improves both waveform fit and aliasing
+risk against the same quality baseline.
+
 ## Capture Health
 
 | Capture | Project | Target | Target RMS | RMS Delta vs DI | Latency | Confidence | Notes |

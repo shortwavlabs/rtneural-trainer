@@ -113,6 +113,33 @@ scaled before a normal `tanh`, so their runtime class is the balanced WaveNet
 class. A `120x` display from the first run review was a runtime-estimator bug,
 not a real native benchmark result.
 
+## RHYTHM4 Quality Tanh 1.5 Result
+
+The later RHYTHM4 run on `project_ab40008405d546398afff4a8d6a8dde7` changes
+how we should treat `alpha = 1.5`. On the earlier Rhythm2 balanced test,
+`tanh15` improved the smoothed-tanh waveform fit but worsened ASR. On RHYTHM4,
+the quality-sized `wavenet_tcn_quality_tanh15` model improved both the fit and
+the ASR comparison against the plain `wavenet_tcn_quality` export.
+
+| Preset | Run | Preview ESR | RMSE | Corr | Worst ASR | Average ASR | Native RTF |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `wavenet_tcn_quality` | `run_1fabc58f146a47a5bc9ac9a47e5b7592` | `0.0713` | `0.0249` | `0.9640` | `0.290` | `0.100` | `12.17x` |
+| `wavenet_tcn_quality_tanh15` | `run_cc3dc9235cf7426b8529c546003e0e75` | `0.0646` | `0.0237` | `0.9674` | `0.067` | `0.042` | `11.74x` |
+
+Interpretation:
+
+- `tanh15` is no longer just an intermediate tone-quality experiment. At
+  quality depth, it is a credible high-gain candidate.
+- The improvement is mostly practical rather than dramatic: residual RMS moved
+  from about `-32.08 dBFS` to `-32.51 dBFS`, and the residual is still upper-band
+  weighted.
+- The aliasing improvement is substantial: worst ASR dropped by about `77%` and
+  average ASR by about `58%` versus the plain quality export.
+- Runtime stayed in the same class. The slight RTF drop is acceptable and likely
+  measurement/model-weight noise, not a new runtime cost.
+- The export still reports an ASR warning, so the right gate is preview
+  listening plus native benchmark, not automatic promotion.
+
 ## RHYTHM3B ASR Calibration Note
 
 The second-generation RHYTHM3B quality export gives the first useful

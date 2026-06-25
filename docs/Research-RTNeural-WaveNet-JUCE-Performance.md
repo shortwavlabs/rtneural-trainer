@@ -580,6 +580,42 @@ Reason for trying it:
 - It avoids the deeper-stack activation collapse seen in the hidden
   `wavenet_tcn_high_gain` preset.
 
+RHYTHM4 result:
+
+- `wavenet_tcn_quality_tanh15` became the best run so far on
+  `project_ab40008405d546398afff4a8d6a8dde7`: ESR `0.0646`, correlation
+  `0.9674`, and selected checkpoint epoch `671`.
+- Native validation passed with `2.73e-5` max abs error.
+- Native Eigen benchmark stayed comfortable at `11.74x` worst-case realtime.
+- Worst ASR fell from `0.290` on the prior plain quality export to `0.067`;
+  average ASR fell from `0.100` to `0.042`.
+- Residual RMS improved only modestly and remains upper-band weighted, so this
+  is a strong preset candidate rather than the end of the residual/aliasing
+  work.
+
+### Phase 3C: A2-Inspired Architecture Direction
+
+Status: research note only.
+
+The inspected NAM A2 samples point to a more important direction than another
+larger sequential preset:
+
+- residual/skip WaveNet graph support,
+- long receptive fields with small channel counts,
+- non-power-of-two dilation schedules,
+- mixed kernel sizes,
+- LeakyReLU/PReLU-style nonlinearities,
+- and bundled lite/full quality modes.
+
+The current RTNeural JSON path cannot represent the full A2 graph losslessly, so
+these ideas should be split into two lanes:
+
+1. Trainer-safe experiments: PReLU/LeakyReLU WaveNet-style sequential presets,
+   non-power-of-two dilations, and maybe mixed kernels where the exporter can
+   still emit ordinary Conv1D layers.
+2. Plugin/native work: residual/skip graph support, custom fused WaveNet
+   blocks, or native NAM/NeuralAudio support.
+
 ### Phase 4: Product Runtime Gate
 
 Update the export report and UI:

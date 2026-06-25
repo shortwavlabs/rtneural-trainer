@@ -270,6 +270,65 @@ Best use of this sample in the trainer app:
 3. Use it to validate that the app labels A2 as "native NAM/distill required",
    not "direct RTNeural conversion available".
 
+## A2 Architecture Lessons For RTNeural Trainer
+
+Even without direct conversion, the inspected A2 models are useful architecture
+references for our own presets and package format.
+
+Useful lessons:
+
+1. **Long memory should come from residual/skip structure, not just deeper
+   sequential stacks.**
+
+   Our hidden `wavenet_tcn_high_gain` preset underperformed because the deeper
+   plain tanh stack appears to collapse during optimization. NAM A2 keeps long
+   memory in a residual WaveNet-like graph. The next real architecture jump for
+   our trainer is therefore residual/skip graph support or a custom native
+   WaveNet block, not another deeper sequential Conv1D preset.
+
+2. **Small channel counts can still be expressive when the receptive field is
+   large.**
+
+   The inspected A2 sample uses only `3` channels for the lite model and `8`
+   channels for the full model, but both cover `6,332` samples, about
+   `131.9 ms` at 48 kHz. That suggests our current quality preset may be
+   spending too much capacity on channel width while still having less temporal
+   context than A2.
+
+3. **Non-power-of-two dilation schedules are worth testing.**
+
+   A2 uses repeated dilation groups such as `1, 3, 7, 17, 41, 101, 239` rather
+   than only powers of two. This may distribute temporal coverage differently
+   and avoid some repeated blind spots. Our next experimental preset search
+   should include non-power-of-two dilation schedules.
+
+4. **Mixed kernel sizes are probably important.**
+
+   The sample combines mostly `6`-sample kernels with a few `15`-sample kernels.
+   Our current WaveNet presets mostly use kernel size `3`. A mixed-kernel
+   residual model could capture short pick transients and longer amp-memory
+   behavior without making every layer expensive.
+
+5. **LeakyReLU/PReLU deserves a WaveNet-quality experiment.**
+
+   The inspected A2 model uses `LeakyReLU(0.01)` instead of tanh. That is a
+   useful clue because our failed long sequential preset likely suffered from
+   tanh saturation. For the current sequential RTNeural-safe path, a PReLU or
+   LeakyReLU-style WaveNet experiment is lower risk than a bigger tanh stack.
+
+6. **Quality scaling should be a product feature.**
+
+   A2 packages lite and full submodels in one file. Our future `.aidax` package
+   can copy that idea by bundling Fast/Balanced/Quality RTNeural exports with a
+   shared capture report and per-model benchmarks, allowing the plugin or user
+   to choose a quality mode.
+
+7. **Calibration metadata belongs in export packages.**
+
+   NAM stores loudness and gain metadata. Our exports should keep moving toward
+   explicit input level, output trim, capture loudness, and recommended plugin
+   input-gain metadata so trained models are easier to use consistently.
+
 ## Distillation Path
 
 The best trainer-app feature is not "convert `.nam` weights"; it is "convert
