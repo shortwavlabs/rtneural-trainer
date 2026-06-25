@@ -1,6 +1,6 @@
 # Clean, Crunch, Rhythm, Edge, Lead, And Pedal Capture Baseline
 
-Reviewed: 2026-06-22
+Reviewed: 2026-06-24
 
 This note summarizes the first comparable clean, crunch, heavy rhythm,
 edge-of-breakup, lead, and overdrive pedal training passes after the latest
@@ -26,6 +26,100 @@ The practical default should be:
   or the target is very compressed.
 - Keep `wavenet_tcn_fast` as a quick WaveNet probe.
 - Keep `conv1d_stack_prelu` as a speed fallback, not the main amp-quality path.
+
+## Second-Generation CLEAN3 Check
+
+Project `project_5549035413254baa9da5197f17e05e5e` is the first full-length
+test of the new `DI3.wav` capture workflow. It used the re-exported
+`CLEAN3.wav`, known latency, the optimized prep path, WaveNet balanced training,
+and a full RTNeural export package.
+
+### Capture And Prep
+
+| Field | Value |
+| --- | --- |
+| Project name | `2026 CLEAN TEST` |
+| Dry input | `DI3.wav` |
+| Target | `CLEAN3.wav` |
+| Duration | `613.08 s` |
+| Format | 48 kHz, stereo dual-mono mixed to mono |
+| DI peak / RMS | `-5.56 dBFS` / `-31.50 dBFS` |
+| Target peak / RMS | `-5.09 dBFS` / `-23.63 dBFS` |
+| RMS delta | `+7.87 dB` |
+| Clipping | none |
+| Latency | known `13 samples` |
+| Prep status | ready |
+
+The capture is healthy. The target has enough headroom, the gain delta is
+usable for a clean amp-head render, and the new transient preamble lets us use a
+fixed DAW-render latency of `13 samples`. The only prep notes were expected:
+stereo was mixed to mono and the capture is long enough that training should
+sample windows rather than exhaustively use the whole file every epoch.
+
+### Training Result
+
+| Field | Value |
+| --- | --- |
+| Run | `run_dfac4dce508e4c438ae25a198a6f7234` |
+| Preset | `wavenet_tcn_balanced` |
+| Device | `tensorflow-gpu:/physical_device:GPU:0` |
+| Requested epochs | `120` |
+| Stopped epoch | `66` |
+| Best checkpoint epoch | `54` |
+| Early stopping reason | `validation_score_plateau` |
+| Best composite validation score | `0.00722` |
+| Best stream ESR | `0.00439` at epoch `44` |
+| Exported preview ESR | `0.01119` |
+| Exported preview RMSE | `0.01289` |
+| Continuous correlation | `0.99440` |
+| Quality verdict | excellent |
+
+The learning-rate schedule behaved correctly. It started at `0.0007`, reduced
+five times after validation plateaus, and early-stopped after the composite
+validation score failed to beat epoch `54` within patience. This is a good sign:
+the scheduler did not run blindly to the requested epoch count, and the best
+checkpoint was preserved for export.
+
+The final preview metric is not as low as the older short clean quality run, but
+this is a much more varied 10-minute capture and the first pass used balanced,
+not quality. The result is still an excellent export candidate, especially
+given the correlation and native runtime margin.
+
+### Export Result
+
+| Gate | Result |
+| --- | --- |
+| RTNeural validation | pass |
+| Validation RMSE | `0.00000953` |
+| Validation max abs error | `0.00002849` |
+| Native benchmark | pass |
+| Worst-case native RTF | `20.52x` stereo, block size `64` |
+| Model size | `212,020 bytes` |
+| Receptive field | `511 samples` / `10.65 ms` |
+| Export latency | `13 samples` / `0.27 ms` |
+| Aliasing verdict | low aliasing |
+| Average ASR | `0.00174` |
+| Worst ASR | `0.00499` at ~`5 kHz` probe |
+
+This export is a strong product sanity check for `wavenet_tcn_balanced`: it
+passes parity, has comfortable native Eigen headroom, and has low ASR on the
+current sine-probe aliasing report. The native benchmark matrix only had the
+primary Eigen backend available in this build; STL and xsimd remain listed but
+not measured.
+
+### Interpretation
+
+The CLEAN3 run validates three newer workflow changes:
+
+- Known latency is the right path for DAW-rendered captures that share one DI
+  and render chain. It avoids heavy-tone guesswork and gives deterministic prep.
+- Long, varied captures are usable. They train more slowly, but the
+  energy-stratified window sampler selected `3,685` windows from `7,183`
+  available windows and held validation windows fixed while resampling training
+  windows each epoch.
+- WaveNet balanced is strong enough for clean production captures, not just high
+  gain. Quality may still win a metric shootout, but balanced exported with far
+  more native headroom than the minimum needed for real-time use.
 
 ## Capture Health
 
@@ -263,5 +357,9 @@ CPU budget matters.
    latency offsets before another long production run.
 5. If rhythm still has audible residual, try the top latency candidates from
    preparation (`2`, `10`, and `18` samples) before another long run.
-6. Add a second clean or edge-of-breakup capture to make sure the clean result
-   was not specific to this amp setting.
+6. CLEAN3 confirms the second clean capture path. Next, run the same DI3
+   workflow on edge, crunch, rhythm, and lead with known latency set to
+   `13 samples`.
+7. For CLEAN3 specifically, compare `wavenet_tcn_quality` and one fast fallback
+   against the balanced export only if listening reveals a gap; the balanced
+   export already has excellent quality and comfortable native headroom.

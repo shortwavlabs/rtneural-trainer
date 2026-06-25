@@ -7,7 +7,7 @@ import unittest
 import wave
 from pathlib import Path
 
-from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
+from rttrainer.data.audio_io import read_wav_mono, write_wav_mono, write_wav_mono_float32
 from rttrainer.data.prepare import analyze_latency, prepare_audio
 from rttrainer.metrics.aliasing import analyze_signal_aliasing
 from rttrainer.metrics.audio_metrics import compute_metrics
@@ -38,6 +38,21 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertEqual(len(audio.samples), len(samples))
         self.assertAlmostEqual(audio.samples[3], samples[3], places=6)
 
+    def test_writes_ieee_float_wav(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "float32.wav"
+            samples = [0.0, 0.123456, -0.654321, 0.99999, -0.99999]
+            write_wav_mono_float32(path, samples, 48_000)
+            format_tag = wav_format_tag(path)
+            audio = read_wav_mono(path)
+
+        self.assertEqual(format_tag, 3)
+        self.assertEqual(audio.sample_rate, 48_000)
+        self.assertEqual(audio.sample_width, 4)
+        self.assertEqual(len(audio.samples), len(samples))
+        self.assertAlmostEqual(audio.samples[1], samples[1], places=6)
+        self.assertAlmostEqual(audio.samples[2], samples[2], places=6)
+
     def test_prepare_estimates_and_aligns_latency(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -58,6 +73,12 @@ class AudioPipelineTests(unittest.TestCase):
             aligned_input = read_wav_mono(prepared.input_path)
             aligned_target = read_wav_mono(prepared.target_path)
             self.assertEqual(len(aligned_input.samples), len(aligned_target.samples))
+            self.assertEqual(wav_format_tag(prepared.input_path), 3)
+            self.assertEqual(wav_format_tag(prepared.target_path), 3)
+            self.assertEqual(aligned_input.sample_width, 4)
+            self.assertEqual(aligned_target.sample_width, 4)
+            self.assertEqual(prepared.report["prepared"]["sample_format"], "float32")
+            self.assertEqual(prepared.report["prepared"]["sample_width_bytes"], 4)
 
     def test_latency_estimator_scans_active_regions_beyond_first_second(self) -> None:
         length = 120_000
@@ -447,6 +468,20 @@ def write_float32_wav(path: Path, samples: list[float], sample_rate: int) -> Non
         handle.write(b"data")
         handle.write(len(payload).to_bytes(4, "little"))
         handle.write(payload)
+
+
+def wav_format_tag(path: Path) -> int:
+    data = path.read_bytes()
+    offset = 12
+    while offset + 8 <= len(data):
+        chunk_id = data[offset : offset + 4]
+        chunk_size = int.from_bytes(data[offset + 4 : offset + 8], "little")
+        chunk_start = offset + 8
+        chunk_end = chunk_start + chunk_size
+        if chunk_id == b"fmt ":
+            return int(struct.unpack("<H", data[chunk_start : chunk_start + 2])[0])
+        offset = chunk_end + (chunk_size % 2)
+    raise AssertionError(f"No fmt chunk found in {path}")
 
 
 if __name__ == "__main__":

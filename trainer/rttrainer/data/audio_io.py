@@ -187,6 +187,30 @@ def write_wav_mono(path: Path, samples: list[float], sample_rate: int) -> None:
         wav.writeframes(float_to_pcm16(samples))
 
 
+def write_wav_mono_float32(path: Path, samples: list[float], sample_rate: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = float_to_ieee_float32(samples)
+    fmt_chunk = struct.pack(
+        "<HHIIHH",
+        WAVE_FORMAT_IEEE_FLOAT,
+        1,
+        sample_rate,
+        sample_rate * 4,
+        4,
+        32,
+    )
+    with path.open("wb") as handle:
+        handle.write(b"RIFF")
+        handle.write((4 + (8 + len(fmt_chunk)) + (8 + len(payload))).to_bytes(4, "little"))
+        handle.write(b"WAVE")
+        handle.write(b"fmt ")
+        handle.write(len(fmt_chunk).to_bytes(4, "little"))
+        handle.write(fmt_chunk)
+        handle.write(b"data")
+        handle.write(len(payload).to_bytes(4, "little"))
+        handle.write(payload)
+
+
 def pcm_to_float(raw: bytes, sample_width: int) -> list[float]:
     if _np is not None:
         optimized = pcm_to_float_vectorized(raw, sample_width)
@@ -260,6 +284,23 @@ def float_to_pcm16(samples: list[float]) -> bytes:
     for sample in samples:
         integer = int(round(clamp(sample, -1.0, 1.0) * 32767.0))
         data.extend(integer.to_bytes(2, "little", signed=True))
+    return bytes(data)
+
+
+def float_to_ieee_float32(samples: list[float]) -> bytes:
+    if _np is not None:
+        values = _np.asarray(samples, dtype=_np.float32)
+        values = _np.nan_to_num(values, nan=0.0, posinf=1.0, neginf=-1.0)
+        values = _np.clip(values, -1.0, 1.0).astype("<f4", copy=False)
+        return values.tobytes()
+
+    data = bytearray()
+    for sample in samples:
+        if math.isfinite(sample):
+            value = clamp(float(sample), -1.0, 1.0)
+        else:
+            value = 0.0
+        data.extend(struct.pack("<f", value))
     return bytes(data)
 
 

@@ -3682,6 +3682,7 @@ fn read_wav_mono_samples(path: &Path) -> Result<(u32, Vec<f64>), String> {
         return Err(format!("{} is not a RIFF/WAVE file.", path.display()));
     }
 
+    let mut format_tag = None;
     let mut sample_rate = None;
     let mut channels = None;
     let mut bits_per_sample = None;
@@ -3707,12 +3708,7 @@ fn read_wav_mono_samples(path: &Path) -> Result<(u32, Vec<f64>), String> {
                     .try_into()
                     .map_err(to_error)?,
             );
-            if format != 1 {
-                return Err(format!(
-                    "{} uses unsupported WAV format {format}; expected PCM.",
-                    path.display()
-                ));
-            }
+            format_tag = Some(format);
             channels = Some(u16::from_le_bytes(
                 bytes[chunk_start + 2..chunk_start + 4]
                     .try_into()
@@ -3737,6 +3733,8 @@ fn read_wav_mono_samples(path: &Path) -> Result<(u32, Vec<f64>), String> {
 
     let sample_rate =
         sample_rate.ok_or_else(|| format!("{} is missing sample rate.", path.display()))?;
+    let format_tag =
+        format_tag.ok_or_else(|| format!("{} is missing WAV format.", path.display()))?;
     let channels =
         channels.ok_or_else(|| format!("{} is missing channel count.", path.display()))?;
     let bits_per_sample =
@@ -3744,35 +3742,111 @@ fn read_wav_mono_samples(path: &Path) -> Result<(u32, Vec<f64>), String> {
     if channels == 0 {
         return Err(format!("{} has zero channels.", path.display()));
     }
-    if bits_per_sample != 16 {
+    if bits_per_sample % 8 != 0 {
         return Err(format!(
-            "{} uses {bits_per_sample}-bit samples; expected 16-bit PCM.",
+            "{} uses unsupported {bits_per_sample}-bit samples.",
             path.display()
         ));
     }
 
     let (data_start, data_end) =
         data_range.ok_or_else(|| format!("{} is missing audio data.", path.display()))?;
-    let bytes_per_frame = usize::from(channels) * 2;
+    let bytes_per_sample = usize::from(bits_per_sample / 8);
+    let bytes_per_frame = usize::from(channels) * bytes_per_sample;
+    if bytes_per_sample == 0 || bytes_per_frame == 0 {
+        return Err(format!("{} has invalid WAV frame size.", path.display()));
+    }
     let frame_count = (data_end - data_start) / bytes_per_frame;
     let mut samples = Vec::with_capacity(frame_count);
     for frame_index in 0..frame_count {
         let frame_start = data_start + frame_index * bytes_per_frame;
         let mut frame_value = 0.0_f64;
         for channel in 0..usize::from(channels) {
-            let sample_start = frame_start + channel * 2;
-            let sample = i16::from_le_bytes(
-                bytes[sample_start..sample_start + 2]
-                    .try_into()
-                    .map_err(to_error)?,
-            );
-            frame_value += f64::from(sample) / 32768.0;
+            let sample_start = frame_start + channel * bytes_per_sample;
+            let sample_end = sample_start + bytes_per_sample;
+            let sample_bytes = &bytes[sample_start..sample_end];
+            frame_value += decode_wav_sample(format_tag, bits_per_sample, sample_bytes, path)?;
         }
         frame_value /= f64::from(channels);
         samples.push(frame_value);
     }
 
     Ok((sample_rate, samples))
+}
+
+fn decode_wav_sample(
+    format_tag: u16,
+    bits_per_sample: u16,
+    sample_bytes: &[u8],
+    path: &Path,
+) -> Result<f64, String> {
+    let sample = match format_tag {
+        1 => decode_pcm_sample(bits_per_sample, sample_bytes, path)?,
+        3 => decode_ieee_float_sample(bits_per_sample, sample_bytes, path)?,
+        _ => {
+            return Err(format!(
+                "{} uses unsupported WAV format {format_tag}; expected PCM or IEEE float.",
+                path.display()
+            ));
+        }
+    };
+    if sample.is_finite() {
+        Ok(sample.clamp(-1.0, 1.0))
+    } else {
+        Ok(0.0)
+    }
+}
+
+fn decode_pcm_sample(
+    bits_per_sample: u16,
+    sample_bytes: &[u8],
+    path: &Path,
+) -> Result<f64, String> {
+    match bits_per_sample {
+        8 => Ok((f64::from(sample_bytes[0]) - 128.0) / 128.0),
+        16 => {
+            let sample = i16::from_le_bytes(sample_bytes.try_into().map_err(to_error)?);
+            Ok(f64::from(sample) / 32768.0)
+        }
+        24 => {
+            let sign = if sample_bytes[2] & 0x80 != 0 {
+                0xff
+            } else {
+                0x00
+            };
+            let sample =
+                i32::from_le_bytes([sample_bytes[0], sample_bytes[1], sample_bytes[2], sign]);
+            Ok(f64::from(sample) / 8_388_608.0)
+        }
+        32 => {
+            let sample = i32::from_le_bytes(sample_bytes.try_into().map_err(to_error)?);
+            Ok(f64::from(sample) / 2_147_483_648.0)
+        }
+        _ => Err(format!(
+            "{} uses unsupported {bits_per_sample}-bit PCM samples.",
+            path.display()
+        )),
+    }
+}
+
+fn decode_ieee_float_sample(
+    bits_per_sample: u16,
+    sample_bytes: &[u8],
+    path: &Path,
+) -> Result<f64, String> {
+    match bits_per_sample {
+        32 => {
+            let sample = f32::from_le_bytes(sample_bytes.try_into().map_err(to_error)?);
+            Ok(f64::from(sample))
+        }
+        64 => Ok(f64::from_le_bytes(
+            sample_bytes.try_into().map_err(to_error)?,
+        )),
+        _ => Err(format!(
+            "{} uses unsupported {bits_per_sample}-bit float samples.",
+            path.display()
+        )),
+    }
 }
 
 fn summarize_wav_samples(sample_rate: u32, samples: &[f64], bins: usize) -> WavPreviewSummary {
@@ -4929,6 +5003,51 @@ mod tests {
     }
 
     #[test]
+    fn wav_preview_summary_reads_float32_peaks() {
+        let root = std::env::temp_dir().join(format!(
+            "rttrainer-float32-wav-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).expect("create temp dir");
+        let wav_path = root.join("prepared.wav");
+        write_test_float32_wav(&wav_path, &[0.0, 0.25, -0.75, 1.25], 48_000);
+
+        let summary = read_wav_preview_summary(&wav_path, 4).expect("read float32 summary");
+        assert_eq!(summary.sample_rate, 48_000);
+        assert_eq!(summary.peaks.len(), 4);
+        assert_eq!(summary.waveform.len(), 4);
+        assert_eq!(summary.peak, 1.0);
+        assert_eq!(summary.waveform[0].peak, 0.0);
+        assert_eq!(summary.waveform[1].max, 0.25);
+        assert_eq!(summary.waveform[2].min, -0.75);
+        assert_eq!(summary.waveform[3].max, 1.0);
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn wav_preview_summary_reads_float64_peaks() {
+        let root = std::env::temp_dir().join(format!(
+            "rttrainer-float64-wav-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&root).expect("create temp dir");
+        let wav_path = root.join("prepared-f64.wav");
+        write_test_float64_wav(&wav_path, &[0.0, -0.125, 0.625, -1.25], 96_000);
+
+        let summary = read_wav_preview_summary(&wav_path, 4).expect("read float64 summary");
+        assert_eq!(summary.sample_rate, 96_000);
+        assert_eq!(summary.peaks.len(), 4);
+        assert_eq!(summary.waveform.len(), 4);
+        assert_eq!(summary.peak, 1.0);
+        assert_eq!(summary.waveform[1].min, -0.125);
+        assert_eq!(summary.waveform[2].max, 0.625);
+        assert_eq!(summary.waveform[3].min, -1.0);
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn generated_sample_capture_writes_valid_preview_wavs() {
         let root = std::env::temp_dir().join(format!(
             "rttrainer-sample-wav-test-{}",
@@ -5527,5 +5646,49 @@ mod tests {
             bytes.extend_from_slice(&sample.to_le_bytes());
         }
         fs::write(path, bytes).expect("write wav");
+    }
+
+    fn write_test_float32_wav(path: &Path, samples: &[f32], sample_rate: u32) {
+        let data_size = samples.len() as u32 * 4;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&3_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 4).to_le_bytes());
+        bytes.extend_from_slice(&4_u16.to_le_bytes());
+        bytes.extend_from_slice(&32_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_size.to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        fs::write(path, bytes).expect("write float32 wav");
+    }
+
+    fn write_test_float64_wav(path: &Path, samples: &[f64], sample_rate: u32) {
+        let data_size = samples.len() as u32 * 8;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_size).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&3_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        bytes.extend_from_slice(&(sample_rate * 8).to_le_bytes());
+        bytes.extend_from_slice(&8_u16.to_le_bytes());
+        bytes.extend_from_slice(&64_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_size.to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        fs::write(path, bytes).expect("write float64 wav");
     }
 }

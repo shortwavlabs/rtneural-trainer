@@ -10,7 +10,7 @@ from rttrainer.data.audio_io import (
     audio_report,
     normalize_channel_policy,
     read_wav_mono,
-    write_wav_mono,
+    write_wav_mono_float32,
 )
 from rttrainer.utils import mkdir, write_json
 
@@ -146,8 +146,8 @@ def prepare_audio(
 
     prepared_input_path = output_dir / "input.wav"
     prepared_target_path = output_dir / "target.wav"
-    write_wav_mono(prepared_input_path, aligned_input, input_audio.sample_rate)
-    write_wav_mono(prepared_target_path, aligned_target, input_audio.sample_rate)
+    write_wav_mono_float32(prepared_input_path, aligned_input, input_audio.sample_rate)
+    write_wav_mono_float32(prepared_target_path, aligned_target, input_audio.sample_rate)
 
     report = {
         "schema_version": 1,
@@ -157,6 +157,8 @@ def prepare_audio(
             "input_path": str(prepared_input_path),
             "target_path": str(prepared_target_path),
             "sample_rate": input_audio.sample_rate,
+            "sample_format": "float32",
+            "sample_width_bytes": 4,
             "samples": len(aligned_input),
             "duration_seconds": len(aligned_input) / input_audio.sample_rate,
             "channel_policy": normalized_channel_policy,
