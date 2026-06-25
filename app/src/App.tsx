@@ -2924,8 +2924,28 @@ function ExportView({
   onExport: (runId: string) => Promise<void>;
   onOpenExport: (exportId: string) => Promise<void>;
 }) {
-  const completedRuns = project.runs.filter((run) => run.status === "completed");
-  const selectedRun = completedRuns[completedRuns.length - 1] ?? null;
+  const completedRuns = useMemo(
+    () =>
+      [...project.runs]
+        .filter((run) => run.status === "completed")
+        .sort((left, right) => timestampMs(right.created_at) - timestampMs(left.created_at)),
+    [project.runs],
+  );
+  const recommendedRun = useMemo(() => bestCompletedRun(completedRuns), [completedRuns]);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (completedRuns.length === 0) {
+      setSelectedRunId(null);
+      return;
+    }
+    if (!selectedRunId || !completedRuns.some((run) => run.id === selectedRunId)) {
+      setSelectedRunId(recommendedRun?.id ?? completedRuns[0].id);
+    }
+  }, [completedRuns, recommendedRun?.id, selectedRunId]);
+
+  const selectedRun =
+    completedRuns.find((run) => run.id === selectedRunId) ?? recommendedRun;
 
   return (
     <div className="screen-grid">
@@ -2935,6 +2955,30 @@ function ExportView({
           title="Export Gate"
           detail="RTNeural JSON is only ready after validation and benchmark reports."
         />
+        {completedRuns.length > 0 ? (
+          <label className="compact-field export-run-field">
+            Training run
+            <select
+              aria-label="Training run"
+              value={selectedRun?.id ?? ""}
+              disabled={busy}
+              onChange={(event) => setSelectedRunId(event.target.value)}
+            >
+              {completedRuns.map((run) => (
+                <option key={run.id} value={run.id}>
+                  {exportRunOptionLabel(run, recommendedRun?.id ?? null)}
+                </option>
+              ))}
+            </select>
+            <small>Select the completed training run that will be packaged.</small>
+          </label>
+        ) : null}
+        {selectedRun ? (
+          <SelectedExportRun
+            run={selectedRun}
+            recommended={selectedRun.id === recommendedRun?.id}
+          />
+        ) : null}
         <GateList project={project} selectedRun={selectedRun} />
         {!selectedRun ? (
           <div className="notice notice-warning">
@@ -2952,7 +2996,7 @@ function ExportView({
           onClick={() => selectedRun && void onExport(selectedRun.id)}
         >
           {busy ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
-          Export RTNeural JSON
+          Export selected RTNeural JSON
         </button>
       </div>
       <div className="panel span-7">
@@ -2962,6 +3006,34 @@ function ExportView({
           detail="Each package contains model JSON, metadata, reports, and previews."
         />
         <ExportList exports={project.exports} onOpenExport={onOpenExport} />
+      </div>
+    </div>
+  );
+}
+
+function SelectedExportRun({
+  run,
+  recommended,
+}: {
+  run: TrainingRun;
+  recommended: boolean;
+}) {
+  return (
+    <div className="selected-run-card">
+      <div>
+        <span>Selected training</span>
+        <strong>{presetDisplayLabel(run.preset)}</strong>
+        <small>
+          {shortId(run.id)} · {run.epochs} epochs · {formatReportDate(run.created_at)}
+        </small>
+      </div>
+      <div className="selected-run-stats">
+        {recommended ? <span className="badge">Best ESR</span> : null}
+        <Metric label="ESR" value={run.metrics ? run.metrics.esr.toFixed(3) : "none"} />
+        <Metric
+          label="RTF"
+          value={run.metrics ? `${run.metrics.realtime_factor.toFixed(1)}x` : "none"}
+        />
       </div>
     </div>
   );
@@ -4195,6 +4267,34 @@ function resumeRunLabel(run: TrainingRun) {
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+function bestCompletedRun(runs: TrainingRun[]) {
+  return runs.reduce<TrainingRun | null>((best, run) => {
+    if (!best) return run;
+    const bestEsr = best.metrics?.esr ?? Number.POSITIVE_INFINITY;
+    const runEsr = run.metrics?.esr ?? Number.POSITIVE_INFINITY;
+    if (runEsr !== bestEsr) return runEsr < bestEsr ? run : best;
+    return timestampMs(run.created_at) > timestampMs(best.created_at) ? run : best;
+  }, null);
+}
+
+function exportRunOptionLabel(run: TrainingRun, recommendedRunId: string | null) {
+  return [
+    run.id === recommendedRunId ? "Best ESR" : null,
+    presetDisplayLabel(run.preset),
+    run.metrics ? `ESR ${run.metrics.esr.toFixed(3)}` : "No metrics",
+    `${run.epochs} epochs`,
+    formatReportDate(run.created_at),
+    shortId(run.id),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function timestampMs(value: string) {
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 function presetDisplayLabel(presetId: string) {

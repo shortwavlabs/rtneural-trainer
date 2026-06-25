@@ -247,11 +247,53 @@ describe("Tauri UI smoke", () => {
 
     await user.click(tab("Export"));
     expect(await screen.findByText("Export Gate")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Export RTNeural JSON" }));
+    expect(screen.getByLabelText("Training run")).toHaveValue("run_smoke");
+    await user.click(screen.getByRole("button", { name: "Export selected RTNeural JSON" }));
     expect(await screen.findByText("export_smoke")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open" }));
 
     expect(state.openedExportIds).toEqual(["export_smoke"]);
+  });
+
+  it("exports the training run selected in the export tab", async () => {
+    const user = userEvent.setup();
+    const project = projectFixture({
+      id: "project_export_choice",
+      name: "Export Choice Amp",
+      kind: "amp",
+      inputPath: "/captures/export-choice/DI.wav",
+      targetPath: "/captures/export-choice/TARGET.wav",
+    });
+    const qualityRun = completedRunFixture("run_quality", "wavenet_tcn_quality", 120);
+    const balancedRun = completedRunFixture("run_balanced", "wavenet_tcn_balanced", 80);
+    qualityRun.metrics!.esr = 0.101;
+    balancedRun.metrics!.esr = 0.208;
+    balancedRun.created_at = "2026-06-23T12:00:00.000Z";
+    project.runs = [qualityRun, balancedRun];
+    const state = installTauriSmokeBackend([project]);
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Export Choice Amp" }))
+      .toBeInTheDocument();
+    await user.click(tab("Export"));
+
+    const runSelect = await screen.findByLabelText("Training run");
+    expect(runSelect).toHaveValue("run_quality");
+    expect(screen.getAllByText("Best ESR").length).toBeGreaterThan(0);
+
+    await user.selectOptions(runSelect, "run_balanced");
+    await user.click(screen.getByRole("button", { name: "Export selected RTNeural JSON" }));
+
+    await waitFor(() => {
+      expect(
+        state.commands.some(
+          (item) =>
+            item.command === "export_run" &&
+            (item.args?.payload as { run_id?: string } | undefined)?.run_id === "run_balanced",
+        ),
+      ).toBe(true);
+    });
   });
 });
 

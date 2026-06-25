@@ -1447,6 +1447,67 @@ dd,
   gap: 10px;
 }
 
+.export-run-field {
+  max-width: none;
+}
+
+.export-run-field small {
+  color: #9da9a1;
+  font-size: 0.76rem;
+}
+
+.selected-run-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.72fr);
+  gap: 14px;
+  align-items: start;
+  padding: 12px;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 8px;
+}
+
+.selected-run-card span,
+.selected-run-card small {
+  display: block;
+}
+
+.selected-run-card > div:first-child > span {
+  color: #9da9a1;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.selected-run-card > div:first-child strong {
+  display: block;
+  margin-top: 5px;
+  overflow: hidden;
+  color: #eef2ec;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selected-run-card small {
+  margin-top: 4px;
+  color: #9da9a1;
+  font-size: 0.76rem;
+}
+
+.selected-run-stats {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.selected-run-stats .badge {
+  justify-self: start;
+}
+
+.selected-run-stats .metric {
+  padding-bottom: 6px;
+}
+
 .preview-row,
 .gate,
 .export-item {
@@ -1893,6 +1954,7 @@ dd,
   .report-strip,
   .artifact-grid,
   .export-main,
+  .selected-run-card,
   .capture-options,
   .training-controls,
   .recipe-actions,
