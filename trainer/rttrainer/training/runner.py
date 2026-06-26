@@ -5,19 +5,18 @@ import platform
 import random
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from rttrainer.data.audio_io import read_wav_mono, write_wav_mono
 from rttrainer.metrics.audio_metrics import compute_metrics
 from rttrainer.models.presets import (
     PresetConfig,
     build_keras_model,
-    build_model,
     get_preset,
     scaled_tanh_custom_objects,
 )
 from rttrainer.training.dataset import build_windowed_dataset, resample_windowed_training_data
-from rttrainer.training.device import choose_device, normalize_device_preference, require_torch
+from rttrainer.training.device import normalize_device_preference
 from rttrainer.utils import emit, mkdir, now, read_json, write_json
 
 WINDOW_VALIDATION_SCORE_WEIGHT = 0.25
@@ -40,8 +39,8 @@ def run_training(manifest: dict[str, Any]) -> dict[str, Any]:
     if backend in {"keras", "tensorflow", "tf"}:
         return run_keras_training(manifest)
     if backend in {"pytorch", "torch"}:
-        return run_pytorch_training(manifest)
-    raise ValueError("Training backend must be 'keras' or 'pytorch'.")
+        raise ValueError("PyTorch training support has been removed. Use backend 'keras'.")
+    raise ValueError("Training backend must be 'keras'.")
 
 
 def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -49,7 +48,7 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     run_dir = mkdir(Path(str(manifest.get("run_dir", "run"))).expanduser())
     checkpoint_dir = mkdir(run_dir / "checkpoints")
     preview_dir = mkdir(run_dir / "previews")
-    preset = get_preset(str(manifest.get("preset", "lstm_light")))
+    preset = get_preset(str(manifest.get("preset", "wavenet_tcn_balanced")))
     run_id = str(manifest.get("run_id", f"run_{int(time.time())}"))
     seed = int(manifest.get("seed", 1337))
     requested_epochs = int(manifest.get("epochs", 20))
@@ -472,432 +471,6 @@ def run_keras_training(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_pytorch_training(manifest: dict[str, Any]) -> dict[str, Any]:
-    torch = require_torch()
-    run_dir = mkdir(Path(str(manifest.get("run_dir", "run"))).expanduser())
-    checkpoint_dir = mkdir(run_dir / "checkpoints")
-    preview_dir = mkdir(run_dir / "previews")
-    preset = get_preset(str(manifest.get("preset", "lstm_light")))
-    run_id = str(manifest.get("run_id", f"run_{int(time.time())}"))
-    seed = int(manifest.get("seed", 1337))
-    requested_epochs = int(manifest.get("epochs", 20))
-    batch_size = int(manifest.get("batch_size", 16))
-    requested_learning_rate = float(
-        manifest.get("learning_rate", preset.default_learning_rate)
-    )
-    loss_name = resolve_training_loss_name(manifest, preset)
-    sequence_length = int(manifest.get("sequence_length", 1024))
-    max_windows = int(manifest.get("max_windows", 512))
-    resample_training_windows_enabled = manifest_bool(
-        manifest.get("resample_training_windows", False)
-    )
-    resample_interval_epochs = max(1, int(manifest.get("resample_interval_epochs", 1)))
-    preview_seconds = float(manifest.get("preview_seconds", 3.0))
-    early_stopping_patience = max(0, int(manifest.get("early_stopping_patience", 5)))
-    early_stopping_min_delta = max(0.0, float(manifest.get("early_stopping_min_delta", 1e-4)))
-    context_training_enabled = recurrent_context_training_enabled(manifest, preset)
-    context_multiplier = recurrent_context_training_multiplier(manifest)
-    input_path, target_path = resolve_audio_paths(manifest)
-    if not input_path.is_file() or not target_path.is_file():
-        raise FileNotFoundError("Training requires prepared input_path and target_path WAV files.")
-    preparation_snapshot = snapshot_preparation_report(manifest, run_dir)
-
-    set_torch_seed(torch, seed)
-    device = choose_device(manifest.get("device"))
-    dataset = build_windowed_dataset(
-        input_path,
-        target_path,
-        sequence_length,
-        max_windows,
-        seed,
-        backend="torch",
-        preview_seconds=preview_seconds,
-        context_multiplier=context_multiplier,
-    )
-    model = build_model(preset).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=requested_learning_rate)
-    criterion = build_torch_loss(torch, loss_name)
-    best_checkpoint_path = checkpoint_dir / "best-checkpoint.pt"
-    resume_checkpoint_path = resolve_resume_checkpoint_path(manifest, best_checkpoint_path)
-    resumed_checkpoint: dict[str, Any] | None = None
-    if resume_checkpoint_path is not None:
-        loaded_checkpoint = cast(
-            dict[str, Any],
-            torch.load(resume_checkpoint_path, map_location="cpu", weights_only=False),
-        )
-        model.load_state_dict(loaded_checkpoint["model_state_dict"])
-        optimizer.load_state_dict(loaded_checkpoint["optimizer_state_dict"])
-        resumed_checkpoint = loaded_checkpoint
-    learning_rate = resolve_resume_learning_rate(
-        manifest,
-        requested_learning_rate,
-        resumed_checkpoint,
-    )
-    set_torch_learning_rate(optimizer, learning_rate)
-    lr_schedule = resolve_learning_rate_schedule(
-        manifest,
-        learning_rate,
-        early_stopping_patience,
-        early_stopping_min_delta,
-    )
-    lr_scheduler = build_torch_lr_scheduler(torch, optimizer, lr_schedule)
-    resumed_epoch = int((resumed_checkpoint or {}).get("epoch", 0))
-    target_epochs = target_epoch_count(manifest, resumed_epoch, requested_epochs)
-    start_epoch = resumed_epoch + 1
-    start_epoch = max(1, min(start_epoch, target_epochs + 1))
-    resumed_metrics = numeric_metrics((resumed_checkpoint or {}).get("metrics", {}))
-    if (resumed_checkpoint or {}).get("metric_basis") != "composite_validation_score":
-        resumed_metrics = {}
-    if resume_checkpoint_path is not None and not best_checkpoint_path.exists():
-        save_torch_checkpoint(
-            torch,
-            best_checkpoint_path,
-            preset,
-            model,
-            optimizer,
-            resumed_epoch,
-            resumed_metrics,
-            seed,
-            sequence_length,
-            loss_name,
-        )
-
-    emit(
-        {
-            "type": "run_started",
-            "run_id": run_id,
-            "preset": preset.preset_id,
-            "backend": "pytorch",
-            "device": str(device),
-            "epochs": target_epochs,
-            "requested_epochs": requested_epochs,
-            "start_epoch": start_epoch,
-            "learning_rate": learning_rate,
-            "requested_learning_rate": requested_learning_rate,
-            "loss": loss_name,
-            "learning_rate_schedule": lr_schedule,
-            "window_resampling": window_resampling_report(
-                resample_training_windows_enabled,
-                resample_interval_epochs,
-            ),
-            "recurrent_context_training": recurrent_context_training_report(
-                context_training_enabled,
-                context_multiplier,
-                len(dataset.context_train_input),
-                dataset.sample_rate,
-            ),
-            "resumed_from_checkpoint": str(resume_checkpoint_path) if resume_checkpoint_path else None,
-        }
-    )
-    best_score = float(resumed_metrics.get("validation_score", float("inf")))
-    last_metrics: dict[str, float] | None = dict(resumed_metrics) if resumed_metrics else None
-    best_epoch = resumed_epoch
-    history: list[dict[str, float | int | bool]] = []
-    stopped_early: dict[str, Any] | None = None
-    epochs_without_improvement = 0
-    last_epoch = start_epoch - 1
-    lr_reductions: list[dict[str, float | int]] = []
-    current_learning_rate = current_torch_learning_rate(optimizer)
-    latest_dataset_summary = dict(dataset.summary)
-
-    for epoch in range(start_epoch, target_epochs + 1):
-        last_epoch = epoch
-        windows_resampled = should_resample_training_windows(
-            resample_training_windows_enabled,
-            epoch,
-            start_epoch,
-            resample_interval_epochs,
-        )
-        if windows_resampled:
-            dataset = resample_windowed_training_data(
-                dataset,
-                seed=window_resample_seed(seed, epoch),
-                backend="torch",
-            )
-            latest_dataset_summary = dict(dataset.summary)
-        epoch_learning_rate = current_torch_learning_rate(optimizer)
-        model.train()
-        losses = []
-        train_x = cast(Any, dataset.train_x)
-        train_y = cast(Any, dataset.train_y)
-        train_loader = torch.utils.data.DataLoader(
-            torch.utils.data.TensorDataset(train_x, train_y),
-            batch_size=batch_size,
-            shuffle=True,
-        )
-        for batch_x, batch_y in train_loader:
-            batch_x = batch_x.to(device)
-            batch_y = batch_y.to(device)
-            optimizer.zero_grad()
-            prediction = model(batch_x)
-            loss = criterion(prediction, batch_y)
-            loss.backward()
-            optimizer.step()
-            losses.append(float(loss.detach().cpu().item()))
-
-        context_train_loss = fit_torch_context_sequence(
-            torch,
-            model,
-            optimizer,
-            criterion,
-            dataset.context_train_input,
-            dataset.context_train_target,
-            device,
-            context_training_enabled,
-        )
-        val_prediction = predict_torch_tensor(torch, model, dataset.val_x, device)
-        val_y = cast(Any, dataset.val_y)
-        flat_target = flatten_array(val_y.squeeze(-1).detach().cpu().tolist())
-        flat_pred = flatten_array(val_prediction.squeeze(-1).detach().cpu().tolist())
-        window_metrics = compute_metrics(flat_target, flat_pred)
-        stream_prediction = predict_torch_sequence(torch, model, dataset.stream_val_input, device)
-        stream_metrics = compute_metrics(dataset.stream_val_target, stream_prediction)
-        selection_metrics = validation_selection_metrics(
-            stream_metrics,
-            window_metrics,
-            stream_prediction,
-            dataset.stream_val_target,
-        )
-        last_metrics = stream_metrics
-        checkpoint_metrics = validation_checkpoint_metrics(
-            stream_metrics,
-            window_metrics,
-            selection_metrics,
-        )
-        window_train_loss = sum(losses) / max(1, len(losses))
-        train_loss = average_loss(window_train_loss, context_train_loss)
-        validation_score = selection_metrics["validation_score"]
-        is_best = validation_score < best_score - early_stopping_min_delta
-        if is_best:
-            best_score = validation_score
-            best_epoch = epoch
-            epochs_without_improvement = 0
-            save_torch_checkpoint(
-                torch,
-                best_checkpoint_path,
-                preset,
-                model,
-                optimizer,
-                epoch,
-                checkpoint_metrics,
-                seed,
-                sequence_length,
-                loss_name,
-            )
-        else:
-            epochs_without_improvement += 1
-
-        previous_learning_rate = epoch_learning_rate
-        current_learning_rate = step_torch_lr_scheduler(
-            lr_scheduler,
-            optimizer,
-            validation_score,
-        )
-        lr_reduced = current_learning_rate < previous_learning_rate - 1e-15
-        if lr_reduced:
-            reduction = {
-                "epoch": epoch,
-                "from": previous_learning_rate,
-                "to": current_learning_rate,
-                "factor": float(lr_schedule["factor"]),
-                "patience": int(lr_schedule["patience"]),
-            }
-            lr_reductions.append(reduction)
-            emit(
-                {
-                    "type": "learning_rate_reduced",
-                    "run_id": run_id,
-                    **reduction,
-                }
-            )
-
-        history_point: dict[str, float | int | bool] = {
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "window_train_loss": window_train_loss,
-            "val_esr": last_metrics["esr"],
-            "val_mae": last_metrics["mae"],
-            "val_rmse": last_metrics["rmse"],
-            "stream_val_esr": stream_metrics["esr"],
-            "stream_val_mae": stream_metrics["mae"],
-            "stream_val_rmse": stream_metrics["rmse"],
-            "window_val_esr": window_metrics["esr"],
-            "window_val_mae": window_metrics["mae"],
-            "window_val_rmse": window_metrics["rmse"],
-            "validation_score": validation_score,
-            "prediction_rms_ratio": selection_metrics["prediction_rms_ratio"],
-            "stream_prediction_rms_db": selection_metrics["prediction_rms_db"],
-            "learning_rate": previous_learning_rate,
-            "next_learning_rate": current_learning_rate,
-            "learning_rate_reduced": lr_reduced,
-            "is_best": is_best,
-            "training_windows_resampled": windows_resampled,
-        }
-        if context_train_loss is not None:
-            history_point["context_train_loss"] = context_train_loss
-        history.append(history_point)
-
-        epoch_event: dict[str, Any] = {
-            "type": "epoch",
-            "run_id": run_id,
-            "epoch": epoch,
-            "total_epochs": target_epochs,
-            "train_loss": train_loss,
-            "window_train_loss": window_train_loss,
-            "val_esr": last_metrics["esr"],
-            "val_mae": last_metrics["mae"],
-            "val_rmse": last_metrics["rmse"],
-            "stream_val_esr": stream_metrics["esr"],
-            "stream_val_mae": stream_metrics["mae"],
-            "stream_val_rmse": stream_metrics["rmse"],
-            "window_val_esr": window_metrics["esr"],
-            "window_val_mae": window_metrics["mae"],
-            "window_val_rmse": window_metrics["rmse"],
-            "validation_score": validation_score,
-            "prediction_rms_ratio": selection_metrics["prediction_rms_ratio"],
-            "stream_prediction_rms_db": selection_metrics["prediction_rms_db"],
-            "learning_rate": previous_learning_rate,
-            "next_learning_rate": current_learning_rate,
-            "learning_rate_reduced": lr_reduced,
-            "is_best": is_best,
-            "training_windows_resampled": windows_resampled,
-        }
-        if windows_resampled:
-            epoch_event["training_window_resample_seed"] = latest_dataset_summary.get(
-                "window_resample_seed"
-            )
-            epoch_event["train_windows"] = latest_dataset_summary.get("train_windows")
-        if context_train_loss is not None:
-            epoch_event["context_train_loss"] = context_train_loss
-        emit(epoch_event)
-        if early_stopping_patience > 0 and epochs_without_improvement >= early_stopping_patience:
-            stopped_early = {
-                "stopped": True,
-                "reason": "validation_score_plateau",
-                "metric": "validation_score",
-                "epoch": epoch,
-                "best_epoch": best_epoch,
-                "patience": early_stopping_patience,
-                "min_delta": early_stopping_min_delta,
-            }
-            emit({"type": "early_stopping", "run_id": run_id, **stopped_early})
-            break
-
-    if last_metrics is None:
-        raise RuntimeError("Training did not produce metrics.")
-
-    model, checkpoint = load_checkpoint(best_checkpoint_path)
-    model = model.to(device)
-    prediction = predict_torch_sequence(torch, model, dataset.test_input, device)
-    diagnostic_chunk_size = state_diagnostic_chunk_size(manifest, sequence_length)
-    chunk_reset_prediction = (
-        predict_torch_sequence_chunk_reset(
-            torch,
-            model,
-            dataset.test_input,
-            device,
-            diagnostic_chunk_size,
-        )
-        if recurrent_state_preset(preset)
-        else []
-    )
-    metrics = compute_metrics(dataset.test_target, prediction)
-    metrics["realtime_factor"] = estimate_realtime_factor(preset)
-    state_diagnostic = state_reset_diagnostic(
-        preset,
-        target=dataset.test_target,
-        continuous_prediction=prediction,
-        chunk_reset_prediction=chunk_reset_prediction,
-        chunk_size=diagnostic_chunk_size,
-        sample_rate=dataset.sample_rate,
-    )
-    metrics.update(state_diagnostic_metrics(state_diagnostic))
-
-    write_wav_mono(preview_dir / "target.wav", dataset.test_target, dataset.sample_rate)
-    write_wav_mono(preview_dir / "prediction.wav", prediction, dataset.sample_rate)
-    residual = [
-        dataset.test_target[index] - prediction[index]
-        for index in range(min(len(dataset.test_target), len(prediction)))
-    ]
-    write_wav_mono(preview_dir / "residual.wav", residual, dataset.sample_rate)
-    if state_diagnostic["applies"]:
-        write_wav_mono(
-            preview_dir / "chunk-reset-prediction.wav",
-            chunk_reset_prediction,
-            dataset.sample_rate,
-        )
-        chunk_reset_residual = [
-            dataset.test_target[index] - chunk_reset_prediction[index]
-            for index in range(min(len(dataset.test_target), len(chunk_reset_prediction)))
-        ]
-        write_wav_mono(
-            preview_dir / "chunk-reset-residual.wav",
-            chunk_reset_residual,
-            dataset.sample_rate,
-        )
-    write_wav_mono(run_dir / "test-input.wav", dataset.test_input, dataset.sample_rate)
-    write_wav_mono(run_dir / "test-target.wav", dataset.test_target, dataset.sample_rate)
-    write_json(run_dir / "metrics.json", metrics)
-    write_json(run_dir / "history.json", {"schema_version": 1, "history": history})
-    write_json(
-        run_dir / "training-report.json",
-        {
-            "schema_version": 1,
-            "run_id": run_id,
-            "preset": preset.preset_id,
-            "backend": "pytorch",
-            "device": str(device),
-            "loss": loss_name,
-            "epochs": last_epoch,
-            "requested_epochs": requested_epochs,
-            "target_epochs": target_epochs,
-            "best_checkpoint_path": str(best_checkpoint_path),
-            "metrics": metrics,
-            "quality_assessment": quality_assessment(metrics, state_diagnostic),
-            "checkpoint_epoch": checkpoint["epoch"],
-            "validation_basis": "composite_validation_score",
-            "state_diagnostic": state_diagnostic,
-            "history": history,
-            "dataset": latest_dataset_summary,
-            "window_resampling": window_resampling_report(
-                resample_training_windows_enabled,
-                resample_interval_epochs,
-            ),
-            "preparation": preparation_snapshot,
-            "early_stopping": stopped_early
-            or {
-                "stopped": False,
-                "patience": early_stopping_patience,
-                "min_delta": early_stopping_min_delta,
-                "best_epoch": best_epoch,
-            },
-            "learning_rate_schedule": {
-                **lr_schedule,
-                "initial_learning_rate": learning_rate,
-                "requested_learning_rate": requested_learning_rate,
-                "final_learning_rate": current_learning_rate,
-                "reductions": lr_reductions,
-            },
-            "recurrent_context_training": recurrent_context_training_report(
-                context_training_enabled,
-                context_multiplier,
-                len(dataset.context_train_input),
-                dataset.sample_rate,
-            ),
-            "created_at": now(),
-        },
-    )
-    emit({"type": "checkpoint", "path": str(best_checkpoint_path), "is_best": True})
-    emit({"type": "run_finished", "run_id": run_id, "status": "completed"})
-    return {
-        "run_id": run_id,
-        "run_dir": str(run_dir),
-        "backend": "pytorch",
-        "best_checkpoint_path": str(best_checkpoint_path),
-        "metrics": metrics,
-    }
-
-
 def evaluate_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
     output_dir = mkdir(Path(str(manifest.get("output_dir", "evaluation"))).expanduser())
     checkpoint_path = resolve_checkpoint_path(manifest)
@@ -963,39 +536,6 @@ def save_keras_checkpoint_metadata(
     )
 
 
-def save_torch_checkpoint(
-    torch,
-    path: Path,
-    preset: PresetConfig,
-    model,
-    optimizer,
-    epoch: int,
-    metrics: dict[str, float],
-    seed: int,
-    sequence_length: int,
-    loss_name: str,
-) -> None:
-    torch.save(
-        {
-            "schema_version": 1,
-            "backend": "pytorch",
-            "preset": preset.preset_id,
-            "model_config": preset.__dict__,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "epoch": epoch,
-            "metrics": metrics,
-            "metric_basis": "composite_validation_score",
-            "seed": seed,
-            "sequence_length": sequence_length,
-            "learning_rate": current_torch_learning_rate(optimizer),
-            "loss": loss_name,
-            "created_at": now(),
-        },
-        path,
-    )
-
-
 def load_checkpoint(path: Path):
     if path.suffix == ".keras":
         return load_keras_checkpoint(path)
@@ -1003,7 +543,9 @@ def load_checkpoint(path: Path):
         metadata = read_json(path)
         if metadata.get("backend") == "keras":
             return load_keras_checkpoint(Path(str(metadata["model_path"])).expanduser())
-    return load_torch_checkpoint(path)
+    if path.suffix == ".pt":
+        raise ValueError("PyTorch checkpoints are no longer supported; use a Keras checkpoint.")
+    raise ValueError(f"Unsupported checkpoint format: {path}")
 
 
 def load_keras_checkpoint(path: Path):
@@ -1031,17 +573,6 @@ def load_keras_checkpoint(path: Path):
     return model, checkpoint
 
 
-def load_torch_checkpoint(path: Path):
-    torch = require_torch()
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    checkpoint.setdefault("backend", "pytorch")
-    preset = get_preset(checkpoint["preset"])
-    model = build_model(preset)
-    model.load_state_dict(checkpoint["model_state_dict"])
-    model.eval()
-    return model, checkpoint
-
-
 def resolve_checkpoint_path(manifest: dict[str, Any]) -> Path:
     if manifest.get("checkpoint_path"):
         return Path(str(manifest["checkpoint_path"])).expanduser()
@@ -1050,9 +581,6 @@ def resolve_checkpoint_path(manifest: dict[str, Any]) -> Path:
         keras_path = run_dir / "checkpoints" / "best-model.keras"
         if keras_path.exists():
             return keras_path
-        torch_path = run_dir / "checkpoints" / "best-checkpoint.pt"
-        if torch_path.exists():
-            return torch_path
         return keras_path
     raise ValueError("checkpoint_path or run_dir is required")
 
@@ -1418,45 +946,6 @@ def build_keras_loss(tf, loss_name: str):  # type: ignore[no-untyped-def]
     return mrstft_preemphasis_loss
 
 
-def build_torch_loss(torch, loss_name: str):  # type: ignore[no-untyped-def]
-    if loss_name == "mse":
-        return torch.nn.MSELoss()
-
-    def esr_loss(prediction, target):  # type: ignore[no-untyped-def]
-        error_energy = torch.sum((target - prediction) ** 2, dim=(1, 2))
-        target_energy = torch.sum(target**2, dim=(1, 2))
-        frame_count = max(1, int(target.shape[1]) * int(target.shape[2]))
-        energy_floor = frame_count * 1.0e-4
-        return torch.mean(error_energy / target_energy.clamp_min(energy_floor))
-
-    if loss_name == "esr":
-        return esr_loss
-
-    def preemphasis_mse_value(prediction, target):  # type: ignore[no-untyped-def]
-        base = torch.mean((target - prediction) ** 2)
-        if int(target.shape[1]) <= 1:
-            return base
-        coefficient = PREEMPHASIS_COEFFICIENT
-        target_emphasis = target[:, 1:, :] - coefficient * target[:, :-1, :]
-        prediction_emphasis = prediction[:, 1:, :] - coefficient * prediction[:, :-1, :]
-        emphasis = torch.mean((target_emphasis - prediction_emphasis) ** 2)
-        return base + PREEMPHASIS_LOSS_WEIGHT * emphasis
-
-    def preemphasis_mse_loss(prediction, target):  # type: ignore[no-untyped-def]
-        return preemphasis_mse_value(prediction, target)
-
-    if loss_name == "preemphasis_mse":
-        return preemphasis_mse_loss
-
-    def mrstft_preemphasis_loss(prediction, target):  # type: ignore[no-untyped-def]
-        return preemphasis_mse_value(
-            prediction,
-            target,
-        ) + MRSTFT_LOSS_WEIGHT * torch_multi_resolution_stft_loss(torch, prediction, target)
-
-    return mrstft_preemphasis_loss
-
-
 def keras_multi_resolution_stft_loss(tf, y_true, y_pred):  # type: ignore[no-untyped-def]
     target = tf.squeeze(y_true, axis=-1)
     prediction = tf.squeeze(y_pred, axis=-1)
@@ -1491,50 +980,6 @@ def keras_multi_resolution_stft_loss(tf, y_true, y_pred):  # type: ignore[no-unt
     return total / tf.cast(len(MRSTFT_FRAME_SIZES), y_true.dtype)
 
 
-def torch_multi_resolution_stft_loss(torch, prediction, target):  # type: ignore[no-untyped-def]
-    prediction_flat = prediction.squeeze(-1)
-    target_flat = target.squeeze(-1)
-    total = target_flat.new_tensor(0.0)
-
-    for frame_size in MRSTFT_FRAME_SIZES:
-        window = torch.hann_window(
-            frame_size,
-            device=target_flat.device,
-            dtype=target_flat.dtype,
-        )
-        target_spec = torch.stft(
-            target_flat,
-            n_fft=frame_size,
-            hop_length=max(1, frame_size // 4),
-            win_length=frame_size,
-            window=window,
-            center=True,
-            return_complex=True,
-        )
-        prediction_spec = torch.stft(
-            prediction_flat,
-            n_fft=frame_size,
-            hop_length=max(1, frame_size // 4),
-            win_length=frame_size,
-            window=window,
-            center=True,
-            return_complex=True,
-        )
-        target_mag = torch.abs(target_spec)
-        prediction_mag = torch.abs(prediction_spec)
-        diff = target_mag - prediction_mag
-        convergence = torch.linalg.vector_norm(diff) / torch.clamp_min(
-            torch.linalg.vector_norm(target_mag),
-            1.0e-5,
-        )
-        log_mag = torch.mean(
-            torch.abs(torch.log(target_mag + 1.0e-5) - torch.log(prediction_mag + 1.0e-5))
-        )
-        total = total + convergence + MRSTFT_LOG_MAG_WEIGHT * log_mag
-
-    return total / len(MRSTFT_FRAME_SIZES)
-
-
 def fit_keras_context_sequence(
     numpy,
     model,
@@ -1556,30 +1001,6 @@ def fit_keras_context_sequence(
         verbose=0,
     )
     return float(history.history.get("loss", [0.0])[-1])
-
-
-def fit_torch_context_sequence(
-    torch,
-    model,
-    optimizer,
-    criterion,
-    input_samples: list[float],
-    target_samples: list[float],
-    device,
-    enabled: bool,
-) -> float | None:  # type: ignore[no-untyped-def]
-    if not enabled or not input_samples or not target_samples:
-        return None
-    length = min(len(input_samples), len(target_samples))
-    model.train()
-    context_x = torch.tensor(input_samples[:length], dtype=torch.float32).view(1, length, 1).to(device)
-    context_y = torch.tensor(target_samples[:length], dtype=torch.float32).view(1, length, 1).to(device)
-    optimizer.zero_grad()
-    prediction = model(context_x)
-    loss = criterion(prediction, context_y)
-    loss.backward()
-    optimizer.step()
-    return float(loss.detach().cpu().item())
 
 
 def save_keras_model_checkpoint(model, path: Path) -> None:  # type: ignore[no-untyped-def]
@@ -1682,36 +1103,6 @@ def current_keras_learning_rate(tf, model) -> float:  # type: ignore[no-untyped-
             return float(learning_rate)
 
 
-def build_torch_lr_scheduler(torch, optimizer, schedule: dict[str, Any]):  # type: ignore[no-untyped-def]
-    if not schedule.get("enabled", True):
-        return None
-    return torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode=str(schedule["mode"]),
-        factor=float(schedule["factor"]),
-        patience=int(schedule["patience"]),
-        threshold=float(schedule["min_delta"]),
-        threshold_mode="abs",
-        cooldown=int(schedule["cooldown"]),
-        min_lr=float(schedule["min_learning_rate"]),
-    )
-
-
-def step_torch_lr_scheduler(scheduler, optimizer, metric: float) -> float:  # type: ignore[no-untyped-def]
-    if scheduler is not None:
-        scheduler.step(metric)
-    return current_torch_learning_rate(optimizer)
-
-
-def current_torch_learning_rate(optimizer) -> float:  # type: ignore[no-untyped-def]
-    return float(optimizer.param_groups[0]["lr"])
-
-
-def set_torch_learning_rate(optimizer, learning_rate: float) -> None:  # type: ignore[no-untyped-def]
-    for group in optimizer.param_groups:
-        group["lr"] = learning_rate
-
-
 def numeric_metrics(value: Any) -> dict[str, float]:
     if not isinstance(value, dict):
         return {}
@@ -1790,47 +1181,7 @@ def predict_loaded_sequence(
         tf, _numpy = require_tensorflow()
         with tf.device(tensorflow_device_scope(tf, device_preference)):
             return predict_keras_sequence(model, samples)
-    torch = require_torch()
-    device = choose_device(device_preference)
-    return predict_torch_sequence(torch, model.to(device), samples, device)
-
-
-def predict_tensor(torch, model, tensor, device):  # type: ignore[no-untyped-def]
-    return predict_torch_tensor(torch, model, tensor, device)
-
-
-def predict_torch_tensor(torch, model, tensor, device):  # type: ignore[no-untyped-def]
-    model.eval()
-    with torch.no_grad():
-        return model(tensor.to(device)).cpu()
-
-
-def predict_sequence(torch, model, samples: list[float], device) -> list[float]:  # type: ignore[no-untyped-def]
-    return predict_torch_sequence(torch, model, samples, device)
-
-
-def predict_torch_sequence(torch, model, samples: list[float], device) -> list[float]:  # type: ignore[no-untyped-def]
-    model.eval()
-    tensor = torch.tensor(samples, dtype=torch.float32).view(1, -1, 1).to(device)
-    with torch.no_grad():
-        prediction = model(tensor).squeeze(0).squeeze(-1).cpu().tolist()
-    return [float(value) for value in prediction]
-
-
-def predict_torch_sequence_chunk_reset(
-    torch,
-    model,
-    samples: list[float],
-    device,
-    chunk_size: int,
-) -> list[float]:  # type: ignore[no-untyped-def]
-    chunk_size = max(1, chunk_size)
-    prediction: list[float] = []
-    for start in range(0, len(samples), chunk_size):
-        prediction.extend(
-            predict_torch_sequence(torch, model, samples[start : start + chunk_size], device)
-        )
-    return prediction
+    raise ValueError("Only Keras checkpoints can be used for prediction.")
 
 
 def predict_keras_sequence(model, samples: list[float]) -> list[float]:
@@ -2040,8 +1391,7 @@ def tensorflow_device_scope(tf, preferred: str | None = None) -> str:  # type: i
             return "/GPU:0"
         raise RuntimeError(
             f"{normalized.upper()} was selected, but TensorFlow does not report a GPU device. "
-            "On Apple Silicon, install/configure tensorflow-metal for TensorFlow GPU training "
-            "or switch to the PyTorch backend for MPS."
+            "On Apple Silicon, install/configure tensorflow-metal for TensorFlow GPU training."
         )
     if tf.config.list_logical_devices("GPU"):
         return "/GPU:0"
@@ -2071,10 +1421,3 @@ def set_keras_seed(tf, numpy, seed: int) -> None:  # type: ignore[no-untyped-def
     random.seed(seed)
     numpy.random.seed(seed)
     tf.keras.utils.set_random_seed(seed)
-
-
-def set_torch_seed(torch, seed: int) -> None:  # type: ignore[no-untyped-def]
-    random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)

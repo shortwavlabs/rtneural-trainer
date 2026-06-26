@@ -15,7 +15,6 @@ def inspect_device() -> dict[str, Any]:
         "python": platform.python_version(),
         "cpu_available": True,
         "tensorflow_status": "not_installed",
-        "torch_status": "not_installed",
         "cuda_available": False,
         "mps_available": False,
         "mps_built": False,
@@ -29,6 +28,13 @@ def inspect_device() -> dict[str, Any]:
         pass
     else:
         tf_gpus = tf.config.list_physical_devices("GPU")
+        tensorflow_metal_available = package_versions().get("tensorflow-metal") not in {
+            None,
+            "not installed",
+        }
+        is_apple_silicon = platform.system() == "Darwin" and platform.machine() == "arm64"
+        mps_available = bool(is_apple_silicon and tensorflow_metal_available and tf_gpus)
+        cuda_available = bool(tf_gpus and not is_apple_silicon)
         payload.update(
             {
                 "tensorflow_status": "available",
@@ -37,50 +43,16 @@ def inspect_device() -> dict[str, Any]:
                     getattr(tf.keras, "__version__", getattr(tf, "__version__", "unknown"))
                 ),
                 "tensorflow_gpus": [device.name for device in tf_gpus],
+                "cuda_available": cuda_available,
+                "cuda_device_count": len(tf_gpus) if cuda_available else 0,
+                "cuda_devices": [device.name for device in tf_gpus] if cuda_available else [],
+                "mps_available": mps_available,
+                "mps_built": bool(is_apple_silicon and tensorflow_metal_available),
                 "selected_device": f"tensorflow-gpu:{tf_gpus[0].name}"
                 if tf_gpus
                 else "tensorflow-cpu",
             }
         )
-
-    try:
-        import torch
-    except Exception:
-        return payload
-
-    cuda_available = bool(torch.cuda.is_available())
-    cuda_devices = (
-        [torch.cuda.get_device_name(index) for index in range(torch.cuda.device_count())]
-        if cuda_available
-        else []
-    )
-    mps_available = bool(torch.backends.mps.is_available())
-    mps_built = bool(torch.backends.mps.is_built())
-    if cuda_available:
-        selected = "cuda"
-    elif mps_available and mps_built:
-        selected = "mps"
-    else:
-        selected = "cpu"
-    selected_device = (
-        payload["selected_device"]
-        if payload.get("tensorflow_status") == "available"
-        else selected
-    )
-
-    payload.update(
-        {
-            "torch_status": "available",
-            "torch_version": torch.__version__,
-            "cuda_available": cuda_available,
-            "cuda_device_count": len(cuda_devices),
-            "cuda_devices": cuda_devices,
-            "mps_available": mps_available,
-            "mps_built": mps_built,
-            "torch_selected_device": selected,
-            "selected_device": selected_device,
-        }
-    )
     return payload
 
 
@@ -93,7 +65,6 @@ def package_versions() -> dict[str, str]:
         "tensorflow",
         "tensorflow-metal",
         "keras",
-        "torch",
         "numpy",
         "scipy",
         "soundfile",
@@ -103,37 +74,6 @@ def package_versions() -> dict[str, str]:
         except metadata.PackageNotFoundError:
             packages[name] = "not installed"
     return packages
-
-
-def require_torch():
-    try:
-        import torch
-    except Exception as exc:
-        raise RuntimeError(
-            "PyTorch is required for training/export. Install the trainer with "
-            "the 'training' extra or provide a Python environment with torch."
-        ) from exc
-    return torch
-
-
-def choose_device(preferred: str | None = None):
-    torch = require_torch()
-    normalized = normalize_device_preference(preferred)
-    if normalized == "cpu":
-        return torch.device("cpu")
-    if normalized == "cuda":
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        raise RuntimeError("CUDA was selected, but PyTorch does not report CUDA availability.")
-    if normalized == "mps":
-        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
-            return torch.device("mps")
-        raise RuntimeError("MPS was selected, but PyTorch does not report MPS availability.")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 def normalize_device_preference(preferred: str | None) -> str:

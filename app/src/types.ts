@@ -19,7 +19,7 @@ export interface AppStatus {
   validator_sidecar_present: boolean;
 }
 
-export type RuntimeBackend = "keras" | "pytorch";
+export type RuntimeBackend = "keras";
 
 export interface RuntimeSettings {
   selected_backend: RuntimeBackend;
@@ -41,18 +41,15 @@ export interface DeviceInspection extends Record<string, unknown> {
   cpu_available: boolean;
   selected_device: string;
   tensorflow_status: string;
-  torch_status: string;
   cuda_available: boolean;
   mps_available: boolean;
   mps_built: boolean;
   package_versions?: Record<string, string>;
   tensorflow_version?: string;
   keras_version?: string;
-  torch_version?: string;
   cuda_device_count?: number;
   cuda_devices?: string[];
   tensorflow_gpus?: string[];
-  torch_selected_device?: string;
 }
 
 export interface ProjectSummary {

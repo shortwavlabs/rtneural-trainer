@@ -17,16 +17,17 @@ Recommended next move:
 
 1. `Shared` Run 2-3 real capture projects through the app and record outcomes,
    starting long amp/pedal captures with `wavenet_tcn_balanced`, using
-   `wavenet_tcn_quality` for crunch/rhythm/high-gain refinement, and keeping
-   `conv1d_stack_prelu` as the fast CPU fallback.
+   `wavenet_tcn_quality` for conservative crunch/rhythm/high-gain refinement,
+   and using `wavenet_tcn_a2_prelu` as the current high-gain candidate.
    This is the highest-value next step because it calibrates preset
    recommendations, gain warnings, report language, and export confidence.
    WaveNet defaults, excellent/good/usable/needs-work report language, latency
    candidate review with window agreement, export parity snapshots, and the
    native benchmark matrix are now in place; edge-of-breakup, lead, pedal,
    quiet, clipped, and stereo captures are the next useful evidence.
-2. `Codex` Add the real Tauri UI smoke suite after the first real-capture pass.
-   This protects the workflow while the UI and reports are still being tuned.
+2. `Codex` Add the packaged-app tiny train/export smoke.
+   This protects the production bundle path, not just the dev shell and jsdom
+   workflow.
 3. `You` Decide the release/signing policy before we spend more time on release
    packaging details.
 
@@ -44,14 +45,14 @@ Recommended next move:
     runs.
   - Codex: create or maintain a repeatable capture-results template if needed.
   - Codex: tune capture/gain/preset recommendation thresholds from the results.
-  - Codex: keep WaveNet balanced/quality as the amp quality lane unless new
-    captures show a repeatable exception.
-  - Codex: keep `conv1d_stack_prelu` tuned as the fast fallback and sanity
-    check, not the default amp-quality recommendation.
+  - Codex: keep the trainer UI and built-in recipes WaveNet-only unless new
+    captures show a repeatable non-WaveNet exception.
+  - Codex: keep non-WaveNet layer fixtures only as internal RTNeural export
+    coverage, not as product training recommendations.
   - Track which warnings fired, which preset was recommended, final ESR/RMSE,
-    residual audibility, recurrent state-drift diagnostic, native validation
-    status, native benchmark worst-case real-time factor, and benchmark matrix
-    weak spots by block size/channel count.
+    residual audibility, native validation status, native benchmark worst-case
+    real-time factor, ASR aliasing summary, and benchmark matrix weak spots by
+    block size/channel count.
 
 - [x] Add a Tauri UI smoke suite.
   - Owner: Codex.
@@ -100,15 +101,14 @@ Recommended next move:
   - Cover completed, cancelled, interrupted, and failed runs.
   - Confirm resume uses the latest safe checkpoint and appends durable events.
 
-- [ ] Harden recurrent training beyond the current context update.
+- [ ] Retire non-WaveNet product paths from remaining docs/tests where safe.
   - Owner: Codex.
-  - Current runs add a bounded longer active context excerpt for recurrent
-    presets and report continuous-vs-reset state drift.
-  - Evaluate true stateful or truncated-BPTT training for LSTM/GRU presets.
-  - Add a recurrent-state regularization or long-stream validation fixture that
-    fails when continuous inference collapses but reset chunks look good.
-  - Keep finite-memory Conv1D as the recommended baseline until recurrent runs
-    pass the state-drift diagnostic on real captures.
+  - Keep Dense/GRU/LSTM/Conv1D fixtures only where they prove RTNeural exporter
+    layer compatibility.
+  - Remove non-WaveNet wording from product guidance, UI smoke expectations, and
+    run comparison docs.
+  - Do not spend more time on recurrent-state training unless a future product
+    requirement reopens that path.
 
 - [ ] Add stronger manifest/report validation.
   - Owner: Codex.
@@ -172,7 +172,7 @@ Recommended next move:
   - You: judge whether excellent/good/usable/needs-work matches listening results.
   - Codex: calibrate thresholds against listening notes.
   - Codex: make report actions specific to failure mode: alignment, gain,
-    capture length, recurrent state drift, preset capacity, or runtime cost.
+    capture length, preset capacity, aliasing, or runtime cost.
 
 - [ ] Harden sidecar/runtime error recovery.
   - Owner: Codex.
@@ -192,8 +192,8 @@ Recommended next move:
 - [ ] Create `docs/Preset-Compatibility-Matrix.md`.
   - Owner: Codex.
   - Generate or copy from the code-owned support matrix.
-  - Include Keras/PyTorch support, native parity, benchmark tier, and UI exposure
-    rules.
+  - Include TensorFlow/Keras support, native parity, benchmark tier, and UI
+    exposure rules.
 
 - [x] Create `docs/Audio-Capture-Guidelines.md`.
   - Owner: Shared.

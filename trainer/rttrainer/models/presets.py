@@ -255,36 +255,6 @@ def get_preset(preset_id: str) -> PresetConfig:
         raise ValueError(f"Unknown preset '{preset_id}'. Known presets: {known}") from exc
 
 
-def build_model(config: PresetConfig):
-    import torch
-
-    if config.architecture != "lstm":
-        raise ValueError(
-            f"PyTorch training/export currently supports only LSTM presets; "
-            f"'{config.preset_id}' is a Keras-first {config.architecture} preset."
-        )
-
-    class LstmAudioModel(torch.nn.Module):
-        def __init__(self) -> None:
-            super().__init__()
-            self.lstm = torch.nn.LSTM(
-                input_size=config.input_size,
-                hidden_size=config.hidden_size,
-                num_layers=config.num_layers,
-                batch_first=True,
-            )
-            self.dense = torch.nn.Linear(config.hidden_size, config.output_size)
-
-        def forward(self, x):  # type: ignore[no-untyped-def]
-            output, _state = self.lstm(x)
-            output = self.dense(output)
-            if config.output_activation == "tanh":
-                return torch.tanh(output)
-            return output
-
-    return LstmAudioModel()
-
-
 def build_keras_model(config: PresetConfig, keras):
     layers = keras.layers
     model_layers = [keras.Input(shape=(None, config.input_size), name="audio_input")]

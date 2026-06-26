@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.as_json:
                 print(json.dumps(payload, indent=2))
             else:
-                print(f"{payload['selected_device']} ({payload['torch_status']})")
+                print(f"{payload['selected_device']} ({payload['tensorflow_status']})")
             return 0
 
         if args.command == "aliasing":

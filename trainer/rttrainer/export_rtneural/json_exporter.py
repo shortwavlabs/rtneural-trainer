@@ -9,7 +9,6 @@ from rttrainer.export_rtneural.keras_exporter import ArrayEncoder, save_keras_mo
 from rttrainer.metrics.aliasing import analyze_rtneural_json_aliasing
 from rttrainer.metrics.audio_metrics import compute_metrics
 from rttrainer.models.presets import get_preset
-from rttrainer.training.device import require_torch
 from rttrainer.training.runner import (
     estimate_realtime_factor,
     load_checkpoint,
@@ -29,24 +28,15 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
     preset = get_preset(checkpoint["preset"])
     sample_rate = int(manifest.get("sample_rate", 48_000))
     latency_samples = int(manifest.get("latency_samples", 0))
-    if checkpoint.get("backend") == "keras":
-        model_json = build_keras_rtneural_json(
-            model=model,
-            preset_id=preset.preset_id,
-            sample_rate=sample_rate,
-            latency_samples=latency_samples,
-            checkpoint_metrics=checkpoint.get("metrics", {}),
-        )
-    else:
-        state = model.state_dict()
-        model_json = build_rtneural_json(
-            torch=require_torch(),
-            state=state,
-            preset_id=preset.preset_id,
-            sample_rate=sample_rate,
-            latency_samples=latency_samples,
-            checkpoint_metrics=checkpoint.get("metrics", {}),
-        )
+    if checkpoint.get("backend") != "keras":
+        raise ValueError("Only TensorFlow/Keras checkpoints can be exported.")
+    model_json = build_keras_rtneural_json(
+        model=model,
+        preset_id=preset.preset_id,
+        sample_rate=sample_rate,
+        latency_samples=latency_samples,
+        checkpoint_metrics=checkpoint.get("metrics", {}),
+    )
     model_path = export_dir / "model.rtneural.json"
     write_json(model_path, model_json)
 
@@ -99,7 +89,7 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         "name": str(manifest.get("name", "RTNeural model")),
         "status": "exported",
         "preset": preset.preset_id,
-        "backend": checkpoint.get("backend", "pytorch"),
+        "backend": checkpoint.get("backend", "keras"),
         "sample_rate": sample_rate,
         "latency_samples": latency_samples,
         "model": {
@@ -107,7 +97,7 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
             "path": model_path.name,
             "sample_rate": sample_rate,
             "latency_samples": latency_samples,
-            "backend": checkpoint.get("backend", "pytorch"),
+            "backend": checkpoint.get("backend", "keras"),
             "metadata": model_json.get("metadata", {}),
         },
         "artifacts": [
@@ -146,7 +136,7 @@ def export_checkpoint(manifest: dict[str, Any]) -> dict[str, Any]:
         "aliasing": aliasing,
         "training": {
             "preset": preset.preset_id,
-            "backend": checkpoint.get("backend", "pytorch"),
+            "backend": checkpoint.get("backend", "keras"),
             "checkpoint_epoch": checkpoint.get("epoch"),
             "metrics": checkpoint.get("metrics", {}),
         },
@@ -239,60 +229,6 @@ def write_parity_snapshot(
     }
     write_json(snapshot_manifest_path, snapshot)
     return snapshot
-
-
-def build_rtneural_json(
-    *,
-    torch,
-    state,
-    preset_id: str,
-    sample_rate: int,
-    latency_samples: int,
-    checkpoint_metrics: dict[str, Any],
-) -> dict[str, Any]:
-    weight_ih = state["lstm.weight_ih_l0"].detach().cpu()
-    hidden_size = int(weight_ih.shape[0] // 4)
-    input_size = int(weight_ih.shape[1])
-    dense_weight = state["dense.weight"].detach().cpu()
-    output_size = int(dense_weight.shape[0])
-
-    return {
-        "in_shape": [None, None, input_size],
-        "layers": [
-            {
-                "type": "lstm",
-                "activation": "",
-                "shape": [None, None, hidden_size],
-                "input_size": input_size,
-                "hidden_size": hidden_size,
-                "weights": [
-                    tensor_to_list(state["lstm.weight_ih_l0"].transpose(0, 1)),
-                    tensor_to_list(state["lstm.weight_hh_l0"].transpose(0, 1)),
-                    tensor_to_list(state["lstm.bias_ih_l0"] + state["lstm.bias_hh_l0"]),
-                ],
-            },
-            {
-                "type": "dense",
-                "activation": "",
-                "shape": [None, None, output_size],
-                "input_size": hidden_size,
-                "output_size": output_size,
-                "weights": [
-                    tensor_to_list(state["dense.weight"].transpose(0, 1)),
-                    tensor_to_list(state["dense.bias"]),
-                ],
-            },
-        ],
-        "metadata": {
-            "schema_version": 1,
-            "schema": "rttrainer-rtneural-json-v0",
-            "sample_rate": sample_rate,
-            "latency_samples": latency_samples,
-            "architecture": preset_id,
-            "loss": checkpoint_metrics,
-            "rtneural_commit": RTNEURAL_COMMIT,
-        },
-    }
 
 
 def build_keras_rtneural_json(
@@ -392,10 +328,6 @@ def resolve_parity_input(manifest: dict[str, Any], checkpoint_path: Path) -> Pat
     if manifest.get("parity_input_path"):
         return Path(str(manifest["parity_input_path"])).expanduser()
     return checkpoint_path.parent.parent / "test-input.wav"
-
-
-def tensor_to_list(tensor) -> list[Any]:  # type: ignore[no-untyped-def]
-    return tensor.detach().cpu().tolist()
 
 
 def render_export_prediction(manifest: dict[str, Any]) -> dict[str, Any]:

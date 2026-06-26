@@ -38,7 +38,7 @@ def build_windowed_dataset(
     sequence_length: int,
     max_windows: int,
     seed: int,
-    backend: str = "torch",
+    backend: str = "numpy",
     preview_seconds: float = DEFAULT_PREVIEW_SECONDS,
     context_multiplier: int = MIN_PREVIEW_SEQUENCE_MULTIPLIER,
 ) -> WindowedDataset:
@@ -390,13 +390,6 @@ def make_backend_array(backend: str, windows: list[list[float]]):
     if backend == "numpy":
         numpy = __import__("numpy")
         return numpy.asarray(windows, dtype="float32")[..., None]
-    if backend == "torch":
-        torch = __import__("torch")
-        return make_tensor(torch, windows)
     if backend == "list":
         return [[[sample] for sample in window] for window in windows]
     raise ValueError(f"Unknown dataset backend: {backend}")
-
-
-def make_tensor(torch, windows: list[list[float]]):  # type: ignore[no-untyped-def]
-    return torch.tensor(windows, dtype=torch.float32).unsqueeze(-1)

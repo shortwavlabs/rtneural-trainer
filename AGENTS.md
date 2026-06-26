@@ -18,10 +18,23 @@ Common commands:
 
 Use `uv` for Python dependency execution and `pnpm` for app/frontend commands.
 
+## Backend Policy
+
+The trainer app is TensorFlow/Keras-only. Do not add Torch/PyTorch dependencies,
+runtime selectors, checkpoint paths, or export branches unless the user
+explicitly reverses this decision. Legacy `torch` runtime settings may be
+normalized to `keras` for app startup compatibility, but `.pt` checkpoints are
+not a supported resume or export source.
+
 ## Adding Or Changing Training Presets
 
 Preset changes must be kept in sync across the full app. Do not add a preset in
 only Python or only the UI.
+
+The product training UI and built-in recipes should stay WaveNet-only unless the
+user explicitly reopens another architecture family. Dense/GRU/LSTM/Conv1D
+fixtures can remain as internal RTNeural layer/export coverage, but do not
+surface them as recommended product presets.
 
 When adding a preset, update all applicable places:
 

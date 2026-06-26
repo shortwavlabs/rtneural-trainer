@@ -12,7 +12,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-training = ["numpy>=2.0", "torch>=2.5"]
 tensorflow = [
     "numpy>=2.0",
     "tensorflow>=2.16,<2.19",

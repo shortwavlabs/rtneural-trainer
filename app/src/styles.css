@@ -1398,6 +1398,116 @@ dd,
   border-top: 1px solid #303735;
 }
 
+.run-comparison {
+  display: grid;
+  gap: 12px;
+}
+
+.run-comparison-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.run-decision-card {
+  display: grid;
+  gap: 5px;
+  min-height: 82px;
+  padding: 12px;
+  background: #101212;
+  border: 1px solid #303735;
+  border-radius: 8px;
+}
+
+.run-decision-card span {
+  color: #9da9a1;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.run-decision-card strong {
+  overflow: hidden;
+  color: #eef2ec;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-decision-card small {
+  color: #aeb8b1;
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.run-table .table-head,
+.run-table .table-row {
+  grid-template-columns:
+    minmax(150px, 1.25fr)
+    minmax(120px, 1fr)
+    minmax(78px, 0.65fr)
+    minmax(62px, 0.55fr)
+    minmax(86px, 0.7fr)
+    minmax(86px, 0.7fr)
+    minmax(108px, 0.9fr);
+}
+
+.run-table .table-row {
+  min-height: 58px;
+}
+
+.run-table strong,
+.run-table small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-table small {
+  margin-top: 3px;
+  color: #9da9a1;
+  font-size: 0.72rem;
+}
+
+.run-decision-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.decision-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  color: #cdd5cf;
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+  background: #1b2020;
+  border: 1px solid #303735;
+  border-radius: 999px;
+}
+
+.decision-badge.good {
+  color: #0e1710;
+  background: #8ee690;
+  border-color: #8ee690;
+}
+
+.decision-badge.warning {
+  color: #0e1710;
+  background: #f2bf5e;
+  border-color: #f2bf5e;
+}
+
+.decision-badge.danger {
+  color: #fff1ec;
+  background: #8b332c;
+  border-color: #8b332c;
+}
+
 .quality-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -1955,6 +2065,7 @@ dd,
   .artifact-grid,
   .export-main,
   .selected-run-card,
+  .run-comparison-summary,
   .capture-options,
   .training-controls,
   .recipe-actions,
@@ -1976,6 +2087,11 @@ dd,
   .table-head,
   .table-row {
     grid-template-columns: 1fr 0.8fr;
+  }
+
+  .run-table .table-head,
+  .run-table .table-row {
+    grid-template-columns: 1fr 0.85fr;
   }
 
   .table-head span:nth-child(n + 3),

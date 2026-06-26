@@ -10,7 +10,6 @@ class LayerSpec:
     rtneural_type: str
     status: str
     keras: str
-    pytorch: str
     benchmarked: bool
     priority: str
     notes: str
@@ -22,7 +21,6 @@ class ActivationSpec:
     rtneural_name: str
     status: str
     keras: str
-    pytorch: str
     benchmarked: bool
     priority: str
     notes: str
@@ -33,7 +31,6 @@ class LayerSpecPayload(TypedDict):
     rtneural_type: str
     status: str
     keras: str
-    pytorch: str
     benchmarked: bool
     priority: str
     notes: str
@@ -44,7 +41,6 @@ class ActivationSpecPayload(TypedDict):
     rtneural_name: str
     status: str
     keras: str
-    pytorch: str
     benchmarked: bool
     priority: str
     notes: str
@@ -61,7 +57,6 @@ BENCHMARK_SIZES = [4, 8, 16, 32, 64]
 BENCHMARK_ENGINES = [
     "RTNeural compile-time",
     "RTNeural run-time",
-    "libtorch",
     "onnxruntime",
     "TensorFlow Lite",
 ]
@@ -72,7 +67,6 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         rtneural_type="dense",
         status="supported",
         keras="keras.layers.Dense",
-        pytorch="torch.nn.Linear",
         benchmarked=True,
         priority="v1",
         notes="Canonical feed-forward layer and benchmarked upstream.",
@@ -82,7 +76,6 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         rtneural_type="gru",
         status="supported",
         keras="keras.layers.GRU",
-        pytorch="torch.nn.GRU",
         benchmarked=True,
         priority="v1",
         notes="Benchmarked upstream; use conservative hidden sizes first.",
@@ -92,7 +85,6 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         rtneural_type="lstm",
         status="supported",
         keras="keras.layers.LSTM",
-        pytorch="torch.nn.LSTM",
         benchmarked=True,
         priority="v1",
         notes="Benchmarked upstream and good default for amp/pedal capture.",
@@ -102,7 +94,6 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         rtneural_type="conv1d",
         status="supported",
         keras="keras.layers.Conv1D",
-        pytorch="torch.nn.Conv1d",
         benchmarked=True,
         priority="v1-plus",
         notes="Benchmarked upstream; add after recurrent export is boring.",
@@ -112,7 +103,6 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         rtneural_type="conv2d",
         status="supported",
         keras="keras.layers.Conv2D",
-        pytorch="torch.nn.Conv2d",
         benchmarked=False,
         priority="later",
         notes="Supported by RTNeural JSON exporter, but not in compare README plots.",
@@ -122,7 +112,6 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         rtneural_type="batchnorm",
         status="supported",
         keras="keras.layers.BatchNormalization",
-        pytorch="torch.nn.BatchNorm1d",
         benchmarked=False,
         priority="v1-plus",
         notes="Safe 1D inference path covered by Keras parity and native validation fixtures.",
@@ -132,7 +121,6 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         rtneural_type="batchnorm2d",
         status="supported",
         keras="keras.layers.BatchNormalization",
-        pytorch="torch.nn.BatchNorm2d",
         benchmarked=False,
         priority="later",
         notes="Export after Conv2D parity fixtures exist.",
@@ -142,7 +130,6 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         rtneural_type="prelu",
         status="supported",
         keras="keras.layers.PReLU",
-        pytorch="torch.nn.PReLU",
         benchmarked=False,
         priority="v1-plus",
         notes="Safe shared temporal-axis PReLU is covered by Keras parity and native validation fixtures.",
@@ -152,7 +139,6 @@ LAYER_SPECS: dict[str, LayerSpec] = {
         rtneural_type="maxpooling",
         status="unchecked",
         keras="keras.layers.MaxPooling1D/2D",
-        pytorch="torch.nn.MaxPool1d/2d",
         benchmarked=False,
         priority="defer",
         notes="RTNeural README still marks MaxPooling unchecked.",
@@ -165,7 +151,6 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
         rtneural_name="tanh",
         status="supported",
         keras="keras.activations.tanh",
-        pytorch="torch.tanh / torch.nn.Tanh",
         benchmarked=True,
         priority="v1",
         notes="Benchmarked upstream.",
@@ -175,7 +160,6 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
         rtneural_name="relu",
         status="supported",
         keras="keras.activations.relu",
-        pytorch="torch.relu / torch.nn.ReLU",
         benchmarked=True,
         priority="v1",
         notes="Benchmarked upstream.",
@@ -185,7 +169,6 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
         rtneural_name="sigmoid",
         status="supported",
         keras="keras.activations.sigmoid",
-        pytorch="torch.sigmoid / torch.nn.Sigmoid",
         benchmarked=True,
         priority="v1",
         notes="Benchmarked upstream.",
@@ -195,7 +178,6 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
         rtneural_name="softmax",
         status="supported",
         keras="keras.activations.softmax",
-        pytorch="torch.nn.Softmax",
         benchmarked=False,
         priority="v1-plus",
         notes="Covered as a hidden activation fixture; not a common audio regression output.",
@@ -205,7 +187,6 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
         rtneural_name="elu",
         status="supported",
         keras="keras.activations.elu",
-        pytorch="torch.nn.ELU",
         benchmarked=False,
         priority="v1-plus",
         notes="Covered as a hidden activation fixture before UI exposure.",
@@ -215,7 +196,6 @@ ACTIVATION_SPECS: dict[str, ActivationSpec] = {
         rtneural_name="prelu",
         status="supported",
         keras="keras.layers.PReLU",
-        pytorch="torch.nn.PReLU",
         benchmarked=False,
         priority="v1-plus",
         notes="Parametric activation represented as its own safe shared-axis layer fixture.",
@@ -241,7 +221,6 @@ def layer_spec_payload(spec: LayerSpec) -> LayerSpecPayload:
         "rtneural_type": spec.rtneural_type,
         "status": spec.status,
         "keras": spec.keras,
-        "pytorch": spec.pytorch,
         "benchmarked": spec.benchmarked,
         "priority": spec.priority,
         "notes": spec.notes,
@@ -254,7 +233,6 @@ def activation_spec_payload(spec: ActivationSpec) -> ActivationSpecPayload:
         "rtneural_name": spec.rtneural_name,
         "status": spec.status,
         "keras": spec.keras,
-        "pytorch": spec.pytorch,
         "benchmarked": spec.benchmarked,
         "priority": spec.priority,
         "notes": spec.notes,

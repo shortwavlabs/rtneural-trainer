@@ -2020,9 +2020,8 @@ fn upsert_training_recipe(db: &Connection, recipe: &TrainingRecipe) -> Result<()
 
 fn normalize_backend(value: &str) -> Result<&'static str, String> {
     match value.trim().to_lowercase().as_str() {
-        "" | "keras" | "tensorflow" | "tf" => Ok("keras"),
-        "pytorch" | "torch" => Ok("pytorch"),
-        _ => Err("Backend must be 'keras' or 'pytorch'.".to_string()),
+        "" | "keras" | "tensorflow" | "tf" | "pytorch" | "torch" => Ok("keras"),
+        _ => Err("Backend must be 'keras'.".to_string()),
     }
 }
 
@@ -3092,10 +3091,6 @@ fn best_checkpoint_path(run_dir: &Path) -> Option<PathBuf> {
     if keras.exists() {
         return Some(keras);
     }
-    let torch = run_dir.join("checkpoints/best-checkpoint.pt");
-    if torch.exists() {
-        return Some(torch);
-    }
     None
 }
 
@@ -3115,9 +3110,6 @@ fn training_run_backend(run_dir: &Path) -> String {
     if run_dir.join("checkpoints/best-model.keras").exists() {
         return "keras".to_string();
     }
-    if run_dir.join("checkpoints/best-checkpoint.pt").exists() {
-        return "pytorch".to_string();
-    }
     default_training_backend()
 }
 
@@ -3133,7 +3125,10 @@ fn validate_resume_checkpoint_backend(checkpoint_path: &Path, backend: &str) -> 
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("pt"))
     {
-        "pytorch"
+        return Err(
+            "PyTorch checkpoints are no longer supported. Choose a TensorFlow/Keras run."
+                .to_string(),
+        );
     } else {
         return Err(format!(
             "Resume checkpoint format is not supported: {}",
@@ -4290,35 +4285,12 @@ fn rttrainer_python_working_dir(state: &AppState) -> PathBuf {
     state.workspace_root.clone()
 }
 
-fn uv_extras_for_rttrainer(action: &str, args: &[String]) -> Vec<&'static str> {
-    if action == "inspect-device" {
-        return vec!["tensorflow", "training"];
-    }
-    if !matches!(action, "train" | "evaluate" | "export") {
-        return Vec::new();
-    }
-    if rttrainer_args_backend(args)
-        .as_deref()
-        .map(|backend| backend == "pytorch")
-        .unwrap_or(false)
-    {
-        vec!["training"]
-    } else {
+fn uv_extras_for_rttrainer(action: &str, _args: &[String]) -> Vec<&'static str> {
+    if matches!(action, "inspect-device" | "train" | "evaluate" | "export") {
         vec!["tensorflow"]
+    } else {
+        Vec::new()
     }
-}
-
-fn rttrainer_args_backend(args: &[String]) -> Option<String> {
-    let manifest_path = args
-        .windows(2)
-        .find(|items| items[0] == "--manifest")
-        .map(|items| PathBuf::from(&items[1]))?;
-    let manifest = read_optional_json_value(&manifest_path)?;
-    manifest
-        .get("backend")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|value| normalize_backend(value).ok())
-        .map(str::to_string)
 }
 
 fn run_validator(
@@ -5660,7 +5632,7 @@ mod tests {
         .expect("save runtime settings");
 
         let settings = load_runtime_settings(&db).expect("load saved settings");
-        assert_eq!(settings.selected_backend, "pytorch");
+        assert_eq!(settings.selected_backend, "keras");
         assert_eq!(settings.selected_device, "mps");
         assert_eq!(
             settings.external_python_path,

@@ -280,7 +280,7 @@ describe("Tauri UI smoke", () => {
 
     const runSelect = await screen.findByLabelText("Training run");
     expect(runSelect).toHaveValue("run_quality");
-    expect(screen.getAllByText("Best ESR").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Recommended").length).toBeGreaterThan(0);
 
     await user.selectOptions(runSelect, "run_balanced");
     await user.click(screen.getByRole("button", { name: "Export selected RTNeural JSON" }));
@@ -786,7 +786,6 @@ function deviceInspectionFixture(): DeviceInspection {
       python: "3.12.13",
       rttrainer: "0.1.0",
       tensorflow: "2.21.0",
-      torch: "2.12.1",
     },
     platform: "darwin",
     python: "3.12.13",
@@ -795,8 +794,6 @@ function deviceInspectionFixture(): DeviceInspection {
     tensorflow_gpus: [],
     tensorflow_status: "available",
     tensorflow_version: "2.21.0",
-    torch_status: "available",
-    torch_version: "2.12.1",
     trainer_version: "0.1.0",
   };
 }

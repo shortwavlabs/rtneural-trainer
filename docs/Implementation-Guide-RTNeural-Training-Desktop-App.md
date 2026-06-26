@@ -27,10 +27,12 @@ Implemented:
    evaluation, export, notes, and progress streaming.
 2. `uv`-managed Python `rttrainer` sidecar with `prepare`, `train`, `evaluate`,
    `export`, `aliasing`, and `inspect-device` commands.
-3. TensorFlow/Keras-first training and RTNeural JSON export path, with optional
-   PyTorch support only for curated LSTM presets.
-4. Dense-only, GRU, LSTM, causal Conv1D, safe BatchNorm/PReLU, and Conv+GRU
-   hybrid Keras presets with golden JSON and native RTNeural parity coverage.
+3. TensorFlow/Keras-first training and RTNeural JSON export path, with the
+   product UI narrowed to WaveNet-family presets.
+4. WaveNet fast, balanced, quality, tanh-research, and A2-inspired presets with
+   golden JSON and native RTNeural parity coverage. Older Dense/GRU/LSTM/Conv1D
+   fixtures remain useful as internal layer/export coverage, not product
+   recommendations.
 5. Native C++ `rtneural-validator` sidecar that validates exported JSON against
    WAV fixtures and benchmarks runtime cost.
 6. SQLite-backed project/job store with durable job events, project rename/delete,
@@ -72,8 +74,10 @@ version buildable and protect the app from becoming a generic ML IDE.
 1. Treat RTNeural as the inference target, not the training framework.
 2. Use TensorFlow/Keras as the canonical RTNeural JSON export path.
 3. Export only app-owned, curated architectures.
-4. Keep PyTorch as an optional backend only for presets with proven parity.
-5. Do not support arbitrary PyTorch, TensorFlow/Keras, or ONNX import in v1.
+4. Keep the product trainer TensorFlow/Keras-only. Historical PyTorch
+   checkpoints are not a supported runtime or export path.
+5. Do not support arbitrary TensorFlow/Keras, ONNX, or third-party model import
+   in v1.
 6. Validate every export twice: backend parity and native RTNeural parity.
 7. Use dynamic RTNeural JSON loading for v1.
 8. Keep live low-latency monitoring out of v1 unless the MVP is already stable.
@@ -87,8 +91,7 @@ version buildable and protect the app from becoming a generic ML IDE.
 Use a Tauri v2 desktop shell with a React/TypeScript UI, a Rust orchestration
 layer, a `uv`-managed Python trainer/export sidecar, and a native C++ RTNeural
 validator sidecar. The Python sidecar makes TensorFlow/Keras the canonical
-RTNeural JSON path while keeping PyTorch isolated behind optional extras and
-known-good parity tests.
+RTNeural JSON path and intentionally avoids a second ML backend.
 
 ```text
 rtneural-trainer/
@@ -203,7 +206,6 @@ repo. Pinning early matters because parity failures are often version-sensitive.
      compatible presets
    - `tensorflow-metal>=1.2` on Darwin arm64 for Apple Silicon Metal GPU
      training
-   - `torch` only for the optional PyTorch training/export backend
    - `pyinstaller`, injected by the packaging script when building production
      sidecars
    - WAV IO currently uses Python's standard library `wave` module
@@ -214,8 +216,8 @@ repo. Pinning early matters because parity failures are often version-sensitive.
    - TypeScript
    - Vite or the selected frontend build tool
 6. Current packaging decision:
-   - production `rttrainer` sidecars include the TensorFlow/Keras path
-   - PyTorch remains optional and limited to supported LSTM presets
+   - production `rttrainer` sidecars include the TensorFlow/Keras WaveNet path
+   - PyTorch/Torch is not part of the product dependency set
    - the desktop app exposes an external Python path for advanced environments
 
 Recommended local commands:
@@ -224,7 +226,6 @@ Recommended local commands:
 cd trainer
 uv lock
 uv sync --extra tensorflow
-uv sync --extra training
 uv run --extra tensorflow rttrainer inspect-device --json
 ```
 
@@ -232,14 +233,13 @@ Acceptance criteria:
 
 - A new developer can install the toolchains and run skeleton tests.
 - RTNeural commit, Python version, and C++ compiler requirements are documented.
-- The decision about packaged TensorFlow/PyTorch versus external Python is
-  explicit.
+- The decision about packaged TensorFlow versus external Python is explicit.
 
 ## 5. Phase 0: Export Spike
 
 Phase 0 is the most important technical milestone. Keep it small and ruthless:
-one synthetic dataset, one Keras Dense/LSTM/GRU export path, the optional PyTorch
-presets kept behind parity tests, and a native parity test.
+one synthetic dataset, one Keras WaveNet export path, internal layer fixtures
+kept behind parity tests, and a native parity test.
 
 ### Step 5.1 Python Package
 
@@ -272,10 +272,9 @@ rttrainer export --manifest export-manifest.json
 
 Current status:
 
-- `trainer/pyproject.toml` defines the package and optional `tensorflow` and
-  `training` extras.
+- `trainer/pyproject.toml` defines the package and optional `tensorflow` extra.
 - Keras/TensorFlow is the canonical training/export path.
-- PyTorch is retained only where parity is proven and worth supporting.
+- PyTorch/Torch is removed from the supported trainer dependency set.
 - Deterministic fixture generation and parity tests now cover the export surface
   instead of a separate `spike-train` command.
 
@@ -284,40 +283,22 @@ Current status:
 Implement presets as code-owned architecture factories. Do not serialize
 arbitrary model definitions.
 
-Implemented presets:
+Product-exposed presets:
 
 | Preset ID | Architecture | Use |
 | --- | --- | --- |
-| `dense_only` | Dense stack with bounded `tanh` output | Fast memoryless baseline |
-| `gru_light` | 1 GRU, hidden 10, bounded dense output | Compact recurrent model |
-| `lstm_light` | 1 LSTM, hidden 12, bounded dense output | Lowest-risk recurrent export |
-| `lstm_standard` | 1 LSTM, hidden 16, bounded dense output | Default recurrent target |
-| `conv1d_light` | Causal Conv1D with bounded dense output | Fast temporal front-end |
-| `conv1d_bn_prelu` | Causal Conv1D with BatchNorm/PReLU and bounded output | Safe BatchNorm/PReLU coverage |
-| `conv1d_stack_prelu` | Stacked dilated causal Conv1D/PReLU with bounded output and pre-emphasis MSE default loss | Fast finite-memory fallback and sanity check |
 | `wavenet_tcn_fast` | Smaller WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Faster high-gain probe |
 | `wavenet_tcn_balanced` | Proven WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Default amp quality path; benchmark before export |
-| `wavenet_tcn_balanced_tanh15` | Balanced WaveNet trained with smoothed `tanh(x / 1.5)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
-| `wavenet_tcn_balanced_tanh18` | Balanced WaveNet trained with smoothed `tanh(x / 1.8)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
 | `wavenet_tcn_quality` | Wider/deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Slower crunch/rhythm/refinement path; benchmark before export |
 | `wavenet_tcn_quality_tanh15` | Quality WaveNet trained with smoothed `tanh(x / 1.5)` and exported by folding the scale into Conv1D weights | High-band residual and ASR research |
-| `wavenet_tcn_high_gain` | 11-layer WaveNet-style dilated causal Conv1D stack with 4095-sample receptive field and `3.5e-4` default learning rate | Hidden research preset; first DI4/RHYTHM4 run underperformed quality and showed deeper-stack optimization collapse |
-| `wavenet_tcn_quality_tanh18` | Quality WaveNet trained with smoothed `tanh(x / 1.8)` and exported by folding the scale into Conv1D weights | ASR/anti-aliasing research |
 | `wavenet_tcn_a2_prelu` | A2-inspired sequential Conv1D/PReLU stack with mixed `6`/`15` sample kernels and non-power-of-two dilations | Current RHYTHM4 high-gain candidate; parity-safe but not true residual A2 |
-| `wavenet_tcn_separable_fast` | Experimental grouped dilated Conv1D plus 1x1 pointwise WaveNet variant with bounded output and MR-STFT/pre-emphasis default loss | Runtime research only; parity-safe but not faster than balanced in current dynamic RTNeural benchmarks |
-| `wavenet_tcn` | Legacy balanced WaveNet-style preset | Existing run/checkpoint compatibility |
-| `conv_gru_hybrid` | Conv1D front-end + GRU with bounded dense output | Richer Keras temporal preset |
 
 Model rules:
 
 1. Use mono input and mono output first.
 2. Keep tensor shape conventions documented in the model file.
-3. BatchNorm/PReLU is exposed only in the safe Conv1D preset with parity
-   coverage.
-4. Conv1D and Conv+GRU are exposed because golden JSON plus native parity now
-   cover those paths.
-5. Add each preset to a known-good compatibility matrix.
-6. Keep the RTNeural layer/activation support matrix in code and generate docs
+3. Add each product preset to a known-good compatibility matrix.
+4. Keep the RTNeural layer/activation support matrix in code and generate docs
    from it instead of hand-maintaining scattered tables.
 
 Benchmark-driven v1 support:
@@ -339,29 +320,24 @@ Acceptance criteria:
 
 ### Step 5.3 Build The RTNeural JSON Exporters
 
-Implemented in `trainer/rttrainer/export_rtneural/keras_exporter.py` for the
-canonical TensorFlow/Keras path and
-`trainer/rttrainer/export_rtneural/json_exporter.py` for the optional PyTorch
-path plus shared package metadata helpers.
+Implemented in `trainer/rttrainer/export_rtneural/keras_exporter.py` for layer
+conversion and `trainer/rttrainer/export_rtneural/json_exporter.py` for the
+TensorFlow/Keras checkpoint export package.
 
 Exporter responsibilities:
 
 1. Accept a known Keras Sequential model and emit RTNeural's `in_shape` and
    `layers` JSON structure.
-2. For optional PyTorch presets, accept a known preset instance and a
-   `state_dict`.
-3. Convert tensor layouts to RTNeural's expected format when the source backend
+2. Convert tensor layouts to RTNeural's expected format when the source backend
    does not already match RTNeural's JSON conventions.
-4. Emit the RTNeural JSON layer list.
-5. Attach metadata required by the desktop app.
-6. Reject unsupported layers with clear errors.
+3. Emit the RTNeural JSON layer list.
+4. Attach metadata required by the desktop app.
+5. Reject unsupported layers with clear errors.
 
 Important conversion checks:
 
 - Keras Sequential export is the reference JSON shape.
-- Dense and recurrent PyTorch weights may need transposition.
 - GRU gate order must be verified against RTNeural expectations.
-- Conv1D kernel reversal matters for PyTorch Conv1D exports.
 - Recurrent activations must be explicit because RTNeural recurrent
   post-activation handling has known caveats.
 
@@ -388,7 +364,7 @@ Example export envelope:
     "schema_version": 1,
     "sample_rate": 48000,
     "latency_samples": 0,
-    "architecture": "lstm_standard",
+    "architecture": "wavenet_tcn_balanced",
     "trainer_version": "0.1.0",
     "rtneural_commit": "1fb1f075a5d66e85bfc8f488c3f3626840cb3a1d"
   }
@@ -702,19 +678,18 @@ Implemented in `rttrainer/training/runner.py`.
 
 The default runner trains Keras models whose layer graph is known to export
 through `rttrainer.export_rtneural.keras_exporter`. Backend selection remains
-explicit in the run manifest: `keras` for the canonical path and `pytorch` only
-for presets that have matching parity fixtures.
+explicit in the run manifest for schema stability, but the only supported value
+is `keras`.
 
 Device selection is reported, but the first reliable requirement is
-reproducibility. The run records TensorFlow-visible accelerators for Keras runs
-and PyTorch CUDA/MPS availability for optional PyTorch runs.
+reproducibility. The run records TensorFlow-visible accelerators and the
+selected TensorFlow device.
 
 Training loop requirements:
 
 1. Build the model from a stable preset ID rather than deserializing arbitrary
    user graphs.
-2. Save Keras model weights/config for the canonical path, or
-   `model.state_dict()` for optional PyTorch runs.
+2. Save Keras model weights/config for the canonical path.
 3. Save optimizer state where the backend supports it.
 4. Save the best checkpoint by validation score: streaming validation ESR plus
    a short-window diagnostic term and an underpowered-output penalty.
@@ -744,12 +719,10 @@ Training loop requirements:
 Validation/inference preview requirements:
 
 1. Run the backend in inference mode.
-2. For PyTorch, call `model.eval()` and use `torch.no_grad()` or
-   `torch.inference_mode()`.
-3. Restore training mode only if the training loop continues afterward.
-4. Render target, prediction, and residual WAV files.
-5. Compute metrics on the same aligned test segment used for preview audio.
-6. Keep the continuous prediction as the export truth. Chunk-reset prediction
+2. Restore training mode only if the training loop continues afterward.
+3. Render target, prediction, and residual WAV files.
+4. Compute metrics on the same aligned test segment used for preview audio.
+5. Keep the continuous prediction as the export truth. Chunk-reset prediction
    and residual WAVs are diagnostic artifacts only.
 
 Acceptance criteria:
@@ -760,12 +733,10 @@ Acceptance criteria:
 - Run metadata is sufficient to reproduce the run.
 - Desktop controls now expose epochs, early-stop patience, minimum ESR
   improvement, training window budget, and training-window rotation.
-- Recurrent built-in recipes default to longer 8192-sample windows plus a
-  bounded active context update so training better matches continuous RTNeural
-  playback.
-- The balanced Keras recipe starts with the finite-memory Conv1D BatchNorm/PReLU
-  preset; richer recurrent presets remain available after the baseline confirms
-  the capture is learnable.
+- Built-in recipes are WaveNet-only: quick check, balanced, quality,
+  quality-tanh, and A2 PReLU.
+- The run comparison UI recommends an export candidate using ESR, export ASR,
+  validation status, and native RTNeural runtime when those reports exist.
 
 ### Step 6.5 Implement Losses And Metrics
 
@@ -831,7 +802,7 @@ Package metadata:
   "name": "My Amp Capture",
   "project_id": "project_123",
   "run_id": "run_456",
-  "preset": "lstm_standard",
+  "preset": "wavenet_tcn_balanced",
   "sample_rate": 48000,
   "latency_samples": 123,
   "quality": {
@@ -1129,12 +1100,12 @@ Current screen: Align
 
 Current screen: Train
 
-- Preset picker: Dense, GRU, Light LSTM, Standard LSTM, Conv1D, Conv1D
-  BatchNorm/PReLU, Hybrid
+- Preset picker: WaveNet Fast, WaveNet Balanced, WaveNet Quality, WaveNet
+  Quality Tanh 1.5, and WaveNet A2 PReLU
 - Hardware indicator: CUDA, MPS, or CPU
 - Runtime warning for heavy presets
 - Validation ESR curve
-- Current best metric
+- Current best metric and run comparison/export recommendation
 - Cancel/resume
 - Early stopping controls
 - Preset recommendation from target type, backend, capture duration, alignment,
@@ -1412,8 +1383,8 @@ Acceptance criteria:
 
 ## 10. Packaging Strategy
 
-Packaging is one of the highest-risk areas because TensorFlow and PyTorch are
-large and platform-specific.
+Packaging is one of the highest-risk areas because TensorFlow is large and
+platform-specific.
 
 Recommended v1 approach:
 
@@ -1525,31 +1496,19 @@ Known CI/release gaps:
 ## 12. Known-Good Preset Matrix
 
 Maintain this table in code and docs. Update it whenever RTNeural, TensorFlow,
-PyTorch, or export logic changes.
+or export logic changes. The UI is WaveNet-only; older Dense/GRU/LSTM/Conv
+presets may remain as internal parity fixtures but are not product recipes.
 
-| Preset | Keras Train/Build | PyTorch Train | JSON Export | Python Parity | Native Validate | Benchmark | Release |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `dense_only` | Required | Later | Required | Required | Required | Required | v1 |
-| `gru_light` | Required | Later | Required | Required | Required | Required | v1 |
-| `lstm_light` | Required | Optional | Required | Required | Required | Required | v1 |
-| `lstm_standard` | Required | Optional | Required | Required | Required | Required | v1 |
-| `conv1d_light` | Required | Later | Required | Required | Required | Required | v1-plus |
-| `conv1d_bn_prelu` | Required | Later | Required | Required | Required | Required | v1-plus |
-| `conv1d_stack_prelu` | Required | Later | Required | Required | Required | Required | v1-plus |
-| `wavenet_tcn_fast` | Required | Later | Required | Required | Required | Required | v1-plus |
-| `wavenet_tcn_balanced` | Required | Later | Required | Required | Required | Required | v1-plus |
-| `wavenet_tcn_balanced_tanh15` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
-| `wavenet_tcn_balanced_tanh18` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
-| `wavenet_tcn_quality` | Required | Later | Required | Required | Required | Required | v1-plus |
-| `wavenet_tcn_quality_tanh15` | Required | Later | Required | Required | Required | Required | High-band residual and ASR research |
-| `wavenet_tcn_quality_tanh18` | Required | Later | Required | Required | Required | Required | ASR/anti-aliasing research |
-| `wavenet_tcn_high_gain` | Required | Later | Required | Required | Required | Required | Hidden rhythm/high-gain research |
-| `wavenet_tcn_a2_prelu` | Required | Later | Required | Required | Required | Required | A2-inspired high-gain candidate |
-| `wavenet_tcn_separable_fast` | Required | Later | Required | Required | Required | Required | Experimental runtime research |
-| `wavenet_tcn` | Required | Later | Required | Required | Required | Required | Legacy alias |
-| `conv_gru_hybrid` | Required | Later | Required | Required | Required | Required | v1-plus |
-| `heavy_recurrent` | Later | Later | Required before exposure | Required | Required | Required | Warned v1 or later |
-| `parametric_active_learning` | Later | Later | Later | Later | Later | Later | Defer |
+| Preset | Keras Train/Build | JSON Export | Python Parity | Native Validate | Benchmark | Release |
+| --- | --- | --- | --- | --- | --- | --- |
+| `wavenet_tcn_fast` | Required | Required | Required | Required | Required | v1 |
+| `wavenet_tcn_balanced` | Required | Required | Required | Required | Required | v1 |
+| `wavenet_tcn_quality` | Required | Required | Required | Required | Required | v1 |
+| `wavenet_tcn_quality_tanh15` | Required | Required | Required | Required | Required | High-gain candidate |
+| `wavenet_tcn_quality_tanh18` | Required | Required | Required | Required | Required | ASR/anti-aliasing research |
+| `wavenet_tcn_a2_prelu` | Required | Required | Required | Required | Required | A2-inspired high-gain candidate |
+| `wavenet_tcn_separable_fast` | Required | Required | Required | Required | Required | Experimental runtime research |
+| `wavenet_tcn` | Required | Required | Required | Required | Required | Legacy alias |
 
 Do not expose a preset in the UI unless its row is green for the target release.
 
@@ -1581,7 +1540,7 @@ Schema rules:
 2. Store paths relative to the project root when possible.
 3. Store absolute paths only for imported sources outside the project.
 4. Include UTC timestamps.
-5. Include app, trainer, validator, TensorFlow, PyTorch, and RTNeural versions.
+5. Include app, trainer, validator, TensorFlow, and RTNeural versions.
 6. Include hardware and device selection metadata for training runs.
 
 Current acceptance:
@@ -1602,16 +1561,16 @@ The original order below is now mostly complete:
 
 1. Repo skeleton and dependency pins: complete.
 2. Python trainer/export package: complete.
-3. LSTM, GRU, Dense, Conv1D, BatchNorm/PReLU, and hybrid presets: complete for
-   the supported Keras path.
-4. RTNeural JSON export and Python parity: complete for every exposed preset.
+3. WaveNet product presets: complete for the supported Keras path.
+4. RTNeural JSON export and Python parity: complete for every product-exposed
+   preset; older layer fixtures remain as internal exporter coverage.
 5. Native RTNeural validator/benchmark sidecar: complete.
 6. WAV preparation, resampling, stereo policy, transient-aware latency
    estimation, candidate agreement reporting, manual alignment override, and
    preparation reports: complete.
 7. Paired-WAV training with metrics, checkpoints, preview WAVs, validation
-   history, early stopping, recurrent context updates, recurrent state-drift
-   diagnostics, and quality language: complete for local v1.
+   history, early stopping, learning-rate plateau decay, training-window
+   rotation, and quality language: complete for local v1.
 8. SQLite project/job store, recovery, cancellation, resume, and event
    persistence: complete.
 9. Tauri/React UI for project creation/selection/rename/delete, Capture, Align,
@@ -1694,7 +1653,7 @@ Success means:
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Python ML sidecar is too large | Large installers and slow updates | Use `uv` lockfiles, keep TensorFlow/PyTorch extras explicit, support external Python env as advanced path |
+| Python ML sidecar is too large | Large installers and slow updates | Use `uv` lockfiles, keep TensorFlow extras explicit, support external Python env as advanced path |
 | Export weight layouts are wrong | Bad audio or crashes | Golden parity tests for every preset and layer |
 | Latency alignment is wrong | Model learns delay instead of tone | Impulse alignment, cross-correlation fallback, manual nudge UI |
 | User capture data is poor | Bad trained models | Preflight warnings, capture checklist, clipping/silence detection |

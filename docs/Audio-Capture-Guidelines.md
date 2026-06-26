@@ -198,10 +198,12 @@ the same 151.6 second DI2 performance. The practical training rule is now:
 - Treat `wavenet_tcn_high_gain` as hidden research only. The first DI4/RHYTHM4
   test showed the longer sequential tanh stack underpowered the prediction and
   did not beat `wavenet_tcn_quality`.
-- Treat `conv1d_stack_prelu` as a fast CPU fallback and sanity check, not the
-  main quality lane.
 - Use `wavenet_tcn_fast` as a quick WaveNet probe, not as the final model for
   hard captures.
+
+The product UI is now WaveNet-only. Dense, recurrent, and smaller Conv1D
+architectures may still exist as internal RTNeural fixture coverage, but they
+are no longer recommended as capture-quality paths.
 
 Balanced and quality were both excellent on clean, edge-of-breakup, and
 overdrive pedal captures. Quality clearly won crunch and rhythm. Lead was the

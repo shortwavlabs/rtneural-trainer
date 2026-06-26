@@ -18,15 +18,14 @@ calls the real Python `prepare`, `train`, `evaluate`, and `export` commands, and
 the export path invokes the native RTNeural validator/benchmark sidecar. The
 commands resolve after the job finishes, while stdout/stderr stream to the UI as
 `sidecar-progress` events for live prepare, training, export, validation, and
-benchmark updates. The current train/evaluate/export CLI uses TensorFlow/Keras
-as the canonical RTNeural JSON path, with PyTorch retained as an optional
-compatibility backend for curated LSTM presets.
+benchmark updates. The product training lane now uses TensorFlow/Keras and
+WaveNet-style RTNeural-safe presets as the canonical path.
 
 Current local v1 coverage includes SQLite-backed project/job state, project
 rename/delete actions, native file pickers, optional resampling and stereo
 policy, manual latency override, cancel/resume/recovery, validation curves,
 streaming validation checkpoints, early stopping controls, learning-rate
-plateau decay, recurrent state-drift diagnostics, runtime inspection,
+plateau decay, run comparison/export recommendation, runtime inspection,
 target/prediction/residual playback, transient-aware latency candidate review
 with window agreement, golden RTNeural JSON fixtures, native parity checks,
 block-size/channel native benchmark reports, export-time ASR aliasing reports,
@@ -63,16 +62,12 @@ cd trainer
 UV_CACHE_DIR=../.uv-cache uv sync
 ```
 
-Install Python extras as needed:
+Install the TensorFlow training/export extra:
 
 ```bash
 # Canonical Keras/TensorFlow training and RTNeural export path
 cd trainer
 UV_CACHE_DIR=../.uv-cache uv sync --extra tensorflow
-
-# Optional PyTorch compatibility backend
-cd trainer
-UV_CACHE_DIR=../.uv-cache uv sync --extra training
 ```
 
 On Apple Silicon, the `tensorflow` extra also installs `tensorflow-metal` for
@@ -331,7 +326,7 @@ Create `projects/demo/train.json`:
   "run_id": "run_001",
   "run_dir": "projects/demo/runs/run_001",
   "prepared_dir": "projects/demo/audio/prepared",
-  "preset": "lstm_standard",
+  "preset": "wavenet_tcn_balanced",
   "backend": "keras",
   "epochs": 20,
   "batch_size": 16,
@@ -353,54 +348,32 @@ UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python -m rttrainer train \
 ```
 
 The run folder receives checkpoints, metrics, preview WAVs, and test fixtures.
-Keras runs save `checkpoints/best-model.keras` plus checkpoint metadata. To use
-the optional PyTorch path, set `"backend": "pytorch"` and install the
-`training` extra.
+Keras runs save `checkpoints/best-model.keras` plus checkpoint metadata.
 
 Training samples windows with an energy-stratified pass and reserves long
-excerpts for streaming validation and preview audio. Recurrent presets also get
-one longer active context excerpt per epoch so hidden state sees more continuous
-audio than a single short window. Checkpoints use a validation score that is
-anchored by streaming ESR, with short-window ESR and an underpowered-output
-penalty to avoid selecting near-silent early checkpoints. If that validation
-score plateaus, the trainer lowers the learning rate before early stopping has a
-chance to stop the run. When `resample_training_windows` is enabled, validation
-and preview excerpts stay fixed, but the training windows rotate at
+excerpts for streaming validation and preview audio. Checkpoints use a
+validation score that is anchored by streaming ESR, with short-window ESR and an
+underpowered-output penalty to avoid selecting near-silent early checkpoints. If
+that validation score plateaus, the trainer lowers the learning rate before
+early stopping has a chance to stop the run. When `resample_training_windows` is
+enabled, validation and preview excerpts stay fixed, but the training windows rotate at
 `resample_interval_epochs` so long captures get broader coverage across long
 runs. By default, plateau patience is half the early-stop patience, the decay
 factor is `0.5`, and the floor is `1e-6`. Progress events and `history.json`
 record streaming ESR, short-window diagnostics, validation score, output level
-ratio, learning rate, context-training loss, window rotation state, and any
-reductions.
+ratio, learning rate, window rotation state, and any reductions.
 
-Final reports compare normal continuous inference against a reset-per-chunk
-diagnostic render for recurrent presets. If the reset render has much better ESR
-and correlation, the report flags recurrent state drift and writes extra
-`chunk-reset-prediction.wav` / `chunk-reset-residual.wav` previews. Treat the
-normal continuous prediction as the export truth; the chunk-reset audio is a
-debugging aid that usually means the next run should try a finite-memory Conv1D
-baseline or longer recurrent context.
+The app UI now exposes only WaveNet-family presets and built-in recipes. Older
+Dense/GRU/LSTM/Conv1D fixture support may remain in tests and helper scripts for
+RTNeural layer coverage, but it is no longer a recommended product training
+path.
 
-Current Keras-first presets are:
+Current product presets are:
 
-- `dense_only`: memoryless Dense baseline for very fast checks.
-- `gru_light`: compact GRU recurrent model.
-- `lstm_light`: low-CPU LSTM recurrent model.
-- `lstm_standard`: default LSTM recurrent model.
-- `conv1d_light`: causal Conv1D model.
-- `conv1d_bn_prelu`: causal Conv1D with safe BatchNorm/PReLU; this is the
-  compact finite-memory baseline for capture sanity checks.
-- `conv1d_stack_prelu`: stacked causal Conv1D/PReLU with dilations and a
-  pre-emphasis MSE default loss. This is now the fast CPU fallback and sanity
-  check for amp/pedal captures.
 - `wavenet_tcn_fast`: smaller RTNeural-safe WaveNet-style TCN for a faster
-  quality probe.
+  capture/alignment sanity check.
 - `wavenet_tcn_balanced`: the current default amp quality path, matching the
   proven legacy `wavenet_tcn` architecture.
-- `wavenet_tcn_balanced_tanh15`: research balanced WaveNet with smoothed
-  `tanh(x / 1.5)` training, exported as standard RTNeural `tanh`.
-- `wavenet_tcn_balanced_tanh18`: research balanced WaveNet with smoothed
-  `tanh(x / 1.8)` training for ASR comparisons.
 - `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement
   runs, especially crunch/rhythm/high-gain tones. Benchmark before treating
   quality exports as plugin-ready.
@@ -418,18 +391,13 @@ Current Keras-first presets are:
   nonlinearities. On RHYTHM4 it beat the best multi-run tanh15 export in one
   run and roughly halved average ASR. It is RTNeural-safe, but it does not
   include true A2 residual/skip topology.
-- `wavenet_tcn_separable_fast`: experimental grouped/dilated Conv1D plus 1x1
-  pointwise WaveNet variant. It has Python/native parity coverage, but current
-  dynamic RTNeural benchmarks do not beat `wavenet_tcn_balanced`; use it only
-  for runtime research.
-- `wavenet_tcn`: legacy balanced WaveNet preset kept for existing runs and
-  checkpoint compatibility.
-- `conv_gru_hybrid`: causal Conv1D front-end feeding a compact GRU.
 
 Newly initialized presets use a bounded `tanh` output layer so long streaming
 previews cannot run away into clipped full-scale prediction WAVs.
 
-The PyTorch compatibility backend is currently limited to the LSTM presets.
+The runtime settings may still show optional backend/device information, but
+the current product workflow expects TensorFlow/Keras for WaveNet training and
+export.
 
 Research notes from the PANAMA paper and related WaveNet amp-modeling work are
 captured in
@@ -636,9 +604,8 @@ UV_CACHE_DIR=../.uv-cache uv run --extra tensorflow python \
   ../scripts/smoke_rtneural_keras_layers.py
 ```
 
-That smoke covers Dense-only, GRU, causal Conv1D, supported activations
-(`tanh`, `relu`, `sigmoid`, `softmax`, `elu`), and the safe 1D
-BatchNorm/PReLU path.
+That smoke covers internal RTNeural layer/export compatibility. The app's
+product preset picker remains WaveNet-only.
 
 Tauri sidecar workflow smoke:
 

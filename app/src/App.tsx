@@ -152,55 +152,6 @@ const targetLabels: Record<TargetKind, string> = {
 
 const presets: PresetOption[] = [
   {
-    id: "dense_only",
-    label: "Dense",
-    detail: "2x Dense, tanh",
-    cpu: "Tiny CPU",
-    backends: ["keras"],
-  },
-  {
-    id: "gru_light",
-    label: "GRU",
-    detail: "1x GRU, hidden 10",
-    cpu: "Low CPU",
-    backends: ["keras"],
-  },
-  {
-    id: "lstm_light",
-    label: "Light",
-    detail: "1x LSTM, hidden 12",
-    cpu: "Low CPU",
-    backends: ["keras", "pytorch"],
-  },
-  {
-    id: "lstm_standard",
-    label: "Standard",
-    detail: "1x LSTM, hidden 16",
-    cpu: "Default",
-    backends: ["keras", "pytorch"],
-  },
-  {
-    id: "conv1d_light",
-    label: "Conv1D",
-    detail: "Causal Conv1D, 8 filters",
-    cpu: "Fast",
-    backends: ["keras"],
-  },
-  {
-    id: "conv1d_bn_prelu",
-    label: "Conv + PReLU",
-    detail: "Conv1D, BatchNorm, PReLU",
-    cpu: "Moderate",
-    backends: ["keras"],
-  },
-  {
-    id: "conv1d_stack_prelu",
-    label: "Stacked Conv",
-    detail: "4x causal Conv1D, PReLU",
-    cpu: "Moderate",
-    backends: ["keras"],
-  },
-  {
     id: "wavenet_tcn_fast",
     label: "WaveNet Fast",
     detail: "6x dilated causal Conv1D",
@@ -213,6 +164,7 @@ const presets: PresetOption[] = [
     detail: "Depthwise dilated Conv1D + 1x1 mix",
     cpu: "Experimental",
     backends: ["keras"],
+    hidden: true,
   },
   {
     id: "wavenet_tcn_balanced",
@@ -227,6 +179,7 @@ const presets: PresetOption[] = [
     detail: "Balanced WaveNet, smoothed tanh",
     cpu: "Research",
     backends: ["keras"],
+    hidden: true,
   },
   {
     id: "wavenet_tcn_balanced_tanh18",
@@ -234,6 +187,7 @@ const presets: PresetOption[] = [
     detail: "Balanced WaveNet, smoother tanh",
     cpu: "Research",
     backends: ["keras"],
+    hidden: true,
   },
   {
     id: "wavenet_tcn",
@@ -271,6 +225,7 @@ const presets: PresetOption[] = [
     detail: "Quality WaveNet, smoother tanh",
     cpu: "Research",
     backends: ["keras"],
+    hidden: true,
   },
   {
     id: "wavenet_tcn_a2_prelu",
@@ -279,33 +234,26 @@ const presets: PresetOption[] = [
     cpu: "Research",
     backends: ["keras"],
   },
-  {
-    id: "conv_gru_hybrid",
-    label: "Hybrid",
-    detail: "Conv1D front-end + GRU",
-    cpu: "Moderate",
-    backends: ["keras"],
-  },
 ];
 
-const visiblePresets = presets.filter((preset) => !preset.hidden);
+const visiblePresets = presets.filter((preset) => !preset.hidden && isWaveNetPreset(preset.id));
 
 const builtInTrainingRecipes = [
   {
     id: "builtin_smoke",
     source: "built_in",
-    name: "Quick smoke",
-    description: "Fast pipeline check before spending time on a run.",
-    modelPreset: "conv_gru_hybrid",
-    epochs: 4,
+    name: "WaveNet quick check",
+    description: "Short WaveNet pass to verify alignment, gain, and sidecar flow.",
+    modelPreset: "wavenet_tcn_fast",
+    epochs: 12,
     batchSize: 16,
-    learningRate: 0.001,
-    sequenceLength: 4096,
+    learningRate: 0.0008,
+    sequenceLength: 8192,
     maxWindows: 512,
-    resampleTrainingWindows: false,
+    resampleTrainingWindows: true,
     resampleIntervalEpochs: 1,
-    earlyStoppingPatience: 0,
-    earlyStoppingMinDelta: 0.0001,
+    earlyStoppingPatience: 4,
+    earlyStoppingMinDelta: 0.00005,
   },
   {
     id: "builtin_balanced",
@@ -370,86 +318,6 @@ const builtInTrainingRecipes = [
     resampleIntervalEpochs: 1,
     earlyStoppingPatience: 20,
     earlyStoppingMinDelta: 0.00005,
-  },
-  {
-    id: "builtin_wavenet_fast",
-    source: "built_in",
-    name: "WaveNet fast",
-    description: "Faster high-gain probe before a deeper quality run.",
-    modelPreset: "wavenet_tcn_fast",
-    epochs: 80,
-    batchSize: 16,
-    learningRate: 0.0008,
-    sequenceLength: 8192,
-    maxWindows: 2048,
-    resampleTrainingWindows: true,
-    resampleIntervalEpochs: 1,
-    earlyStoppingPatience: 10,
-    earlyStoppingMinDelta: 0.00005,
-  },
-  {
-    id: "builtin_wavenet_efficient",
-    source: "built_in",
-    name: "WaveNet separable",
-    description: "Experimental grouped-Conv1D WaveNet for RTNeural runtime research.",
-    modelPreset: "wavenet_tcn_separable_fast",
-    epochs: 120,
-    batchSize: 16,
-    learningRate: 0.0007,
-    sequenceLength: 8192,
-    maxWindows: 4096,
-    resampleTrainingWindows: true,
-    resampleIntervalEpochs: 1,
-    earlyStoppingPatience: 12,
-    earlyStoppingMinDelta: 0.00005,
-  },
-  {
-    id: "builtin_wavenet_aliasing_probe",
-    source: "built_in",
-    name: "WaveNet anti-alias probe",
-    description: "Research run using smoothed tanh to compare ESR against export ASR.",
-    modelPreset: "wavenet_tcn_balanced_tanh18",
-    epochs: 120,
-    batchSize: 16,
-    learningRate: 0.0007,
-    sequenceLength: 8192,
-    maxWindows: 4096,
-    resampleTrainingWindows: true,
-    resampleIntervalEpochs: 1,
-    earlyStoppingPatience: 12,
-    earlyStoppingMinDelta: 0.00005,
-  },
-  {
-    id: "builtin_stacked_conv_fallback",
-    source: "built_in",
-    name: "Stacked Conv fallback",
-    description: "Fast CPU sanity check when WaveNet runtime cost is too high.",
-    modelPreset: "conv1d_stack_prelu",
-    epochs: 80,
-    batchSize: 16,
-    learningRate: 0.001,
-    sequenceLength: 8192,
-    maxWindows: 2048,
-    resampleTrainingWindows: true,
-    resampleIntervalEpochs: 1,
-    earlyStoppingPatience: 10,
-    earlyStoppingMinDelta: 0.0001,
-  },
-  {
-    id: "builtin_conv_baseline",
-    source: "built_in",
-    name: "Conv baseline",
-    description: "Smaller finite-memory pass for capture sanity checks.",
-    modelPreset: "conv1d_bn_prelu",
-    epochs: 40,
-    batchSize: 16,
-    learningRate: 0.001,
-    sequenceLength: 8192,
-    maxWindows: 2048,
-    resampleTrainingWindows: true,
-    resampleIntervalEpochs: 1,
-    earlyStoppingPatience: 6,
-    earlyStoppingMinDelta: 0.0001,
   },
 ] satisfies TrainingRecipeOption[];
 
@@ -1067,33 +935,29 @@ function RuntimeStatus({
   onRefresh: () => void;
   onSave: (settings: RuntimeSettings) => void;
 }) {
-  const [backend, setBackend] = useState<RuntimeBackend>(
-    settings?.selected_backend ?? "keras",
-  );
+  const backend: RuntimeBackend = "keras";
   const [selectedDevice, setSelectedDevice] = useState(settings?.selected_device ?? "auto");
   const [externalPythonPath, setExternalPythonPath] = useState(
     settings?.external_python_path ?? "",
   );
 
   useEffect(() => {
-    setBackend(settings?.selected_backend ?? "keras");
     setSelectedDevice(settings?.selected_device ?? "auto");
     setExternalPythonPath(settings?.external_python_path ?? "");
-  }, [settings?.external_python_path, settings?.selected_backend, settings?.selected_device]);
+  }, [settings?.external_python_path, settings?.selected_device]);
 
   const packageVersions = inspection?.package_versions ?? {};
   const deviceOptions = useMemo(
-    () => runtimeDeviceOptions(backend, inspection),
-    [backend, inspection],
+    () => runtimeDeviceOptions(inspection),
+    [inspection],
   );
-  const selectedDeviceWarning = runtimeDeviceWarning(backend, selectedDevice, inspection);
+  const selectedDeviceWarning = runtimeDeviceWarning(selectedDevice, inspection);
   const runtimeSource = settings?.external_python_path
     ? "External"
     : status?.trainer_sidecar_present
       ? "Sidecar"
       : "uv dev";
   const hasChanges =
-    backend !== (settings?.selected_backend ?? "keras") ||
     selectedDevice !== (settings?.selected_device ?? "auto") ||
     externalPythonPath.trim() !== (settings?.external_python_path ?? "");
 
@@ -1137,11 +1001,11 @@ function RuntimeStatus({
         </div>
         <div>
           <dt>Backend</dt>
-          <dd>{backendLabel(settings?.selected_backend ?? "keras")}</dd>
+          <dd>TensorFlow/Keras</dd>
         </div>
         <div>
           <dt>Device</dt>
-          <dd>{runtimeDeviceLabel(selectedDevice, backend, inspection)}</dd>
+          <dd>{runtimeDeviceLabel(selectedDevice, inspection)}</dd>
         </div>
       </dl>
 
@@ -1157,7 +1021,6 @@ function RuntimeStatus({
         <PackageVersion label="TensorFlow" value={packageVersions.tensorflow ?? inspection?.tensorflow_version} />
         <PackageVersion label="Keras" value={packageVersions.keras ?? inspection?.keras_version} />
         <PackageVersion label="TF Metal" value={packageVersions["tensorflow-metal"]} />
-        <PackageVersion label="PyTorch" value={packageVersions.torch ?? inspection?.torch_version} />
       </div>
 
       <form
@@ -1165,22 +1028,12 @@ function RuntimeStatus({
         onSubmit={(event) => {
           event.preventDefault();
           onSave({
-            selected_backend: backend,
+            selected_backend: "keras",
             selected_device: selectedDevice,
             external_python_path: externalPythonPath.trim() || null,
           });
         }}
       >
-        <label>
-          Backend
-          <select
-            value={backend}
-            onChange={(event) => setBackend(event.target.value as RuntimeBackend)}
-          >
-            <option value="keras">TensorFlow/Keras</option>
-            <option value="pytorch">PyTorch</option>
-          </select>
-        </label>
         <label>
           Training device
           <select
@@ -2001,7 +1854,7 @@ function TrainView({
     defaultTrainingRecipe.earlyStoppingMinDelta,
   );
   const [maxWindows, setMaxWindows] = useState(defaultTrainingRecipe.maxWindows);
-  const [resampleTrainingWindows, setResampleTrainingWindows] = useState(
+  const [resampleTrainingWindows, setResampleTrainingWindows] = useState<boolean>(
     defaultTrainingRecipe.resampleTrainingWindows,
   );
   const [resampleIntervalEpochs, setResampleIntervalEpochs] = useState(
@@ -2013,8 +1866,9 @@ function TrainView({
   const [preview, setPreview] = useState<RunPreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const selectedRecipe = recipeOptions.find((recipe) => recipe.id === selectedRecipeId) ?? null;
-  const selectedPreset = presets.find((item) => item.id === preset) ?? presets[0];
-  const selectedPresetSupported = selectedPreset.backends.includes(backend);
+  const selectedPreset = presets.find((item) => item.id === preset) ?? visiblePresets[0];
+  const selectedPresetSupported =
+    isWaveNetPreset(selectedPreset.id) && selectedPreset.backends.includes(backend);
   const resumeCandidates = useMemo(
     () => compatibleResumeRuns(project.runs, preset, backend),
     [backend, preset, project.runs],
@@ -2548,7 +2402,7 @@ function TrainView({
           loading={previewBusy}
           report={preview?.report ?? null}
         />
-        <RunTable runs={project.runs} />
+        <RunComparison runs={project.runs} exports={project.exports} />
       </div>
     </div>
   );
@@ -2977,7 +2831,10 @@ function ExportView({
         .sort((left, right) => timestampMs(right.created_at) - timestampMs(left.created_at)),
     [project.runs],
   );
-  const recommendedRun = useMemo(() => bestCompletedRun(completedRuns), [completedRuns]);
+  const recommendedRun = useMemo(
+    () => bestExportCandidateRun(completedRuns, project.exports),
+    [completedRuns, project.exports],
+  );
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -3074,7 +2931,7 @@ function SelectedExportRun({
         </small>
       </div>
       <div className="selected-run-stats">
-        {recommended ? <span className="badge">Best ESR</span> : null}
+        {recommended ? <span className="badge">Recommended</span> : null}
         <Metric label="ESR" value={run.metrics ? run.metrics.esr.toFixed(3) : "none"} />
         <Metric
           label="RTF"
@@ -3183,7 +3040,13 @@ function GainGuidance({ audio }: { audio: AudioReport }) {
   );
 }
 
-function RunTable({ runs }: { runs: TrainingRun[] }) {
+function RunComparison({
+  runs,
+  exports,
+}: {
+  runs: TrainingRun[];
+  exports: ExportPackage[];
+}) {
   if (runs.length === 0) {
     return (
       <SetupRequired
@@ -3194,24 +3057,96 @@ function RunTable({ runs }: { runs: TrainingRun[] }) {
     );
   }
 
+  const completedRuns = runs.filter((run) => run.status === "completed" && run.metrics);
+  const bestQuality = bestCompletedRun(completedRuns);
+  const bestExport = bestExportCandidateRun(completedRuns, exports);
+  const bestRuntime = bestRuntimeRun(completedRuns, exports);
+  const sortedRuns = [...runs].sort(
+    (left, right) => timestampMs(right.created_at) - timestampMs(left.created_at),
+  );
+
   return (
-    <div className="table">
-      <div className="table-head">
-        <span>Preset</span>
-        <span>Status</span>
-        <span>Device</span>
-        <span>ESR</span>
-        <span>RTF</span>
+    <div className="run-comparison">
+      <div className="run-comparison-summary">
+        <RunDecisionCard
+          label="Export pick"
+          run={bestExport}
+          detail="Best score across ESR, ASR, validation, and runtime reports."
+        />
+        <RunDecisionCard
+          label="Lowest ESR"
+          run={bestQuality}
+          detail="Best training metric before export-side checks."
+        />
+        <RunDecisionCard
+          label="Fastest native"
+          run={bestRuntime}
+          detail="Highest native RTNeural realtime factor when known."
+        />
       </div>
-      {runs.map((run) => (
-        <div className="table-row" key={run.id}>
-          <span>{run.preset}</span>
-          <span>{run.status}</span>
-          <span>{run.device}</span>
-          <span>{run.metrics ? run.metrics.esr.toFixed(3) : run.status}</span>
-          <span>{run.metrics ? `${run.metrics.realtime_factor.toFixed(0)}x` : "none"}</span>
+      <div className="table run-table">
+        <div className="table-head">
+          <span>Decision</span>
+          <span>Preset</span>
+          <span>Status</span>
+          <span>ESR</span>
+          <span>ASR</span>
+          <span>Native RTF</span>
+          <span>Updated</span>
         </div>
-      ))}
+        {sortedRuns.map((run) => {
+          const item = exportForRun(exports, run.id);
+          const worstAsr = exportWorstAsr(item);
+          const nativeFactor = exportNativeRealtimeFactor(item) ?? run.metrics?.realtime_factor ?? null;
+          const badges = runDecisionBadges(run, item, {
+            bestExportRunId: bestExport?.id ?? null,
+            bestQualityRunId: bestQuality?.id ?? null,
+            bestRuntimeRunId: bestRuntime?.id ?? null,
+          });
+          return (
+            <div className="table-row" key={run.id}>
+              <span className="run-decision-cell">
+                {badges.map((badge) => (
+                  <em className={`decision-badge ${badge.tone}`} key={badge.label}>
+                    {badge.label}
+                  </em>
+                ))}
+              </span>
+              <span>
+                <strong>{presetDisplayLabel(run.preset)}</strong>
+                <small>{shortId(run.id)}</small>
+              </span>
+              <span>{run.status}</span>
+              <span>{run.metrics ? run.metrics.esr.toFixed(3) : "none"}</span>
+              <span>{worstAsr !== null ? formatPercent(worstAsr) : "not exported"}</span>
+              <span>{nativeFactor !== null ? `${nativeFactor.toFixed(2)}x` : "unknown"}</span>
+              <span>{formatReportDate(run.updated_at || run.created_at)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RunDecisionCard({
+  label,
+  run,
+  detail,
+}: {
+  label: string;
+  run: TrainingRun | null;
+  detail: string;
+}) {
+  return (
+    <div className="run-decision-card">
+      <span>{label}</span>
+      <strong>{run ? presetDisplayLabel(run.preset) : "pending"}</strong>
+      <small>
+        {run?.metrics
+          ? `${run.metrics.esr.toFixed(3)} ESR · ${shortId(run.id)}`
+          : detail}
+      </small>
     </div>
   );
 }
@@ -4042,7 +3977,7 @@ function eventType(event: SidecarProgressEvent) {
 
 function recommendPreset(
   project: ProjectDetail,
-  backend: RuntimeBackend,
+  _backend: RuntimeBackend,
 ): PresetRecommendation {
   const duration = getNumber(project.audio?.capture_profile ?? null, "duration_seconds");
   const confidence = project.audio?.latency_confidence ?? 0;
@@ -4059,53 +3994,38 @@ function recommendPreset(
     (rmsDelta !== null && rmsDelta >= 5) ||
     (headroom !== null && headroom < 6);
 
-  if (backend === "pytorch") {
-    reasons.push("PyTorch parity is currently limited to LSTM presets.");
-    if (duration !== null && duration < 20) {
-      return {
-        presetId: "lstm_light",
-        label: "Light LSTM",
-        confidence: "medium",
-        reasons: [...reasons, "Short captures benefit from the lower-risk light model."],
-      };
-    }
-    return {
-      presetId: "lstm_standard",
-      label: "Standard LSTM",
-      confidence: "medium",
-      reasons: [...reasons, "It is the safest PyTorch-compatible default."],
-    };
-  }
-
   if (warningCodes.has("capture_level_low")) {
     reasons.push("The capture looks too quiet for a high-confidence quality run.");
     return {
-      presetId: "conv1d_bn_prelu",
-      label: "Conv baseline",
+      presetId: "wavenet_tcn_fast",
+      label: "WaveNet Fast",
       confidence: "low",
-      reasons: [...reasons, "Fix the capture level first if this baseline also sounds weak."],
+      reasons: [
+        ...reasons,
+        "Use this only as a quick learnability check, then fix capture gain before a final run.",
+      ],
     };
   }
 
   if (project.target_kind === "line" || project.target_kind === "generic") {
-    reasons.push("Line/generic captures often need a quick memoryless baseline first.");
+    reasons.push("Line and generic captures still use the same WaveNet export path.");
     return {
-      presetId: "dense_only",
-      label: "Dense",
+      presetId: "wavenet_tcn_fast",
+      label: "WaveNet Fast",
       confidence: "medium",
-      reasons,
+      reasons: [...reasons, "Start compact and compare the preview before a deeper run."],
     };
   }
 
   if (warningCodes.has("rms_mismatch")) {
-    reasons.push("Input and target levels differ enough to warrant a quick sanity run.");
+    reasons.push("Input and target levels differ enough to review gain before a long run.");
     return {
-      presetId: "conv1d_bn_prelu",
-      label: "Conv baseline",
+      presetId: "wavenet_tcn_fast",
+      label: "WaveNet Fast",
       confidence: "medium",
       reasons: [
         ...reasons,
-        "If the residual sounds mostly level-related, fix the capture gain before a long WaveNet run.",
+        "If the residual sounds mostly level-related, fix the capture gain before a quality run.",
       ],
     };
   }
@@ -4114,8 +4034,8 @@ function recommendPreset(
     if (confidence < 0.65) {
       reasons.push("The capture is long enough for WaveNet, but alignment needs review.");
       return {
-        presetId: denseOrDriven ? "wavenet_tcn_quality" : "wavenet_tcn_balanced",
-        label: denseOrDriven ? "WaveNet Quality" : "WaveNet Balanced",
+        presetId: denseOrDriven ? "wavenet_tcn_a2_prelu" : "wavenet_tcn_balanced",
+        label: denseOrDriven ? "WaveNet A2 PReLU" : "WaveNet Balanced",
         confidence: "low",
         reasons: [
           ...reasons,
@@ -4125,18 +4045,18 @@ function recommendPreset(
     }
 
     if (denseOrDriven) {
-      reasons.push("Dense or driven amp captures have consistently favored WaveNet Quality.");
+      reasons.push("Dense or driven amp captures have consistently favored deeper WaveNet models.");
       if (gainVerdict === "healthy") {
         reasons.push("Gain staging looks healthy enough for a slower quality run.");
       }
       return {
-        presetId: "wavenet_tcn_quality",
-        label: "WaveNet Quality",
+        presetId: "wavenet_tcn_a2_prelu",
+        label: "WaveNet A2 PReLU",
         confidence: confidence >= 0.75 ? "high" : "medium",
         reasons: [
           ...reasons,
-          "Use this when crunch/rhythm tones still leave audible residual detail.",
-          "Compare WaveNet Fast if native benchmark headroom is weak.",
+          "Use WaveNet Quality as the conservative comparison if the A2 run plateaus.",
+          "Export and check ASR/native runtime before choosing the final package.",
         ],
       };
     }
@@ -4174,37 +4094,35 @@ function recommendPreset(
   }
 
   if (duration !== null && duration >= 45 && confidence >= 0.65) {
-    reasons.push("The capture has enough material for a fast finite-memory sanity model.");
+    reasons.push("The capture has enough material for a fast WaveNet sanity run.");
     if (headroom !== null && headroom < 3) {
       reasons.push("Peak headroom is tight, so inspect residual peaks before a WaveNet quality run.");
     }
     return {
-      presetId: ampLike ? "wavenet_tcn_fast" : "conv1d_stack_prelu",
-      label: ampLike ? "WaveNet Fast" : "Stacked Conv",
+      presetId: "wavenet_tcn_fast",
+      label: "WaveNet Fast",
       confidence: "medium",
       reasons: [
         ...reasons,
-        ampLike
-          ? "Use balanced or quality next if the preview suggests the capture is learnable."
-          : "Use this as a fast check before spending time on a larger model.",
+        "Use balanced, quality, or A2 next if the preview suggests the capture is learnable.",
       ],
     };
   }
 
   if (duration !== null && duration < 15) {
-    reasons.push("Short captures should start with a compact recurrent model.");
+    reasons.push("The capture is short for amp modeling, so keep this as a quick check.");
     return {
-      presetId: "gru_light",
-      label: "GRU",
+      presetId: "wavenet_tcn_fast",
+      label: "WaveNet Fast",
       confidence: "medium",
-      reasons,
+      reasons: [...reasons, "A longer capture is still recommended for a final model."],
     };
   }
 
-  reasons.push("Amp and pedal captures usually need short-term memory.");
+  reasons.push("Amp and pedal captures are now routed through WaveNet by default.");
   return {
-    presetId: "lstm_standard",
-    label: "Standard LSTM",
+    presetId: "wavenet_tcn_balanced",
+    label: "WaveNet Balanced",
     confidence: confidence >= 0.65 ? "high" : "low",
     reasons:
       confidence >= 0.65
@@ -4242,7 +4160,8 @@ function trainingRecipeFromCustom(recipe: TrainingRecipe): TrainingRecipeOption 
 }
 
 function recipeModelSupported(modelPreset: string, backend: RuntimeBackend) {
-  return Boolean(presets.find((preset) => preset.id === modelPreset)?.backends.includes(backend));
+  const preset = presets.find((item) => item.id === modelPreset);
+  return Boolean(preset && isWaveNetPreset(modelPreset) && preset.backends.includes(backend));
 }
 
 function resumePresetsCompatible(sourcePreset: string, targetPreset: string) {
@@ -4313,7 +4232,6 @@ function qualityContinuationLearningRate(preset: string) {
 function normalizeRunBackend(backend: string) {
   const normalized = backend.trim().toLowerCase();
   if (normalized === "tensorflow" || normalized === "tf") return "keras";
-  if (normalized === "torch") return "pytorch";
   return normalized;
 }
 
@@ -4338,9 +4256,103 @@ function bestCompletedRun(runs: TrainingRun[]) {
   }, null);
 }
 
+function bestExportCandidateRun(runs: TrainingRun[], exports: ExportPackage[]) {
+  return runs.reduce<TrainingRun | null>((best, run) => {
+    if (!run.metrics) return best;
+    if (!best) return run;
+    const runScore = runExportScore(run, exportForRun(exports, run.id));
+    const bestScore = runExportScore(best, exportForRun(exports, best.id));
+    if (runScore !== bestScore) return runScore < bestScore ? run : best;
+    return timestampMs(run.created_at) > timestampMs(best.created_at) ? run : best;
+  }, null);
+}
+
+function bestRuntimeRun(runs: TrainingRun[], exports: ExportPackage[]) {
+  return runs.reduce<TrainingRun | null>((best, run) => {
+    if (!run.metrics) return best;
+    if (!best) return run;
+    const runFactor =
+      exportNativeRealtimeFactor(exportForRun(exports, run.id)) ??
+      run.metrics.realtime_factor ??
+      0;
+    const bestFactor =
+      exportNativeRealtimeFactor(exportForRun(exports, best.id)) ??
+      best.metrics?.realtime_factor ??
+      0;
+    if (runFactor !== bestFactor) return runFactor > bestFactor ? run : best;
+    return timestampMs(run.created_at) > timestampMs(best.created_at) ? run : best;
+  }, null);
+}
+
+function runExportScore(run: TrainingRun, item: ExportPackage | null) {
+  const esr = run.metrics?.esr ?? Number.POSITIVE_INFINITY;
+  const worstAsr = exportWorstAsr(item);
+  const validationPenalty =
+    item?.status === "failed" ? 1 : item?.status === "ready" ? 0 : 0.025;
+  const aliasingPenalty = worstAsr !== null ? worstAsr * 0.75 : 0.015;
+  const runtime = exportNativeRealtimeFactor(item) ?? run.metrics?.realtime_factor ?? null;
+  const runtimePenalty = runtime !== null && runtime < 1 ? 0.15 : 0;
+  return esr + aliasingPenalty + validationPenalty + runtimePenalty;
+}
+
+function exportForRun(exports: ExportPackage[], runId: string) {
+  return (
+    exports
+      .filter((item) => item.run_id === runId)
+      .sort((left, right) => timestampMs(right.created_at) - timestampMs(left.created_at))[0] ??
+    null
+  );
+}
+
+function exportWorstAsr(item: ExportPackage | null) {
+  return getNestedNumber(item?.package_metadata ?? null, ["aliasing", "worst_asr"]);
+}
+
+function exportNativeRealtimeFactor(item: ExportPackage | null) {
+  return (
+    getNestedNumber(item?.package_metadata ?? null, [
+      "benchmark_matrix",
+      "fastest_passing_backend",
+      "realtime_factor",
+    ]) ?? getNumber(item?.benchmark_report ?? null, "realtime_factor")
+  );
+}
+
+function runDecisionBadges(
+  run: TrainingRun,
+  item: ExportPackage | null,
+  leaders: {
+    bestExportRunId: string | null;
+    bestQualityRunId: string | null;
+    bestRuntimeRunId: string | null;
+  },
+) {
+  const badges: Array<{ label: string; tone: "good" | "warning" | "danger" | "neutral" }> = [];
+  if (run.id === leaders.bestExportRunId) badges.push({ label: "Export pick", tone: "good" });
+  if (run.id === leaders.bestQualityRunId) badges.push({ label: "Lowest ESR", tone: "neutral" });
+  if (run.id === leaders.bestRuntimeRunId) badges.push({ label: "Fastest", tone: "neutral" });
+  if (run.status === "running" || run.status === "preparing" || run.status === "queued") {
+    badges.push({ label: "Running", tone: "warning" });
+  }
+  if (run.status === "failed" || run.status === "interrupted") {
+    badges.push({ label: "Recover", tone: "danger" });
+  }
+  if (item?.status === "ready") badges.push({ label: "Exported", tone: "good" });
+  if (item?.status === "failed") badges.push({ label: "Validation failed", tone: "danger" });
+  const worstAsr = exportWorstAsr(item);
+  if (worstAsr !== null && worstAsr >= 0.08) {
+    badges.push({ label: "ASR warning", tone: worstAsr >= 0.16 ? "danger" : "warning" });
+  }
+  if (badges.length === 0 && run.status === "completed") {
+    badges.push({ label: item ? "Review" : "Export to validate", tone: "neutral" });
+  }
+  if (badges.length === 0) badges.push({ label: "Waiting", tone: "neutral" });
+  return badges.slice(0, 3);
+}
+
 function exportRunOptionLabel(run: TrainingRun, recommendedRunId: string | null) {
   return [
-    run.id === recommendedRunId ? "Best ESR" : null,
+    run.id === recommendedRunId ? "Recommended" : null,
     presetDisplayLabel(run.preset),
     run.metrics ? `ESR ${run.metrics.esr.toFixed(3)}` : "No metrics",
     `${run.epochs} epochs`,
@@ -4733,94 +4745,64 @@ function legacyWarnings(warnings: string[]): AudioWarning[] {
   }));
 }
 
-function backendLabel(backend: RuntimeBackend) {
-  return backend === "pytorch" ? "PyTorch" : "TensorFlow/Keras";
-}
-
-function runtimeDeviceOptions(backend: RuntimeBackend, inspection: DeviceInspection | null) {
+function runtimeDeviceOptions(inspection: DeviceInspection | null) {
   const mpsAvailable = Boolean(inspection?.mps_available && inspection?.mps_built);
   const cudaAvailable = Boolean(inspection?.cuda_available);
   const tensorflowGpuAvailable = Boolean(inspection?.tensorflow_gpus?.length);
-  if (backend === "keras") {
-    return [
-      { value: "auto", label: "Auto", available: true },
-      { value: "cpu", label: "CPU", available: true },
-      {
-        value: "mps",
-        label:
-          mpsAvailable && tensorflowGpuAvailable
-            ? "MPS/Metal GPU"
-            : mpsAvailable
-              ? "MPS needs TF Metal"
-              : "MPS unavailable",
-        available: mpsAvailable && tensorflowGpuAvailable,
-      },
-      {
-        value: "cuda",
-        label:
-          cudaAvailable && tensorflowGpuAvailable
-            ? "CUDA GPU"
-            : cudaAvailable
-              ? "CUDA needs TF GPU"
-              : "CUDA unavailable",
-        available: cudaAvailable && tensorflowGpuAvailable,
-      },
-    ];
-  }
-
   return [
     { value: "auto", label: "Auto", available: true },
     { value: "cpu", label: "CPU", available: true },
-    { value: "mps", label: mpsAvailable ? "MPS" : "MPS unavailable", available: mpsAvailable },
+    {
+      value: "mps",
+      label:
+        mpsAvailable && tensorflowGpuAvailable
+          ? "MPS/Metal GPU"
+          : mpsAvailable
+            ? "MPS needs TF Metal"
+            : "MPS unavailable",
+      available: mpsAvailable && tensorflowGpuAvailable,
+    },
     {
       value: "cuda",
-      label: cudaAvailable ? "CUDA" : "CUDA unavailable",
-      available: cudaAvailable,
+      label:
+        cudaAvailable && tensorflowGpuAvailable
+          ? "CUDA GPU"
+          : cudaAvailable
+            ? "CUDA needs TF GPU"
+            : "CUDA unavailable",
+      available: cudaAvailable && tensorflowGpuAvailable,
     },
   ];
 }
 
 function runtimeDeviceLabel(
   device: string,
-  backend: RuntimeBackend,
   inspection: DeviceInspection | null,
 ) {
   if (device === "auto") {
-    const inspectedDevice =
-      backend === "pytorch" ? inspection?.torch_selected_device : inspection?.selected_device;
+    const inspectedDevice = inspection?.selected_device;
     return inspectedDevice ? `Auto (${inspectedDevice})` : "Auto";
   }
-  if (device === "mps") return backend === "keras" ? "MPS/Metal GPU" : "MPS";
+  if (device === "mps") return "MPS/Metal GPU";
   if (device === "cuda") return "CUDA";
   if (device === "cpu") return "CPU";
   return device;
 }
 
 function runtimeDeviceWarning(
-  backend: RuntimeBackend,
   device: string,
   inspection: DeviceInspection | null,
 ) {
   const tensorflowGpuAvailable = Boolean(inspection?.tensorflow_gpus?.length);
-  if (backend === "keras") {
-    if (device !== "auto" && device !== "cpu" && !tensorflowGpuAvailable) {
-      return "TensorFlow/Keras does not currently report a GPU for this runtime.";
-    }
-    if (
-      device === "auto" &&
-      Boolean(inspection?.mps_available && inspection?.mps_built) &&
-      !tensorflowGpuAvailable
-    ) {
-      return "PyTorch reports MPS, but TensorFlow/Keras does not. Switch to PyTorch for MPS, or install/configure tensorflow-metal for Keras GPU training.";
-    }
-    return null;
+  if (device !== "auto" && device !== "cpu" && !tensorflowGpuAvailable) {
+    return "TensorFlow/Keras does not currently report a GPU for this runtime.";
   }
-  if (device === "auto" || device === "cpu") return null;
-  if (device === "mps" && !Boolean(inspection?.mps_available && inspection?.mps_built)) {
-    return "PyTorch does not currently report MPS availability.";
-  }
-  if (device === "cuda" && !Boolean(inspection?.cuda_available)) {
-    return "PyTorch does not currently report CUDA availability.";
+  if (
+    device === "auto" &&
+    Boolean(inspection?.mps_available && inspection?.mps_built) &&
+    !tensorflowGpuAvailable
+  ) {
+    return "TensorFlow/Keras does not currently report a GPU. MPS/CUDA selection may require tensorflow-metal or a TensorFlow GPU build.";
   }
   return null;
 }
