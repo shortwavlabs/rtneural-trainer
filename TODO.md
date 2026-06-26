@@ -217,6 +217,22 @@ Recommended next move:
 
 ## P2: Optional Runtime Integrations
 
+- [ ] Day 2: prototype fused RTNeural A2/ResidualTCN runtime support.
+  - Owner: Codex after MVP/release confidence is boring.
+  - This is not required for MVP because `wavenet_tcn_a2_prelu` is already
+    RTNeural-safe, exports with the existing dynamic JSON path, and is giving
+    strong high-gain results.
+  - Keep `wavenet_tcn_a2_prelu` as the current high-gain product candidate.
+  - Later, add a constrained fused `a2_wavenet` or `residual_tcn` layer in
+    `/Users/shortwavlabs/Workspace/rt-neural/RTNeural`
+    (`shortwavlabs/rtneural-extended`) to match the NAM A2 residual/skip/head
+    topology.
+  - First milestone: prove numerical parity against NAM Core for the provided
+    A2 `.nam` model before wiring any trainer export path to the new layer.
+  - Defer generic graph execution, arbitrary `.nam` import, FiLM, gated modes,
+    slimmable switching, and plugin-side productization until the constrained
+    A2 layer proves useful.
+
 - [ ] Review `.aidax` format and license obligations.
   - Owner: You for format/license decision, Codex for implementation after
     approval.

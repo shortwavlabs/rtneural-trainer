@@ -15,13 +15,15 @@ per-layer skip accumulation, input mix-in paths, a layer-array head convolution,
 and optional slimmable submodel selection. Those are graph/topology features
 that RTNeural's current dynamic `Model<T>` does not expose.
 
-Best next step:
+MVP decision:
 
 1. Keep `wavenet_tcn_a2_prelu` as the current trainer/export candidate.
-2. Add a new fused dynamic RTNeural layer such as `a2_wavenet` or
-   `residual_tcn`.
-3. Target the exact A2 subset used by the provided model first.
-4. Validate against NAM Core output before exposing it as a trainer export.
+2. Treat true RTNeural A2 runtime support as a day-2 item, not an MVP
+   dependency.
+3. When MVP/release confidence is boring, add a new fused dynamic RTNeural layer
+   such as `a2_wavenet` or `residual_tcn`.
+4. Target the exact A2 subset used by the provided model first.
+5. Validate against NAM Core output before exposing it as a trainer export.
 
 ## Sources Inspected
 
@@ -240,8 +242,10 @@ Cons:
 - First version should target a constrained A2 subset, not all possible NAM
   WaveNet configs.
 
-Recommendation: do this after the current trainer app stabilizes around the
-WaveNet-only preset set.
+Recommendation: do this as day-2 runtime work after the current trainer app
+stabilizes around the WaveNet-only preset set. It is not required for MVP
+because `wavenet_tcn_a2_prelu` is already RTNeural-safe and producing strong
+results with the existing dynamic JSON path.
 
 ### Option D: Embed NAM Core Beside RTNeural In The Plugin
 
@@ -401,10 +405,17 @@ the smallest change that closes that gap.
 
 ## Decision
 
-For this project, the next RTNeural-side research implementation should be a
-constrained fused A2/ResidualTCN layer in `shortwavlabs/rtneural-extended`.
+For this project, the next RTNeural-side research implementation should
+eventually be a constrained fused A2/ResidualTCN layer in
+`shortwavlabs/rtneural-extended`, but it is a day-2 item rather than an MVP
+requirement.
 
-Do not attempt full NAM conversion first. The first milestone should be:
+The MVP path should remain `wavenet_tcn_a2_prelu`: it is already RTNeural-safe,
+works with the current exporter/validator/plugin path, and has produced strong
+high-gain results without requiring changes to RTNeural itself.
+
+When we do pick up the day-2 A2 runtime work, do not attempt full NAM conversion
+first. The first milestone should be:
 
 - hand-convert the provided A2 standard submodel into a prototype RTNeural
   `a2_wavenet` JSON
