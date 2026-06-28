@@ -171,6 +171,10 @@ class TrainingResumeTests(unittest.TestCase):
             "preemphasis_mse",
         )
         self.assertEqual(
+            resolve_training_loss_name({}, get_preset("wavenet_tcn_edge")),
+            "preemphasis_mse",
+        )
+        self.assertEqual(
             resolve_training_loss_name({}, get_preset("wavenet_tcn_balanced")),
             "mrstft_preemphasis",
         )
@@ -239,6 +243,14 @@ class TrainingResumeTests(unittest.TestCase):
         self.assertGreater(
             estimate_realtime_factor(get_preset("wavenet_tcn_clean")),
             estimate_realtime_factor(get_preset("wavenet_tcn_balanced")),
+        )
+        self.assertGreater(
+            estimate_realtime_factor(get_preset("wavenet_tcn_edge")),
+            estimate_realtime_factor(get_preset("wavenet_tcn_balanced")),
+        )
+        self.assertLess(
+            estimate_realtime_factor(get_preset("wavenet_tcn_edge")),
+            estimate_realtime_factor(get_preset("wavenet_tcn_clean")),
         )
 
     def test_high_gain_wavenet_has_lower_default_learning_rate(self) -> None:
@@ -379,6 +391,7 @@ class TrainingResumeTests(unittest.TestCase):
         for preset_id in (
             "wavenet_tcn_fast",
             "wavenet_tcn_clean",
+            "wavenet_tcn_edge",
             "wavenet_tcn",
             "wavenet_tcn_balanced",
             "wavenet_tcn_balanced_tanh15",

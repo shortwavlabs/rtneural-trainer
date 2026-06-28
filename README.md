@@ -378,6 +378,10 @@ Current product presets are:
   bounded output, `preemphasis_mse`, and a lower default learning rate so clean
   polarity/phase/EQ transfer is not forced through the nonlinear high-gain
   recipe.
+- `wavenet_tcn_edge`: clean-inspired long-field Conv1D path with gentle
+  smoothed-tanh hidden nonlinearities for edge-of-breakup amp captures that are
+  too nonlinear for the pure clean path but do not need the heavier A2/PReLU
+  high-gain recipe.
 - `wavenet_tcn_balanced`: the current default amp quality path, matching the
   proven legacy `wavenet_tcn` architecture.
 - `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement

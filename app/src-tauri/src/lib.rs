@@ -32,6 +32,7 @@ const MODEL_PRESETS: &[&str] = &[
     "conv1d_stack_prelu",
     "wavenet_tcn_fast",
     "wavenet_tcn_clean",
+    "wavenet_tcn_edge",
     "wavenet_tcn",
     "wavenet_tcn_balanced",
     "wavenet_tcn_balanced_tanh15",
@@ -201,6 +202,7 @@ fn estimated_realtime_factor_for_preset(preset: &str) -> Option<f64> {
     match preset {
         "wavenet_tcn_fast" => Some(8.0),
         "wavenet_tcn_clean" => Some(5.0),
+        "wavenet_tcn_edge" => Some(4.0),
         "wavenet_tcn"
         | "wavenet_tcn_balanced"
         | "wavenet_tcn_balanced_tanh15"
@@ -5708,6 +5710,10 @@ mod tests {
         assert_eq!(
             normalize_model_preset("wavenet_tcn_clean"),
             Ok("wavenet_tcn_clean")
+        );
+        assert_eq!(
+            normalize_model_preset("wavenet_tcn_edge"),
+            Ok("wavenet_tcn_edge")
         );
 
         let recipe = normalize_training_recipe(SaveTrainingRecipeRequest {

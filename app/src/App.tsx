@@ -166,6 +166,13 @@ const presets: PresetOption[] = [
     backends: ["keras"],
   },
   {
+    id: "wavenet_tcn_edge",
+    label: "WaveNet Edge",
+    detail: "Clean field, gentle tanh breakup",
+    cpu: "Moderate",
+    backends: ["keras"],
+  },
+  {
     id: "wavenet_tcn_separable_fast",
     label: "WaveNet Separable",
     detail: "Depthwise dilated Conv1D + 1x1 mix",
@@ -292,6 +299,22 @@ const builtInTrainingRecipes = [
     resampleTrainingWindows: true,
     resampleIntervalEpochs: 1,
     earlyStoppingPatience: 20,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_edge",
+    source: "built_in",
+    name: "WaveNet edge breakup",
+    description: "Clean-inspired long field with gentle nonlinear breakup.",
+    modelPreset: "wavenet_tcn_edge",
+    epochs: 180,
+    batchSize: 16,
+    learningRate: 0.00015,
+    sequenceLength: 8192,
+    maxWindows: 8192,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
+    earlyStoppingPatience: 24,
     earlyStoppingMinDelta: 0.00005,
   },
   {
@@ -4124,7 +4147,7 @@ function recommendPreset(
         reasons: [
           ...reasons,
           "Use this long-field linear path before a nonlinear quality run.",
-          "If it plateaus early, compare WaveNet Balanced as the fallback.",
+          "If it plateaus early, compare WaveNet Edge before the heavier quality recipes.",
         ],
       };
     }
@@ -4149,7 +4172,7 @@ function recommendPreset(
         presetId: "wavenet_tcn_clean",
         label: "WaveNet Clean Linear",
         confidence: confidence >= 0.75 ? "high" : "medium",
-        reasons: [...reasons, "Compare Balanced only if the preview sounds underfit."],
+        reasons: [...reasons, "Compare WaveNet Edge if the preview misses light breakup."],
       };
     }
 
@@ -4277,7 +4300,8 @@ function isLongWaveNetPreset(preset: string) {
     isQualityWaveNetPreset(preset) ||
     preset === "wavenet_tcn_high_gain" ||
     preset === "wavenet_tcn_a2_prelu" ||
-    preset === "wavenet_tcn_clean"
+    preset === "wavenet_tcn_clean" ||
+    preset === "wavenet_tcn_edge"
   );
 }
 
@@ -4305,6 +4329,7 @@ function qualityContinuationLearningRate(preset: string) {
   }
   if (preset === "wavenet_tcn_a2_prelu") return 0.00012;
   if (preset === "wavenet_tcn_clean") return 0.0001;
+  if (preset === "wavenet_tcn_edge") return 0.00008;
   if (preset === "wavenet_tcn_fast") return 0.0003;
   return 0.0002;
 }

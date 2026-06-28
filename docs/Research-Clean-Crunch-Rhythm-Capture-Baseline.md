@@ -522,12 +522,29 @@ linear hidden Conv1D layers, a longer dilated receptive field, pre-emphasis MSE,
 and a lower default learning rate. It should be tested against the clean amp
 capture before concluding that the capture itself is bad.
 
+Clean preset test update: `run_7bc1f90acb3943bc9345443df6eac850` confirmed the
+hypothesis. `wavenet_tcn_clean` reached ESR `0.0675`, MAE `0.0095`, RMSE
+`0.0133`, and state-continuous correlation `0.9663`, a large improvement over
+the A2/PReLU result. The curve improved steadily, selected epoch `60`, then
+plateaued through epoch `80`; prediction RMS was slightly high around the best
+checkpoint. That suggests the preset learned the clean linear transfer but may
+not have enough controlled nonlinearity for this particular amp setting, which
+is clean with single coils but closer to edge-of-breakup with humbuckers.
+
+Follow-up implemented: `wavenet_tcn_edge` keeps the clean preset's long
+receptive field, pre-emphasis MSE, and low learning-rate stance, but adds gentle
+smoothed-tanh hidden nonlinearities. It should be tested as the immediate A/B
+against `wavenet_tcn_clean` before returning to `wavenet_tcn_quality` or
+`wavenet_tcn_a2_prelu`.
+
 ## Product Changes Suggested By This Baseline
 
 - Recommend `wavenet_tcn_balanced` as the default first quality run for amp
   captures.
 - Recommend `wavenet_tcn_clean` for quiet, well-aligned clean/lower-gain amp
   captures before trying the nonlinear quality or A2 recipes.
+- Recommend `wavenet_tcn_edge` as the next A/B when clean improves dramatically
+  but misses light breakup or humbucker-driven compression.
 - Recommend `wavenet_tcn_quality` automatically for crunch/high-gain captures,
   for any run where balanced leaves high residual RMS, or when the user chooses
   maximum fidelity.

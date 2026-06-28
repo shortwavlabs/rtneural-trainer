@@ -189,6 +189,9 @@ the same 151.6 second DI2 performance. The practical training rule is now:
   target RMS and stable alignment. It is a long-field, mostly linear WaveNet
   path meant to learn polarity, phase, and EQ behavior before reaching for the
   nonlinear high-gain recipes.
+- Try `wavenet_tcn_edge` when the clean preset improves dramatically but still
+  misses light breakup, especially captures that are clean with single coils but
+  start to compress or hair up with humbuckers.
 - Use `wavenet_tcn_quality` when maximum fidelity matters, when balanced leaves
   audible residual detail, or for dense crunch/rhythm/pedal tones.
 - Try `wavenet_tcn_quality_tanh15` when a quality WaveNet sounds close but the
