@@ -173,6 +173,13 @@ const presets: PresetOption[] = [
     backends: ["keras"],
   },
   {
+    id: "wavenet_tcn_edge_detail",
+    label: "WaveNet Edge Detail",
+    detail: "12ch edge, smoother tanh",
+    cpu: "Heavy",
+    backends: ["keras"],
+  },
+  {
     id: "wavenet_tcn_separable_fast",
     label: "WaveNet Separable",
     detail: "Depthwise dilated Conv1D + 1x1 mix",
@@ -315,6 +322,22 @@ const builtInTrainingRecipes = [
     resampleTrainingWindows: true,
     resampleIntervalEpochs: 1,
     earlyStoppingPatience: 24,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_edge_detail",
+    source: "built_in",
+    name: "WaveNet edge detail",
+    description: "Higher-capacity edge run for output match and upper-band detail.",
+    modelPreset: "wavenet_tcn_edge_detail",
+    epochs: 220,
+    batchSize: 16,
+    learningRate: 0.00012,
+    sequenceLength: 8192,
+    maxWindows: 8192,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
+    earlyStoppingPatience: 30,
     earlyStoppingMinDelta: 0.00005,
   },
   {
@@ -4301,7 +4324,8 @@ function isLongWaveNetPreset(preset: string) {
     preset === "wavenet_tcn_high_gain" ||
     preset === "wavenet_tcn_a2_prelu" ||
     preset === "wavenet_tcn_clean" ||
-    preset === "wavenet_tcn_edge"
+    preset === "wavenet_tcn_edge" ||
+    preset === "wavenet_tcn_edge_detail"
   );
 }
 
@@ -4330,6 +4354,7 @@ function qualityContinuationLearningRate(preset: string) {
   if (preset === "wavenet_tcn_a2_prelu") return 0.00012;
   if (preset === "wavenet_tcn_clean") return 0.0001;
   if (preset === "wavenet_tcn_edge") return 0.00008;
+  if (preset === "wavenet_tcn_edge_detail") return 0.00006;
   if (preset === "wavenet_tcn_fast") return 0.0003;
   return 0.0002;
 }

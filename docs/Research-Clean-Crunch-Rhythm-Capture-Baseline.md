@@ -537,6 +537,35 @@ smoothed-tanh hidden nonlinearities. It should be tested as the immediate A/B
 against `wavenet_tcn_clean` before returning to `wavenet_tcn_quality` or
 `wavenet_tcn_a2_prelu`.
 
+Edge preset result: `run_7df98a86c7dc4224bca691e1a39d200f` confirmed that the
+light nonlinearity was the missing ingredient. It reached ESR `0.00362`, MAE
+`0.00206`, RMSE `0.00308`, peak residual `0.0896`, and correlation `0.9982`.
+Compared with `wavenet_tcn_clean`, ESR improved by roughly `18.6x`, MAE by
+`4.6x`, and RMSE by `4.3x`. The best epoch was the final epoch `180`, with no
+learning-rate reductions and no early stop, so the model was still improving.
+Prediction RMS ratio was `0.981`, only about `-0.16 dB`, and the remaining
+preview residual was mostly in very high bands where target energy is already
+tiny.
+
+Follow-up implemented: `wavenet_tcn_edge_detail` is the conservative refinement
+candidate for this exact situation. It keeps the Edge receptive field and
+pre-emphasis loss, raises the channel count from `8` to `12`, and uses a
+smoother `tanh(x / 2.2)` hidden nonlinearity. Use it to test whether more
+capacity and a gentler curve can reduce the last output-level and upper-band
+residual without jumping to the heavier high-gain recipes.
+
+Edge Detail result: `run_172e4ef1089d4b209ef0b5137c02317a` did not improve the
+capture in practice. It reached ESR `0.00378`, MAE `0.00209`, RMSE `0.00315`,
+peak residual `0.0871`, and correlation `0.9981`. That is still excellent, but
+regular Edge stayed slightly ahead on ESR/RMSE/MAE (`0.00362` ESR, `0.00308`
+RMSE, `0.00206` MAE). Detail only improved the isolated peak residual by about
+`3%` and tightened output level matching; the broad residual and high-frequency
+bands were slightly worse. For this clean-to-edge amp capture, the extra
+channels and smoother nonlinearity appear to add capacity without solving the
+remaining upper-band error. Keep `wavenet_tcn_edge` as the preferred preset and
+treat `wavenet_tcn_edge_detail` as a research-only A/B until another capture
+proves it can beat Edge.
+
 ## Product Changes Suggested By This Baseline
 
 - Recommend `wavenet_tcn_balanced` as the default first quality run for amp
@@ -545,6 +574,8 @@ against `wavenet_tcn_clean` before returning to `wavenet_tcn_quality` or
   captures before trying the nonlinear quality or A2 recipes.
 - Recommend `wavenet_tcn_edge` as the next A/B when clean improves dramatically
   but misses light breakup or humbucker-driven compression.
+- Keep `wavenet_tcn_edge_detail` as research-only for now; the first direct A/B
+  did not beat Edge on ESR, RMSE, MAE, or high-band residual.
 - Recommend `wavenet_tcn_quality` automatically for crunch/high-gain captures,
   for any run where balanced leaves high residual RMS, or when the user chooses
   maximum fidelity.

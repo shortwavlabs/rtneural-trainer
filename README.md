@@ -382,6 +382,10 @@ Current product presets are:
   smoothed-tanh hidden nonlinearities for edge-of-breakup amp captures that are
   too nonlinear for the pure clean path but do not need the heavier A2/PReLU
   high-gain recipe.
+- `wavenet_tcn_edge_detail`: higher-capacity edge variant with 12 channels and
+  smoother `tanh(x / 2.2)` hidden nonlinearities. It is research-only for now:
+  the first direct A/B slightly improved peak residual and output level matching
+  but did not beat regular Edge on ESR, RMSE, MAE, or high-band residual.
 - `wavenet_tcn_balanced`: the current default amp quality path, matching the
   proven legacy `wavenet_tcn` architecture.
 - `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement

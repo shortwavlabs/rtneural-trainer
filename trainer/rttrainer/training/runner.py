@@ -1229,6 +1229,8 @@ def estimate_realtime_factor(preset: PresetConfig) -> float:
         return 5.0
     if preset.preset_id == "wavenet_tcn_edge":
         return 4.0
+    if preset.preset_id == "wavenet_tcn_edge_detail":
+        return 3.0
     if preset.preset_id in {
         "wavenet_tcn",
         "wavenet_tcn_balanced",

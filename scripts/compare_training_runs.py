@@ -18,6 +18,7 @@ WAVENET_RUNTIME_ESTIMATES = {
     "wavenet_tcn_fast": 8.0,
     "wavenet_tcn_clean": 5.0,
     "wavenet_tcn_edge": 4.0,
+    "wavenet_tcn_edge_detail": 3.0,
     "wavenet_tcn": 3.0,
     "wavenet_tcn_balanced": 3.0,
     "wavenet_tcn_balanced_tanh15": 3.0,

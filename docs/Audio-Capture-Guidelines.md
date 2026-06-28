@@ -192,6 +192,9 @@ the same 151.6 second DI2 performance. The practical training rule is now:
 - Try `wavenet_tcn_edge` when the clean preset improves dramatically but still
   misses light breakup, especially captures that are clean with single coils but
   start to compress or hair up with humbuckers.
+- Treat `wavenet_tcn_edge_detail` as research-only for now. Its first direct
+  A/B against Edge slightly improved peak residual and output level matching,
+  but did not improve ESR, RMSE, MAE, or high-frequency residual.
 - Use `wavenet_tcn_quality` when maximum fidelity matters, when balanced leaves
   audible residual detail, or for dense crunch/rhythm/pedal tones.
 - Try `wavenet_tcn_quality_tanh15` when a quality WaveNet sounds close but the

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SCALED_TANH_ALPHAS = (1.5, 1.8)
+SCALED_TANH_ALPHAS = (1.5, 1.8, 2.2)
 
 
 @dataclass(frozen=True)
@@ -178,6 +178,20 @@ PRESETS: dict[str, PresetConfig] = {
         conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
         default_loss="preemphasis_mse",
         default_learning_rate=1.5e-4,
+    ),
+    "wavenet_tcn_edge_detail": PresetConfig(
+        preset_id="wavenet_tcn_edge_detail",
+        architecture="conv1d",
+        input_size=1,
+        hidden_size=12,
+        output_size=1,
+        num_layers=10,
+        kernel_size=7,
+        conv_filters=12,
+        conv_activation_alpha=2.2,
+        conv_dilations=(1, 2, 4, 8, 16, 32, 64, 128, 256, 512),
+        default_loss="preemphasis_mse",
+        default_learning_rate=1.2e-4,
     ),
     "wavenet_tcn": wavenet_tcn_preset(
         "wavenet_tcn",

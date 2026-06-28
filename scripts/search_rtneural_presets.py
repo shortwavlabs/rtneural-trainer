@@ -21,6 +21,7 @@ DEFAULT_PRESETS = (
     "wavenet_tcn_fast",
     "wavenet_tcn_clean",
     "wavenet_tcn_edge",
+    "wavenet_tcn_edge_detail",
     "wavenet_tcn_balanced",
     "wavenet_tcn_balanced_tanh15",
     "wavenet_tcn_balanced_tanh18",

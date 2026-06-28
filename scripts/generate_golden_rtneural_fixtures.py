@@ -30,6 +30,7 @@ GOLDEN_FIXTURE_SEEDS = {
     "wavenet_tcn_fast": 19,
     "wavenet_tcn_clean": 29,
     "wavenet_tcn_edge": 30,
+    "wavenet_tcn_edge_detail": 31,
     "wavenet_tcn_balanced": 20,
     "wavenet_tcn_quality": 21,
     "wavenet_tcn_separable_fast": 22,
