@@ -28,7 +28,8 @@ def main() -> int:
     parser.add_argument("--keep", action="store_true")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--epochs", type=int, default=1)
-    args = parser.parse_args()
+    parser.add_argument("--preset", default="wavenet_tcn_fast")
+    args = parser.parse_args(strip_pnpm_separator(sys.argv[1:]))
 
     if not args.skip_build:
         stage_tauri_sidecars()
@@ -38,12 +39,12 @@ def main() -> int:
     validator = target_debug_binary("rtneural-validator")
     if args.keep:
         root = Path(tempfile.mkdtemp(prefix="rttrainer-tauri-workflow-"))
-        run_workflow(rttrainer, validator, root, args.epochs)
+        run_workflow(rttrainer, validator, root, args.epochs, preset=args.preset)
         print(f"kept Tauri workflow smoke project: {root}")
         return 0
 
     with tempfile.TemporaryDirectory(prefix="rttrainer-tauri-workflow-") as tmp:
-        run_workflow(rttrainer, validator, Path(tmp), args.epochs)
+        run_workflow(rttrainer, validator, Path(tmp), args.epochs, preset=args.preset)
     return 0
 
 
@@ -76,7 +77,14 @@ def verify_tauri_configuration() -> None:
         raise RuntimeError(f"Unexpected shell sidecar permissions: {sorted(allowed)}")
 
 
-def run_workflow(rttrainer: Path, validator: Path, root: Path, epochs: int) -> None:
+def run_workflow(
+    rttrainer: Path,
+    validator: Path,
+    root: Path,
+    epochs: int,
+    *,
+    preset: str = "wavenet_tcn_fast",
+) -> None:
     if not rttrainer.is_file():
         raise FileNotFoundError(f"rttrainer sidecar not found: {rttrainer}")
     if not validator.is_file():
@@ -122,12 +130,12 @@ def run_workflow(rttrainer: Path, validator: Path, root: Path, epochs: int) -> N
             "run_id": "tauri_smoke",
             "run_dir": str(run_dir),
             "prepared_dir": str(prepared_dir),
-            "preset": "lstm_light",
+            "preset": preset,
             "backend": "keras",
             "epochs": epochs,
             "batch_size": 4,
-            "learning_rate": 0.002,
-            "sequence_length": 64,
+            "learning_rate": 0.0007,
+            "sequence_length": 128,
             "max_windows": 24,
             "seed": 2026,
         },
@@ -151,7 +159,7 @@ def run_workflow(rttrainer: Path, validator: Path, root: Path, epochs: int) -> N
     )
     run([str(rttrainer), "export", "--manifest", str(export_manifest)], cwd=ROOT)
     export_package = read_json(export_dir / "package.json")
-    if export_package["preset"] != "lstm_light":
+    if export_package["preset"] != preset:
         raise RuntimeError(f"Unexpected export package: {export_package}")
 
     native_validation_report = export_dir / "native-validation-report.json"
@@ -202,6 +210,12 @@ def run_workflow(rttrainer: Path, validator: Path, root: Path, epochs: int) -> N
 def target_debug_binary(stem: str) -> Path:
     suffix = ".exe" if os.name == "nt" else ""
     return TAURI / "target" / "debug" / f"{stem}{suffix}"
+
+
+def strip_pnpm_separator(argv: list[str]) -> list[str]:
+    if argv and argv[0] == "--":
+        return argv[1:]
+    return argv
 
 
 def read_json(path: Path) -> dict[str, Any]:

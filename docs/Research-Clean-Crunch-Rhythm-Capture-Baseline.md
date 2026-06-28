@@ -12,9 +12,9 @@ were stereo dual-mono and prepared with the current mix-to-mono policy.
 
 WaveNet should be the primary quality lane across amp and overdrive pedal
 captures. The expanded evidence does not support treating
-`conv1d_stack_prelu` as the default medium/low-gain preset. It remains valuable
-as a very fast CPU fallback and sanity check, but it underfit the amp captures
-and trailed WaveNet on the overdrive pedal capture.
+`conv1d_stack_prelu` as the default medium/low-gain preset. It remains useful
+as a historical benchmark and internal RTNeural Conv1D/PReLU fixture, but it
+underfit the amp captures and trailed WaveNet on the overdrive pedal capture.
 
 The practical default should be:
 
@@ -28,7 +28,8 @@ The practical default should be:
 - Treat lead captures as a special review path when latency confidence is low
   or the target is very compressed.
 - Keep `wavenet_tcn_fast` as a quick WaveNet probe.
-- Keep `conv1d_stack_prelu` as a speed fallback, not the main amp-quality path.
+- Keep non-WaveNet presets out of product recipes unless a future constraint
+  reopens smaller runtime models.
 
 ## Second-Generation CLEAN3 Check
 
@@ -437,7 +438,7 @@ a bad WAV file or a contaminated target chain.
 | `wavenet_tcn_quality` | `0.0021` | `0.0095` | `0.9990` | `-40.49 dBFS` | `1.5x` | `118` | Best metric result; excellent. |
 | `wavenet_tcn_balanced` | `0.0044` | `0.0136` | `0.9978` | `-37.32 dBFS` | `3.0x` | `120` | Excellent practical runner-up. |
 | `wavenet_tcn_fast` | `0.0153` | `0.0254` | `0.9924` | `-31.90 dBFS` | `8.0x` | `119` | Good quick probe. |
-| `conv1d_stack_prelu` | `0.0267` | `0.0335` | `0.9872` | `-29.49 dBFS` | `120x` | `120` | Good fallback, but not best. |
+| `conv1d_stack_prelu` | `0.0267` | `0.0335` | `0.9872` | `-29.49 dBFS` | `120x` | `120` | Good historical fast result, but not best. |
 
 The overdrive pedal capture went very well. Latency confidence is high enough to
 trust, and both balanced and quality are excellent. Quality wins the metrics,
@@ -454,13 +455,12 @@ CPU budget matters.
    balanced slightly beat quality and separable-fast landed in the same quality
    range.
 
-2. Stacked Conv is currently a speed fallback.
+2. Stacked Conv is historical/internal coverage, not a product recipe.
 
    `conv1d_stack_prelu` is extremely fast, and it can produce good results on
    simpler captures, but it missed too much behavior on every amp capture in
-   this set and trailed WaveNet on the overdrive pedal capture. It should not be
-   the default quality recommendation unless future capture families prove a
-   repeatable exception.
+   this set and trailed WaveNet on the overdrive pedal capture. Keep it as an
+   internal export/parity fixture and historical comparison point.
 
 3. Rhythm needs more than one 120-epoch quality pass.
 
@@ -504,8 +504,8 @@ CPU budget matters.
   maximum fidelity.
 - Keep `wavenet_tcn_balanced` as the practical winner when balanced and quality
   tie, especially for lead-like captures or runtime-sensitive exports.
-- Demote `conv1d_stack_prelu` from "medium/low-gain default" to "fast CPU
-  fallback / sanity check" until further evidence.
+- Remove non-WaveNet presets from product recipes; keep them only as internal
+  exporter/parity fixtures and historical research comparisons.
 - Add report language that weighs residual RMS and correlation more strongly
   than isolated peak residual.
 - Add latency-review workflow copy for low-confidence high-gain captures:
@@ -516,8 +516,8 @@ CPU budget matters.
 ## Follow-Up Implemented
 
 - The default built-in training recipe now uses `wavenet_tcn_balanced`.
-- `wavenet_tcn_quality` is the high-gain/refinement recipe, while
-  `conv1d_stack_prelu` is labeled as a fast fallback.
+- `wavenet_tcn_quality` is the high-gain/refinement recipe; non-WaveNet presets
+  are no longer product-facing recipes.
 - The Align view now extracts and surfaces top latency candidates from the
   prepare warning so low-confidence captures can be checked before long runs.
 - Training reports now include an `excellent` tier and weigh residual RMS plus

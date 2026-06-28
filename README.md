@@ -29,12 +29,13 @@ plateau decay, run comparison/export recommendation, runtime inspection,
 target/prediction/residual playback, transient-aware latency candidate review
 with window agreement, golden RTNeural JSON fixtures, native parity checks,
 block-size/channel native benchmark reports, export-time ASR aliasing reports,
-smoothed-tanh WaveNet research presets, and debug/release smoke scripts.
+smoothed-tanh WaveNet research presets, debug packaged-sidecar train/export
+smoke, and release smoke scripts.
 
 Still deferred: signed/notarized release distribution, richer waveform/spectrum
-inspection, a full tiny train/export smoke inside an installed bundle, UI smoke
-tests with a real Tauri window, and any `.aidax` or generated player envelope
-until format/license review is complete.
+inspection, UI smoke tests with a real Tauri window, true installed-app bundle
+automation, and any `.aidax` or generated player envelope until format/license
+review is complete.
 
 ## Requirements
 
@@ -632,8 +633,11 @@ pnpm --filter rtneural-trainer-app smoke:packaged-app
 ```
 
 The packaged-app smoke defaults to a debug, no-bundle Tauri build and reuses
-prebuilt sidecar binaries so it can run quickly in CI. Pass `-- --bundle` to the
-script if you need to exercise platform bundle creation too.
+prebuilt sidecar binaries so it can run quickly in CI. It verifies the copied
+sidecars beside the built app binary, then runs a tiny generated-WAV
+prepare/train/export/native-validate/benchmark workflow through those packaged
+sidecars. Pass `-- --bundle` to the script if you need to exercise platform
+bundle creation too.
 
 Release package smoke:
 
@@ -646,7 +650,8 @@ pnpm --filter rtneural-trainer-app smoke:release-package -- --bundles app,dmg
 `.github/workflows/ci.yml` runs the fast desktop gate on Ubuntu: dependency
 setup, TensorFlow trainer sync, native validator build/smoke, Python tests,
 golden fixture freshness, frontend build, development sidecar staging, Rust
-tests, Tauri UI smoke, Tauri workflow smoke, and debug packaged-app smoke.
+tests, Tauri UI smoke, Tauri workflow smoke, and debug packaged-app tiny
+workflow smoke.
 
 GitHub Actions has a separate `Release Packaging` workflow for the slow path. It
 runs the release package smoke on Linux, macOS, and Windows, then uploads the

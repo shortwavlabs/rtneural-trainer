@@ -215,7 +215,7 @@ set -euo pipefail
 ROOT={shell_quote(str(ROOT))}
 cd "$ROOT/trainer"
 export UV_CACHE_DIR="${{UV_CACHE_DIR:-$ROOT/.uv-cache}}"
-extras="${{RTTRAINER_UV_EXTRAS:-tensorflow training}}"
+extras="${{RTTRAINER_UV_EXTRAS:-tensorflow}}"
 uv_args=()
 for extra in $extras; do
   uv_args+=(--extra "$extra")

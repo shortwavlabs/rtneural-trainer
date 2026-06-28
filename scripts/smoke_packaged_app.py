@@ -5,7 +5,10 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+from smoke_tauri_workflow import run_workflow
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,11 +19,16 @@ TAURI = APP / "src-tauri"
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Smoke-test the Tauri packaged-app build path with prebuilt sidecars. "
-            "Defaults to a debug, no-bundle build for CI speed."
+            "Smoke-test the Tauri packaged-app build path with prebuilt sidecars, "
+            "then run a tiny prepare/train/export/native-validation workflow through "
+            "the sidecars copied beside the app binary. Defaults to a debug, "
+            "no-bundle build for CI speed."
         )
     )
     parser.add_argument("--bundle", action="store_true", help="Generate platform bundles too.")
+    parser.add_argument("--epochs", type=int, default=1, help="Tiny workflow training epoch count.")
+    parser.add_argument("--keep-workflow", action="store_true", help="Keep the generated smoke project.")
+    parser.add_argument("--preset", default="wavenet_tcn_fast", help="Model preset for the tiny workflow.")
     parser.add_argument("--release", action="store_true", help="Use a release Tauri build.")
     args = parser.parse_args(strip_pnpm_separator(sys.argv[1:]))
 
@@ -55,6 +63,13 @@ def main() -> int:
 
     smoke_sidecar(copied_rttrainer, ["--version"], expected_status=0)
     smoke_sidecar(copied_validator, [], expected_status=2)
+    if args.keep_workflow:
+        workflow_root = Path(tempfile.mkdtemp(prefix="rttrainer-packaged-workflow-"))
+        run_workflow(copied_rttrainer, copied_validator, workflow_root, args.epochs, preset=args.preset)
+        print(f"kept packaged workflow smoke project: {workflow_root}")
+    else:
+        with tempfile.TemporaryDirectory(prefix="rttrainer-packaged-workflow-") as tmp:
+            run_workflow(copied_rttrainer, copied_validator, Path(tmp), args.epochs, preset=args.preset)
     print(f"packaged app smoke passed: {app_binary}")
     return 0
 

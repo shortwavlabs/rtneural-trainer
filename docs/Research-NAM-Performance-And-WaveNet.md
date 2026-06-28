@@ -40,11 +40,11 @@ are justified for high-gain captures.
 For product defaults, this suggests:
 
 - High gain: default to WaveNet/TCN quality presets.
-- Medium and low gain amp captures: start with WaveNet balanced; use Stacked
-  Conv as the fast CPU fallback until a different capture family proves it can
-  serve as the quality default.
-- Fast CPU preview/export checks: keep Dense, GRU, and smaller Conv presets as sanity and baseline
-  paths, not as the main high-gain quality lane.
+- Medium and low gain amp captures: start with WaveNet fast or balanced, then
+  move to quality/A2-inspired presets when the preview or residual calls for it.
+- Dense, GRU, LSTM, and smaller Conv presets are no longer product
+  recommendations. Keep them only as RTNeural exporter compatibility fixtures
+  and historical comparison points.
 
 ## NAM Repositories Reviewed
 
@@ -179,20 +179,18 @@ model size, latency, architecture, and inferred Conv1D receptive-field metadata.
 calibrate preset-specific pass/fail language from more captures rather than relying on one universal
 runtime threshold.
 
-### 4. Keep Stacked Conv as the fast fallback
+### 4. Treat Stacked Conv As A Historical Baseline
 
 On the clean/crunch/rhythm test set, Stacked Conv improved over the baseline
 Conv preset but lagged WaveNet on every amp capture. That does not make it a bad
-preset. It remains valuable when:
+preset, but it is no longer a product-facing recipe. It remains useful only as:
 
-- the tone is cleaner or less saturated
-- training speed matters
-- CPU budget is limited
-- user wants a quick first model before a quality run
+- a historical benchmark against the early experiments
+- an internal RTNeural Conv1D/PReLU export fixture
+- a sanity check when researching smaller future runtime models
 
-We should keep validating this with lead, edge-of-breakup, pedal, and line-level
-captures, but the current app should not describe it as the default amp-quality
-path.
+Future validation effort should go to WaveNet fast, balanced, quality, and
+A2-inspired variants unless a new product constraint reopens smaller models.
 
 ### 5. Improve package compatibility rather than adopt `.nam`
 
@@ -234,10 +232,12 @@ license metadata after format and licensing review.
 
 6. Make export quality gates architecture-aware: partially implemented.
 
-   Dense/GRU/LSTM/Stacked Conv/WaveNet should have different benchmark expectations. A small Dense
-   model and a WaveNet quality model should not be judged with identical runtime language. The first
-   runtime gate now uses `>= 1x` native real-time factor for exported models, and the WaveNet report
-   language is calibrated around the clean/crunch/rhythm baseline. Those captures
+   WaveNet fast, balanced, quality, and A2-inspired exports should have
+   different benchmark expectations. Tiny internal layer fixtures and full
+   quality models should not be judged with identical runtime language. The
+   first runtime gate now uses `>= 1x` native real-time factor for exported
+   models, and the WaveNet report language is calibrated around the
+   clean/crunch/rhythm baseline. Those captures
    drove the current `excellent`/`good`/`usable` pass; edge-of-breakup, lead,
    pedal, and bad-capture fixtures should drive the next threshold pass.
 

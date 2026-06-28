@@ -25,9 +25,10 @@ Recommended next move:
    candidate review with window agreement, export parity snapshots, and the
    native benchmark matrix are now in place; edge-of-breakup, lead, pedal,
    quiet, clipped, and stereo captures are the next useful evidence.
-2. `Codex` Add the packaged-app tiny train/export smoke.
-   This protects the production bundle path, not just the dev shell and jsdom
-   workflow.
+2. `Codex` Add stronger manifest/report validation.
+   The main happy path is now guarded by UI, workflow, and packaged-sidecar
+   smoke tests; the next useful hardening pass is clearer schema validation and
+   failure messages at the Python/Rust boundaries.
 3. `You` Decide the release/signing policy before we spend more time on release
    packaging details.
 
@@ -65,13 +66,16 @@ Recommended next move:
     jsdom suite as the portable CI/local smoke. A true `tauri-driver` window
     smoke can be added later on Linux/Windows runners if needed.
 
-- [ ] Add a packaged-app tiny train/export smoke.
+- [x] Add a packaged-app tiny train/export smoke.
   - Owner: Codex.
-  - Install or launch the built bundle, not only the debug no-bundle shell.
-  - Use the packaged sidecars from the app bundle.
-  - Create or load a tiny sample project, prepare audio, train, evaluate, export,
-    open/read the export folder, and verify validation/benchmark reports exist.
-  - Run on Linux, macOS, and Windows release-packaging jobs where feasible.
+  - Implemented as `pnpm --filter rtneural-trainer-app smoke:packaged-app`.
+  - Builds the Tauri app, verifies the copied packaged sidecars beside the app
+    binary, then runs a tiny generated-WAV prepare/train/export/native validate
+    and benchmark workflow through those copied sidecars.
+  - Defaults to a fast debug no-bundle build for CI; `-- --bundle` and
+    `-- --release` exercise platform bundle/release variants when needed.
+  - True installed-app window automation remains separate from this sidecar
+    workflow smoke.
 
 - [ ] Decide and implement release signing policy.
   - Owner: Shared.
@@ -101,12 +105,12 @@ Recommended next move:
   - Cover completed, cancelled, interrupted, and failed runs.
   - Confirm resume uses the latest safe checkpoint and appends durable events.
 
-- [ ] Retire non-WaveNet product paths from remaining docs/tests where safe.
+- [x] Retire non-WaveNet product paths from remaining docs/tests where safe.
   - Owner: Codex.
-  - Keep Dense/GRU/LSTM/Conv1D fixtures only where they prove RTNeural exporter
-    layer compatibility.
-  - Remove non-WaveNet wording from product guidance, UI smoke expectations, and
-    run comparison docs.
+  - Dense/GRU/LSTM/Conv1D fixtures remain only where they prove RTNeural
+    exporter layer compatibility.
+  - Product guidance, workflow smoke, packaged-app smoke, and preset-search
+    defaults now stay WaveNet-only.
   - Do not spend more time on recurrent-state training unless a future product
     requirement reopens that path.
 

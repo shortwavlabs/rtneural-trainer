@@ -527,7 +527,6 @@ For built-in presets, generate static RTNeural model types:
 - `wavenet_tcn_quality`
 - `wavenet_tcn_quality_tanh15`
 - `wavenet_tcn_quality_tanh18`
-- `conv1d_stack_prelu`
 
 Then compare:
 
