@@ -11,6 +11,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 TRAINER = PROJECT_ROOT / "trainer"
 DEFAULT_VALIDATOR = PROJECT_ROOT / "native/rtneural-validator/build/rtneural-validator"
+SMOKE_BENCHMARK_MIN_REALTIME_FACTOR = "0.01"
 sys.path.insert(0, str(TRAINER))
 
 from rttrainer.data.audio_io import write_wav_mono  # noqa: E402
@@ -116,6 +117,8 @@ def run_smoke(validator: Path, root: Path) -> None:
             "1",
             "--report",
             str(benchmark_report),
+            "--min-realtime-factor",
+            SMOKE_BENCHMARK_MIN_REALTIME_FACTOR,
         ],
         check=True,
     )

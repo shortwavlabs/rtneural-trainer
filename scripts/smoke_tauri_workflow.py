@@ -16,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app"
 TAURI = APP / "src-tauri"
 TRAINER = ROOT / "trainer"
+# Shared CI runners and debug sidecars are not stable performance gates; export
+# workflows still use the validator's default 1.0x threshold.
+SMOKE_BENCHMARK_MIN_REALTIME_FACTOR = "0.01"
 sys.path.insert(0, str(TRAINER))
 
 from rttrainer.data.audio_io import write_wav_mono  # noqa: E402
@@ -193,6 +196,8 @@ def run_workflow(
             "1",
             "--report",
             str(native_benchmark_report),
+            "--min-realtime-factor",
+            SMOKE_BENCHMARK_MIN_REALTIME_FACTOR,
         ],
         cwd=ROOT,
     )
@@ -200,10 +205,11 @@ def run_workflow(
     benchmark = read_json(native_benchmark_report)
     if validation["status"] != "pass" or benchmark["status"] != "pass":
         raise RuntimeError(f"Native reports failed: {validation} {benchmark}")
+    realtime_factor = as_positive_number(benchmark, "realtime_factor")
     print(
         "tauri workflow smoke passed: "
         f"validation={validation['max_abs_error']:.3e}, "
-        f"benchmark={benchmark['realtime_factor']:.2f}x"
+        f"benchmark={realtime_factor:.2f}x"
     )
 
 
@@ -225,6 +231,13 @@ def read_json(path: Path) -> dict[str, Any]:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def as_positive_number(payload: dict[str, Any], key: str) -> float:
+    value = payload.get(key)
+    if not isinstance(value, int | float) or not math.isfinite(value) or value <= 0:
+        raise RuntimeError(f"Expected positive finite {key}: {payload}")
+    return float(value)
 
 
 def run(command: list[str], *, cwd: Path) -> None:
