@@ -124,6 +124,53 @@ class AudioPipelineTests(unittest.TestCase):
         self.assertGreater(analysis.confidence, 0.8)
         self.assertEqual(analysis.candidates[0]["samples"], delay)
 
+    def test_latency_estimator_handles_inverted_clean_targets(self) -> None:
+        length = 64_000
+        delay = 31
+        dry = [0.0] * length
+        target = [0.0] * length
+        for index in range(1_000, 55_000):
+            sample = (
+                0.31 * deterministic_sample(index)
+                + 0.13 * deterministic_sample(index * 3)
+                + 0.06 * deterministic_sample(index * 7)
+            )
+            dry[index] = sample
+            target_index = index + delay
+            if target_index < length:
+                target[target_index] = -0.72 * sample
+
+        analysis = analyze_latency(dry, target)
+
+        self.assertEqual(analysis.estimated_samples, delay)
+        self.assertEqual(analysis.polarity, "inverted")
+        self.assertGreaterEqual(analysis.polarity_confidence, 0.5)
+        self.assertEqual(analysis.candidates[0]["samples"], delay)
+        self.assertEqual(analysis.candidates[0]["polarity"], "inverted")
+        self.assertLess(float(analysis.candidates[0]["signed_score"]), -0.5)
+
+    def test_prepare_reports_inverted_target_polarity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "input.wav"
+            target_path = root / "target.wav"
+            dry = alternating_signal(16_384)
+            target = ([0.0] * 29 + [-0.65 * sample for sample in dry])[: len(dry)]
+            write_wav_mono(input_path, dry, 48_000)
+            write_wav_mono(target_path, target, 48_000)
+
+            prepared = prepare_audio(input_path, target_path, root / "prepared")
+
+        latency = prepared.report["latency"]
+        self.assertEqual(latency["estimated_samples"], 29)
+        self.assertEqual(latency["polarity"], "inverted")
+        self.assertTrue(
+            any(
+                item["code"] == "polarity_inversion_detected"
+                for item in prepared.report["warning_details"]
+            )
+        )
+
     def test_latency_estimator_reports_window_agreement_for_compressed_tones(self) -> None:
         length = 60_000
         delay = 17

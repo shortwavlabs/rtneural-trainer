@@ -104,6 +104,8 @@ export interface LatencyReport {
   window_length_samples?: number | null;
   analysis_window_count?: number | null;
   score_margin?: number | null;
+  polarity?: "normal" | "inverted" | string | null;
+  polarity_confidence?: number | null;
   candidates?: LatencyCandidate[];
 }
 
@@ -114,6 +116,10 @@ export interface LatencyCandidate {
   signed_score?: number | null;
   preemphasis_score?: number | null;
   onset_score?: number | null;
+  normal_score?: number | null;
+  inverted_score?: number | null;
+  polarity?: "normal" | "inverted" | string | null;
+  polarity_confidence?: number | null;
   window_count?: number | null;
   vote_count?: number | null;
   agreement?: number | null;

@@ -159,6 +159,13 @@ const presets: PresetOption[] = [
     backends: ["keras"],
   },
   {
+    id: "wavenet_tcn_clean",
+    label: "WaveNet Clean Linear",
+    detail: "Linear long-field dilated Conv1D",
+    cpu: "Moderate",
+    backends: ["keras"],
+  },
+  {
     id: "wavenet_tcn_separable_fast",
     label: "WaveNet Separable",
     detail: "Depthwise dilated Conv1D + 1x1 mix",
@@ -269,6 +276,22 @@ const builtInTrainingRecipes = [
     resampleTrainingWindows: true,
     resampleIntervalEpochs: 1,
     earlyStoppingPatience: 12,
+    earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_clean",
+    source: "built_in",
+    name: "WaveNet clean linear",
+    description: "Long-field, mostly linear WaveNet path for clean amp captures.",
+    modelPreset: "wavenet_tcn_clean",
+    epochs: 160,
+    batchSize: 16,
+    learningRate: 0.0002,
+    sequenceLength: 8192,
+    maxWindows: 8192,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
+    earlyStoppingPatience: 20,
     earlyStoppingMinDelta: 0.00005,
   },
   {
@@ -1632,6 +1655,8 @@ function AlignView({
   const latencyCandidates = latencyCandidateDetails(project.audio);
   const latencyAgreement = finiteNumber(project.audio?.latency?.agreement);
   const latencyMargin = finiteNumber(project.audio?.latency?.score_margin);
+  const latencyPolarity = project.audio?.latency?.polarity === "inverted" ? "inverted" : "normal";
+  const polarityConfidence = finiteNumber(project.audio?.latency?.polarity_confidence);
   const waveformWindowSamples =
     ALIGNMENT_WAVEFORM_WINDOWS[waveformWindowIndex] ??
     ALIGNMENT_WAVEFORM_WINDOWS[DEFAULT_ALIGNMENT_WAVEFORM_WINDOW_INDEX];
@@ -1722,11 +1747,27 @@ function AlignView({
           {latencyMargin !== null ? (
             <Metric label="Score margin" value={latencyMargin.toFixed(3)} />
           ) : null}
+          {latencyPolarity === "inverted" ? (
+            <Metric
+              label="Polarity"
+              value={`inverted${
+                polarityConfidence !== null ? ` · ${Math.round(polarityConfidence * 100)}%` : ""
+              }`}
+            />
+          ) : null}
           <Metric
             label="Milliseconds"
             value={`${((effectiveLatency / sampleRate) * 1000).toFixed(2)} ms`}
           />
         </div>
+        {latencyPolarity === "inverted" ? (
+          <div className="notice notice-warning">
+            <AlertTriangle size={18} />
+            <span>
+              Target polarity appears inverted; training will preserve the captured amp output.
+            </span>
+          </div>
+        ) : null}
         <label className="range-control">
           Manual nudge
           <input
@@ -1747,9 +1788,16 @@ function AlignView({
                 const candidateNudge = candidateSamples - autoLatency;
                 const clampedNudge = clampNumber(candidateNudge, -256, 256);
                 const isActive = effectiveLatency === candidateSamples;
+                const isInverted = candidate.polarity === "inverted";
                 return (
                   <button
-                    className={isActive ? "chip active" : "chip"}
+                    className={[
+                      "chip",
+                      isActive ? "active" : "",
+                      isInverted ? "inverted" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
                     key={candidateSamples}
                     type="button"
                     title={latencyCandidateTitle(candidate)}
@@ -3993,6 +4041,12 @@ function recommendPreset(
     (targetRms !== null && targetRms > -19) ||
     (rmsDelta !== null && rmsDelta >= 5) ||
     (headroom !== null && headroom < 6);
+  const cleanOrLowGain =
+    ampLike &&
+    targetRms !== null &&
+    targetRms < -24 &&
+    (rmsDelta === null || rmsDelta < 2.5) &&
+    (headroom === null || headroom >= 5);
 
   if (warningCodes.has("capture_level_low")) {
     reasons.push("The capture looks too quiet for a high-confidence quality run.");
@@ -4061,6 +4115,20 @@ function recommendPreset(
       };
     }
 
+    if (cleanOrLowGain) {
+      reasons.push("This looks like a quieter, lower-gain amp capture with stable alignment.");
+      return {
+        presetId: "wavenet_tcn_clean",
+        label: "WaveNet Clean Linear",
+        confidence: confidence >= 0.75 ? "high" : "medium",
+        reasons: [
+          ...reasons,
+          "Use this long-field linear path before a nonlinear quality run.",
+          "If it plateaus early, compare WaveNet Balanced as the fallback.",
+        ],
+      };
+    }
+
     reasons.push("Long amp captures are now routed through WaveNet as the quality lane.");
     return {
       presetId: "wavenet_tcn_balanced",
@@ -4075,6 +4143,16 @@ function recommendPreset(
   }
 
   if (ampLike && duration !== null && duration >= 60) {
+    if (cleanOrLowGain && confidence >= 0.65) {
+      reasons.push("The capture is quiet enough to start with the clean linear WaveNet path.");
+      return {
+        presetId: "wavenet_tcn_clean",
+        label: "WaveNet Clean Linear",
+        confidence: confidence >= 0.75 ? "high" : "medium",
+        reasons: [...reasons, "Compare Balanced only if the preview sounds underfit."],
+      };
+    }
+
     reasons.push(
       confidence < 0.75
         ? "Alignment needs review, but WaveNet is still the better quality starting point."
@@ -4198,7 +4276,8 @@ function isLongWaveNetPreset(preset: string) {
   return (
     isQualityWaveNetPreset(preset) ||
     preset === "wavenet_tcn_high_gain" ||
-    preset === "wavenet_tcn_a2_prelu"
+    preset === "wavenet_tcn_a2_prelu" ||
+    preset === "wavenet_tcn_clean"
   );
 }
 
@@ -4225,6 +4304,7 @@ function qualityContinuationLearningRate(preset: string) {
     return 0.00015;
   }
   if (preset === "wavenet_tcn_a2_prelu") return 0.00012;
+  if (preset === "wavenet_tcn_clean") return 0.0001;
   if (preset === "wavenet_tcn_fast") return 0.0003;
   return 0.0002;
 }
@@ -4591,21 +4671,30 @@ function latencyCandidateDetails(audio: AudioReport | null | undefined): Latency
 
 function latencyCandidateLabel(candidate: LatencyCandidate) {
   const agreement = finiteNumber(candidate.agreement);
-  if (agreement === null) return `${candidate.samples} samples`;
-  return `${candidate.samples} samples · ${Math.round(agreement * 100)}%`;
+  const parts = [`${candidate.samples} samples`];
+  if (agreement !== null) parts.push(`${Math.round(agreement * 100)}%`);
+  if (candidate.polarity === "inverted") parts.push("inv");
+  return parts.join(" · ");
 }
 
 function latencyCandidateTitle(candidate: LatencyCandidate) {
   const score = finiteNumber(candidate.score);
   const onsetScore = finiteNumber(candidate.onset_score);
+  const signedScore = finiteNumber(candidate.signed_score);
+  const preemphasisScore = finiteNumber(candidate.preemphasis_score);
+  const invertedScore = finiteNumber(candidate.inverted_score);
   const voteCount = finiteNumber(candidate.vote_count);
   const windowCount = finiteNumber(candidate.window_count);
   const details = [
     `Set training latency to ${candidate.samples} samples`,
+    candidate.polarity === "inverted" ? "target polarity appears inverted" : null,
     voteCount !== null && windowCount !== null
       ? `${voteCount}/${windowCount} windows voted for this offset`
       : null,
     score !== null ? `score ${score.toFixed(3)}` : null,
+    invertedScore !== null ? `inverted ${invertedScore.toFixed(3)}` : null,
+    signedScore !== null ? `signed ${signedScore.toFixed(3)}` : null,
+    preemphasisScore !== null ? `pre ${preemphasisScore.toFixed(3)}` : null,
     onsetScore !== null ? `onset ${onsetScore.toFixed(3)}` : null,
   ];
   return details.filter(Boolean).join(" · ");

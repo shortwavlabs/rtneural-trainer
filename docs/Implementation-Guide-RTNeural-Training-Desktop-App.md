@@ -288,6 +288,7 @@ Product-exposed presets:
 | Preset ID | Architecture | Use |
 | --- | --- | --- |
 | `wavenet_tcn_fast` | Smaller WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Faster high-gain probe |
+| `wavenet_tcn_clean` | Long-field WaveNet-style dilated Conv1D stack with linear hidden activations, bounded output, pre-emphasis MSE, and lower default learning rate | Clean/lower-gain amp captures where polarity, phase, and EQ matter more than nonlinear saturation |
 | `wavenet_tcn_balanced` | Proven WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Default amp quality path; benchmark before export |
 | `wavenet_tcn_quality` | Wider/deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Slower crunch/rhythm/refinement path; benchmark before export |
 | `wavenet_tcn_quality_tanh15` | Quality WaveNet trained with smoothed `tanh(x / 1.5)` and exported by folding the scale into Conv1D weights | High-band residual and ASR research |
@@ -1362,6 +1363,7 @@ fixtures/rtneural-json/golden/
   conv1d_stack_prelu.rtneural.json
   wavenet_tcn.rtneural.json
   wavenet_tcn_fast.rtneural.json
+  wavenet_tcn_clean.rtneural.json
   wavenet_tcn_balanced.rtneural.json
   wavenet_tcn_balanced_tanh15.rtneural.json
   wavenet_tcn_balanced_tanh18.rtneural.json
@@ -1502,6 +1504,7 @@ presets may remain as internal parity fixtures but are not product recipes.
 | Preset | Keras Train/Build | JSON Export | Python Parity | Native Validate | Benchmark | Release |
 | --- | --- | --- | --- | --- | --- | --- |
 | `wavenet_tcn_fast` | Required | Required | Required | Required | Required | v1 |
+| `wavenet_tcn_clean` | Required | Required | Required | Required | Required | Clean/lower-gain candidate |
 | `wavenet_tcn_balanced` | Required | Required | Required | Required | Required | v1 |
 | `wavenet_tcn_quality` | Required | Required | Required | Required | Required | v1 |
 | `wavenet_tcn_quality_tanh15` | Required | Required | Required | Required | Required | High-gain candidate |
@@ -1609,7 +1612,8 @@ Model:
 - `wavenet_tcn_fast` for smoke/demo speed
 - RTNeural-safe WaveNet-style causal Conv1D stack
 - 1-2 epochs for smoke; longer `wavenet_tcn_balanced`,
-  `wavenet_tcn_quality`, or `wavenet_tcn_a2_prelu` runs for real captures
+  `wavenet_tcn_clean`, `wavenet_tcn_quality`, or `wavenet_tcn_a2_prelu` runs
+  for real captures
 
 Output:
 

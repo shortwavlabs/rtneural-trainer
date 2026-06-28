@@ -40,6 +40,10 @@ class LatencyScore:
     vote_count: int = 0
     agreement: float = 0.0
     window_scores: tuple[float, ...] = ()
+    normal_score: float = 0.0
+    inverted_score: float = 0.0
+    polarity: str = "normal"
+    polarity_confidence: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -61,7 +65,9 @@ class LatencyAnalysis:
     window_length_samples: int
     analysis_window_count: int
     score_margin: float
-    candidates: list[dict[str, int | float]]
+    candidates: list[dict[str, int | float | str]]
+    polarity: str = "normal"
+    polarity_confidence: float = 0.0
 
 
 LATENCY_MAX_LAG_SAMPLES = 4096
@@ -71,6 +77,9 @@ LATENCY_DISTINCT_CANDIDATE_DISTANCE = 8
 LATENCY_PREAMBLE_ANALYSIS_SAMPLES = 480_000
 LATENCY_PREAMBLE_SEARCH_RADIUS_SAMPLES = 256
 LATENCY_PREAMBLE_MAX_WINDOWS = 6
+LATENCY_INVERTED_POLARITY_MIN_FEATURE_SCORE = 0.55
+LATENCY_INVERTED_POLARITY_MIN_CORRELATION = 0.35
+LATENCY_INVERTED_POLARITY_MARGIN = 0.04
 
 
 def prepare_audio(
@@ -187,6 +196,8 @@ def prepare_audio(
             "window_length_samples": latency_analysis.window_length_samples,
             "analysis_window_count": latency_analysis.analysis_window_count,
             "score_margin": latency_analysis.score_margin,
+            "polarity": latency_analysis.polarity,
+            "polarity_confidence": latency_analysis.polarity_confidence,
             "candidates": latency_analysis.candidates,
         },
         "warnings": warnings,
@@ -523,11 +534,17 @@ def known_latency_analysis(latency_samples: int) -> LatencyAnalysis:
                 "signed_score": 1.0,
                 "preemphasis_score": 1.0,
                 "onset_score": 1.0,
+                "normal_score": 1.0,
+                "inverted_score": 0.0,
+                "polarity": "normal",
+                "polarity_confidence": 1.0,
                 "window_count": 0,
                 "vote_count": 0,
                 "agreement": 1.0,
             }
         ],
+        polarity="normal",
+        polarity_confidence=1.0,
     )
 
 
@@ -638,6 +655,8 @@ def analyze_latency(input_samples: list[float], target_samples: list[float]) -> 
         analysis_window_count=len(starts),
         score_margin=score_margin,
         candidates=candidates[:5],
+        polarity=best.polarity,
+        polarity_confidence=best.polarity_confidence,
     )
 
 
@@ -730,6 +749,8 @@ def analyze_latency_vectorized(
         analysis_window_count=len(starts),
         score_margin=score_margin,
         candidates=candidates[:5],
+        polarity=best.polarity,
+        polarity_confidence=best.polarity_confidence,
     )
 
 
@@ -745,18 +766,36 @@ def latency_analysis_details(analysis: LatencyAnalysis) -> list[dict[str, str]]:
             )
         ]
 
+    details: list[dict[str, str]] = []
+    if analysis.polarity == "inverted":
+        details.append(
+            warning_detail(
+                "polarity_inversion_detected",
+                "info",
+                "Target polarity appears inverted.",
+                (
+                    f"The selected latency candidate is {analysis.estimated_samples} samples "
+                    f"with {analysis.polarity_confidence:.0%} inverted-polarity evidence."
+                ),
+                (
+                    "Training will preserve the captured polarity. If this is unexpected, "
+                    "check the reamp, amp, pedal, or interface path before a long run."
+                ),
+            )
+        )
+
     if (
         analysis.confidence >= 0.65
         and analysis.score_margin >= 0.02
         and analysis.agreement >= 0.60
     ):
-        return []
+        return details
 
     candidate_text = ", ".join(
-        f"{int(candidate['samples'])} samples"
+        latency_candidate_summary(candidate)
         for candidate in analysis.candidates[:3]
     )
-    return [
+    details.append(
         warning_detail(
             "latency_estimate_review",
             "info",
@@ -768,7 +807,15 @@ def latency_analysis_details(analysis: LatencyAnalysis) -> list[dict[str, str]]:
             ),
             "Audition the detected candidates or use a manual nudge before long training runs.",
         )
-    ]
+    )
+    return details
+
+
+def latency_candidate_summary(candidate: dict[str, int | float | str]) -> str:
+    samples = int(candidate["samples"])
+    polarity = candidate.get("polarity")
+    suffix = " inverted" if polarity == "inverted" else ""
+    return f"{samples} samples{suffix}"
 
 
 def choose_latency_window_length(length: int) -> int:
@@ -1131,6 +1178,9 @@ def score_latency_lag(
     preemphasis_scores: list[float] = []
     onset_scores: list[float] = []
     window_scores: list[float] = []
+    normal_scores: list[float] = []
+    inverted_scores: list[float] = []
+    inverted_window_count = 0
     feature_weight = max(0.0, min(1.0, feature_weight))
 
     for start in starts:
@@ -1145,7 +1195,7 @@ def score_latency_lag(
             window_scores.append(float("-inf"))
             continue
         feature_score, signed_score, preemphasis_score, onset_score = correlations
-        combined = combine_latency_feature_scores(
+        combined, polarity, normal_score, inverted_score = polarity_aware_latency_score(
             feature_score,
             signed_score,
             preemphasis_score,
@@ -1158,6 +1208,17 @@ def score_latency_lag(
         preemphasis_scores.append(preemphasis_score)
         onset_scores.append(onset_score)
         window_scores.append(combined)
+        normal_scores.append(normal_score)
+        inverted_scores.append(inverted_score)
+        if polarity == "inverted":
+            inverted_window_count += 1
+
+    polarity, polarity_confidence = aggregate_latency_polarity(
+        inverted_window_count,
+        len(scores),
+        trimmed_mean(normal_scores),
+        trimmed_mean(inverted_scores),
+    )
 
     return LatencyScore(
         lag=lag,
@@ -1168,6 +1229,10 @@ def score_latency_lag(
         preemphasis_score=trimmed_mean(preemphasis_scores),
         onset_score=trimmed_mean(onset_scores),
         window_scores=tuple(window_scores),
+        normal_score=trimmed_mean(normal_scores),
+        inverted_score=trimmed_mean(inverted_scores),
+        polarity=polarity,
+        polarity_confidence=polarity_confidence,
     )
 
 
@@ -1186,6 +1251,9 @@ def score_latency_lag_vectorized(
     preemphasis_scores: list[float] = []
     onset_scores: list[float] = []
     window_scores: list[float] = []
+    normal_scores: list[float] = []
+    inverted_scores: list[float] = []
+    inverted_window_count = 0
     feature_weight = max(0.0, min(1.0, feature_weight))
 
     for start in starts:
@@ -1200,7 +1268,7 @@ def score_latency_lag_vectorized(
             window_scores.append(float("-inf"))
             continue
         feature_score, signed_score, preemphasis_score, onset_score = correlations
-        combined = combine_latency_feature_scores(
+        combined, polarity, normal_score, inverted_score = polarity_aware_latency_score(
             feature_score,
             signed_score,
             preemphasis_score,
@@ -1213,6 +1281,17 @@ def score_latency_lag_vectorized(
         preemphasis_scores.append(preemphasis_score)
         onset_scores.append(onset_score)
         window_scores.append(combined)
+        normal_scores.append(normal_score)
+        inverted_scores.append(inverted_score)
+        if polarity == "inverted":
+            inverted_window_count += 1
+
+    polarity, polarity_confidence = aggregate_latency_polarity(
+        inverted_window_count,
+        len(scores),
+        trimmed_mean(normal_scores),
+        trimmed_mean(inverted_scores),
+    )
 
     return LatencyScore(
         lag=lag,
@@ -1223,6 +1302,10 @@ def score_latency_lag_vectorized(
         preemphasis_score=trimmed_mean(preemphasis_scores),
         onset_score=trimmed_mean(onset_scores),
         window_scores=tuple(window_scores),
+        normal_score=trimmed_mean(normal_scores),
+        inverted_score=trimmed_mean(inverted_scores),
+        polarity=polarity,
+        polarity_confidence=polarity_confidence,
     )
 
 
@@ -1383,6 +1466,58 @@ def combine_latency_feature_scores(
     )
 
 
+def polarity_aware_latency_score(
+    feature_score: float,
+    signed_score: float,
+    preemphasis_score: float,
+    onset_score: float,
+    *,
+    feature_weight: float,
+) -> tuple[float, str, float, float]:
+    normal_score = combine_latency_feature_scores(
+        feature_score,
+        signed_score,
+        preemphasis_score,
+        onset_score,
+        feature_weight=feature_weight,
+    )
+    if feature_weight >= 0.999:
+        return normal_score, "normal", normal_score, 0.0
+
+    inverted_score = combine_latency_feature_scores(
+        feature_score,
+        -signed_score,
+        -preemphasis_score,
+        onset_score,
+        feature_weight=feature_weight,
+    )
+    if (
+        feature_score >= LATENCY_INVERTED_POLARITY_MIN_FEATURE_SCORE
+        and signed_score <= -LATENCY_INVERTED_POLARITY_MIN_CORRELATION
+        and preemphasis_score <= -LATENCY_INVERTED_POLARITY_MIN_CORRELATION
+        and inverted_score >= normal_score + LATENCY_INVERTED_POLARITY_MARGIN
+    ):
+        return inverted_score, "inverted", normal_score, inverted_score
+    return normal_score, "normal", normal_score, inverted_score
+
+
+def aggregate_latency_polarity(
+    inverted_window_count: int,
+    valid_window_count: int,
+    normal_score: float,
+    inverted_score: float,
+) -> tuple[str, float]:
+    if valid_window_count <= 0:
+        return "normal", 0.0
+    inverted_fraction = inverted_window_count / valid_window_count
+    if (
+        inverted_fraction >= 0.50
+        and inverted_score >= normal_score + LATENCY_INVERTED_POLARITY_MARGIN
+    ):
+        return "inverted", inverted_fraction
+    return "normal", 1.0 - inverted_fraction
+
+
 def safe_correlation(numerator: float, x_energy: float, y_energy: float) -> float:
     denominator = math.sqrt(x_energy * y_energy)
     if denominator <= 1e-12:
@@ -1499,7 +1634,7 @@ def latency_confidence(score: float, margin: float, agreement: float) -> float:
     return confidence
 
 
-def latency_score_payload(score: LatencyScore) -> dict[str, int | float]:
+def latency_score_payload(score: LatencyScore) -> dict[str, int | float | str]:
     return {
         "samples": score.lag,
         "score": score.score,
@@ -1507,6 +1642,10 @@ def latency_score_payload(score: LatencyScore) -> dict[str, int | float]:
         "signed_score": score.signed_score,
         "preemphasis_score": score.preemphasis_score,
         "onset_score": score.onset_score,
+        "normal_score": score.normal_score,
+        "inverted_score": score.inverted_score,
+        "polarity": score.polarity,
+        "polarity_confidence": score.polarity_confidence,
         "window_count": score.window_count,
         "vote_count": score.vote_count,
         "agreement": score.agreement,

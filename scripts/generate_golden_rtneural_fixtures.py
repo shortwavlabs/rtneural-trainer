@@ -28,6 +28,7 @@ GOLDEN_FIXTURE_SEEDS = {
     "conv1d_stack_prelu": 17,
     "wavenet_tcn": 18,
     "wavenet_tcn_fast": 19,
+    "wavenet_tcn_clean": 29,
     "wavenet_tcn_balanced": 20,
     "wavenet_tcn_quality": 21,
     "wavenet_tcn_separable_fast": 22,

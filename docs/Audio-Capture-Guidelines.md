@@ -185,6 +185,10 @@ The current clean/crunch/rhythm/edge/lead/overdrive-pedal experiments all used
 the same 151.6 second DI2 performance. The practical training rule is now:
 
 - Start amp and pedal captures with `wavenet_tcn_balanced`.
+- Try `wavenet_tcn_clean` first for clean or low-gain amp captures with modest
+  target RMS and stable alignment. It is a long-field, mostly linear WaveNet
+  path meant to learn polarity, phase, and EQ behavior before reaching for the
+  nonlinear high-gain recipes.
 - Use `wavenet_tcn_quality` when maximum fidelity matters, when balanced leaves
   audible residual detail, or for dense crunch/rhythm/pedal tones.
 - Try `wavenet_tcn_quality_tanh15` when a quality WaveNet sounds close but the

@@ -495,10 +495,39 @@ CPU budget matters.
    Add language that separates "export candidate" from "best among this
    comparison".
 
+## Clean Amp Reamp Update: June 28, 2026
+
+The real clean amp/pedal project
+`project_c15089562e8b46db898e95a1f8f1f240` exposed a different failure mode
+than the high-gain RHYTHM4 work. After the polarity-aware preparation update,
+`run_237230ea69a64195bf426ddca64ebb3b` used a stable `130` sample alignment
+with inverted target polarity, `0.743` latency confidence, and unanimous
+candidate agreement across six active windows. That makes latency much less
+likely to be the primary problem for this run.
+
+The A2/PReLU preset started in the right direction, then diverged from the
+full-stream objective:
+
+| Epoch | Stream ESR | Window ESR | Validation score | Prediction RMS ratio | Note |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 1 | `1.416` | `1.422` | `1.772` | `0.638` | Underpowered start |
+| 8 | `0.725` | `0.655` | `0.889` | `0.874` | Best checkpoint |
+| 28 | `1.090` | `0.803` | `1.291` | `0.920` | Training loss lower, stream validation worse |
+
+This looks like an architecture/loss mismatch: the nonlinear A2/PReLU path can
+learn sampled windows, but it is too saturation-oriented for a clean amp-head
+transfer where polarity, phase, and EQ matter more than heavy nonlinear memory.
+The next code path is `wavenet_tcn_clean`, a product-visible clean preset with
+linear hidden Conv1D layers, a longer dilated receptive field, pre-emphasis MSE,
+and a lower default learning rate. It should be tested against the clean amp
+capture before concluding that the capture itself is bad.
+
 ## Product Changes Suggested By This Baseline
 
 - Recommend `wavenet_tcn_balanced` as the default first quality run for amp
   captures.
+- Recommend `wavenet_tcn_clean` for quiet, well-aligned clean/lower-gain amp
+  captures before trying the nonlinear quality or A2 recipes.
 - Recommend `wavenet_tcn_quality` automatically for crunch/high-gain captures,
   for any run where balanced leaves high residual RMS, or when the user chooses
   maximum fidelity.

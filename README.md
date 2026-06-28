@@ -373,6 +373,11 @@ Current product presets are:
 
 - `wavenet_tcn_fast`: smaller RTNeural-safe WaveNet-style TCN for a faster
   capture/alignment sanity check.
+- `wavenet_tcn_clean`: long-field, mostly linear WaveNet-style Conv1D path for
+  clean and lower-gain amp captures. It uses linear hidden Conv1D layers,
+  bounded output, `preemphasis_mse`, and a lower default learning rate so clean
+  polarity/phase/EQ transfer is not forced through the nonlinear high-gain
+  recipe.
 - `wavenet_tcn_balanced`: the current default amp quality path, matching the
   proven legacy `wavenet_tcn` architecture.
 - `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement
