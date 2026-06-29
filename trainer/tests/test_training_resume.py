@@ -87,7 +87,7 @@ class TrainingResumeTests(unittest.TestCase):
         self.assertEqual(default_learning_rate_plateau_patience(0), 5)
         self.assertEqual(default_learning_rate_plateau_patience(1), 1)
         self.assertEqual(default_learning_rate_plateau_patience(6), 3)
-        self.assertEqual(default_learning_rate_plateau_patience(40), 10)
+        self.assertEqual(default_learning_rate_plateau_patience(40), 20)
 
     def test_learning_rate_schedule_normalizes_values(self) -> None:
         schedule = resolve_learning_rate_schedule(
@@ -153,6 +153,10 @@ class TrainingResumeTests(unittest.TestCase):
             resolve_training_loss_name({"loss": "mrstft_mse"}),
             "mrstft_preemphasis",
         )
+        self.assertEqual(
+            resolve_training_loss_name({"loss": "compressor"}),
+            "compressor_envelope_mrstft",
+        )
         self.assertEqual(resolve_training_loss_name({"loss": "mean_squared_error"}), "mse")
         self.assertEqual(
             resolve_training_loss_name({}, get_preset("conv1d_stack_prelu")),
@@ -195,6 +199,10 @@ class TrainingResumeTests(unittest.TestCase):
             "mrstft_preemphasis",
         )
         self.assertEqual(
+            resolve_training_loss_name({}, get_preset("wavenet_tcn_compressor")),
+            "compressor_envelope_mrstft",
+        )
+        self.assertEqual(
             resolve_training_loss_name({}, get_preset("wavenet_tcn_quality_tanh15")),
             "mrstft_preemphasis",
         )
@@ -234,6 +242,10 @@ class TrainingResumeTests(unittest.TestCase):
         )
         self.assertEqual(
             estimate_realtime_factor(get_preset("wavenet_tcn_quality_tanh15")),
+            estimate_realtime_factor(get_preset("wavenet_tcn_quality")),
+        )
+        self.assertLessEqual(
+            estimate_realtime_factor(get_preset("wavenet_tcn_compressor")),
             estimate_realtime_factor(get_preset("wavenet_tcn_quality")),
         )
         self.assertLess(

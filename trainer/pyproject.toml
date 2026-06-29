@@ -28,4 +28,6 @@ include = ["rttrainer*"]
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "scipy>=1.14",
+    "soundfile>=0.13",
 ]

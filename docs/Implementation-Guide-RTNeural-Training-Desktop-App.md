@@ -293,6 +293,7 @@ Product-exposed presets:
 | `wavenet_tcn_edge_detail` | Higher-capacity edge variant with 12 channels, smoother `tanh(x / 2.2)` hidden activations, and pre-emphasis MSE | Research-only A/B; first clean-to-edge test did not beat regular Edge on ESR/RMSE/MAE or high-band residual |
 | `wavenet_tcn_balanced` | Proven WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Default amp quality path; benchmark before export |
 | `wavenet_tcn_quality` | Wider/deeper WaveNet-style dilated causal Conv1D stack with bounded output and MR-STFT/pre-emphasis default loss | Slower crunch/rhythm/refinement path; benchmark before export |
+| `wavenet_tcn_compressor` | Quality-compatible WaveNet-style stack with a light compressor envelope/MR-STFT loss | Compressor and dynamics-pedal captures where normal quality plateaus above target ESR |
 | `wavenet_tcn_quality_tanh15` | Quality WaveNet trained with smoothed `tanh(x / 1.5)` and exported by folding the scale into Conv1D weights | High-band residual and ASR research |
 | `wavenet_tcn_a2_prelu` | A2-inspired sequential Conv1D/PReLU stack with mixed `6`/`15` sample kernels and non-power-of-two dilations | Current RHYTHM4 high-gain candidate; parity-safe but not true residual A2 |
 
@@ -736,8 +737,8 @@ Acceptance criteria:
 - Run metadata is sufficient to reproduce the run.
 - Desktop controls now expose epochs, early-stop patience, minimum ESR
   improvement, training window budget, and training-window rotation.
-- Built-in recipes are WaveNet-only: quick check, balanced, quality,
-  quality-tanh, and A2 PReLU.
+- Built-in recipes are WaveNet-only: quick check, balanced, clean, edge,
+  quality, compressor, quality-tanh, and A2 PReLU.
 - The run comparison UI recommends an export candidate using ESR, export ASR,
   validation status, and native RTNeural runtime when those reports exist.
 
@@ -1103,8 +1104,9 @@ Current screen: Align
 
 Current screen: Train
 
-- Preset picker: WaveNet Fast, WaveNet Balanced, WaveNet Quality, WaveNet
-  Quality Tanh 1.5, and WaveNet A2 PReLU
+- Preset picker: WaveNet Fast, WaveNet Clean, WaveNet Edge, WaveNet Balanced,
+  WaveNet Quality, WaveNet Compressor, WaveNet Quality Tanh 1.5, and WaveNet A2
+  PReLU
 - Hardware indicator: CUDA, MPS, or CPU
 - Runtime warning for heavy presets
 - Validation ESR curve
@@ -1376,6 +1378,7 @@ fixtures/rtneural-json/golden/
   wavenet_tcn_quality_tanh18.rtneural.json
   wavenet_tcn_high_gain.rtneural.json
   wavenet_tcn_a2_prelu.rtneural.json
+  wavenet_tcn_compressor.rtneural.json
   wavenet_tcn_separable_fast.rtneural.json
   conv_gru_hybrid.rtneural.json
 ```
@@ -1513,6 +1516,7 @@ presets may remain as internal parity fixtures but are not product recipes.
 | `wavenet_tcn_edge_detail` | Required | Required | Required | Required | Required | Research-only edge A/B |
 | `wavenet_tcn_balanced` | Required | Required | Required | Required | Required | v1 |
 | `wavenet_tcn_quality` | Required | Required | Required | Required | Required | v1 |
+| `wavenet_tcn_compressor` | Required | Required | Required | Required | Required | Dynamics-pedal research candidate |
 | `wavenet_tcn_quality_tanh15` | Required | Required | Required | Required | Required | High-gain candidate |
 | `wavenet_tcn_quality_tanh18` | Required | Required | Required | Required | Required | ASR/anti-aliasing research |
 | `wavenet_tcn_a2_prelu` | Required | Required | Required | Required | Required | A2-inspired high-gain candidate |

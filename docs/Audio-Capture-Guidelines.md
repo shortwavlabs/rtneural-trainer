@@ -197,6 +197,10 @@ the same 151.6 second DI2 performance. The practical training rule is now:
   but did not improve ESR, RMSE, MAE, or high-frequency residual.
 - Use `wavenet_tcn_quality` when maximum fidelity matters, when balanced leaves
   audible residual detail, or for dense crunch/rhythm/pedal tones.
+- Try `wavenet_tcn_compressor` for compressor and dynamics-pedal captures when
+  quality gets close but stalls above target. It keeps the proven quality
+  WaveNet architecture and adds a light envelope/slope loss term so fast attack
+  and release detail are trained more directly.
 - Try `wavenet_tcn_quality_tanh15` when a quality WaveNet sounds close but the
   residual or export warning points to high-band fizz/aliasing and the A2 PReLU
   runtime cost is too high.

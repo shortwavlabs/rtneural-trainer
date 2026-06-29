@@ -226,6 +226,13 @@ const presets: PresetOption[] = [
     backends: ["keras"],
   },
   {
+    id: "wavenet_tcn_compressor",
+    label: "WaveNet Compressor",
+    detail: "Quality WaveNet + light envelope loss",
+    cpu: "Research",
+    backends: ["keras"],
+  },
+  {
     id: "wavenet_tcn_quality_tanh15",
     label: "WaveNet Quality Tanh 1.5",
     detail: "Quality WaveNet, smoothed tanh",
@@ -355,6 +362,22 @@ const builtInTrainingRecipes = [
     resampleIntervalEpochs: 1,
     earlyStoppingPatience: 20,
     earlyStoppingMinDelta: 0.00005,
+  },
+  {
+    id: "builtin_wavenet_compressor",
+    source: "built_in",
+    name: "WaveNet compressor",
+    description: "Quality-compatible run with light envelope loss for dynamics pedals.",
+    modelPreset: "wavenet_tcn_compressor",
+    epochs: 220,
+    batchSize: 16,
+    learningRate: 0.0005,
+    sequenceLength: 8192,
+    maxWindows: 8192,
+    resampleTrainingWindows: true,
+    resampleIntervalEpochs: 1,
+    earlyStoppingPatience: 32,
+    earlyStoppingMinDelta: 0.00003,
   },
   {
     id: "builtin_wavenet_quality_tanh15",
@@ -4322,6 +4345,7 @@ function isLongWaveNetPreset(preset: string) {
   return (
     isQualityWaveNetPreset(preset) ||
     preset === "wavenet_tcn_high_gain" ||
+    preset === "wavenet_tcn_compressor" ||
     preset === "wavenet_tcn_a2_prelu" ||
     preset === "wavenet_tcn_clean" ||
     preset === "wavenet_tcn_edge" ||
@@ -4351,6 +4375,7 @@ function qualityContinuationLearningRate(preset: string) {
   if (isQualityWaveNetPreset(preset) || preset === "wavenet_tcn_high_gain") {
     return 0.00015;
   }
+  if (preset === "wavenet_tcn_compressor") return 0.00008;
   if (preset === "wavenet_tcn_a2_prelu") return 0.00012;
   if (preset === "wavenet_tcn_clean") return 0.0001;
   if (preset === "wavenet_tcn_edge") return 0.00008;

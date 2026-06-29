@@ -32,6 +32,9 @@ PREEMPHASIS_LOSS_WEIGHT = 0.35
 MRSTFT_LOSS_WEIGHT = 0.02
 MRSTFT_LOG_MAG_WEIGHT = 0.05
 MRSTFT_FRAME_SIZES = (256, 1024, 2048)
+COMPRESSOR_ENVELOPE_LOSS_WEIGHT = 0.02
+COMPRESSOR_ENVELOPE_SLOPE_WEIGHT = 0.08
+COMPRESSOR_ENVELOPE_FRAME_SIZES = (64, 256, 1024)
 
 
 def run_training(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -895,8 +898,17 @@ def resolve_training_loss_name(
         "mrstft_mse",
     }:
         return "mrstft_preemphasis"
+    if loss_name in {
+        "compressor",
+        "compressor_envelope",
+        "compressor_envelope_mrstft",
+        "compressor_mrstft",
+        "dynamic_envelope_mrstft",
+    }:
+        return "compressor_envelope_mrstft"
     raise ValueError(
-        "Training loss must be 'mse', 'esr', 'preemphasis_mse', or 'mrstft_preemphasis'."
+        "Training loss must be 'mse', 'esr', 'preemphasis_mse', "
+        "'mrstft_preemphasis', or 'compressor_envelope_mrstft'."
     )
 
 
@@ -943,7 +955,54 @@ def build_keras_loss(tf, loss_name: str):  # type: ignore[no-untyped-def]
         ) * keras_multi_resolution_stft_loss(tf, y_true, y_pred)
 
     mrstft_preemphasis_loss.__name__ = "mrstft_preemphasis_loss"
-    return mrstft_preemphasis_loss
+    if loss_name == "mrstft_preemphasis":
+        return mrstft_preemphasis_loss
+
+    def compressor_envelope_mrstft_loss(y_true, y_pred):  # type: ignore[no-untyped-def]
+        return (
+            mrstft_preemphasis_loss(y_true, y_pred)
+            + tf.cast(COMPRESSOR_ENVELOPE_LOSS_WEIGHT, y_true.dtype)
+            * keras_compressor_envelope_loss(tf, y_true, y_pred)
+        )
+
+    compressor_envelope_mrstft_loss.__name__ = "compressor_envelope_mrstft_loss"
+    return compressor_envelope_mrstft_loss
+
+
+def keras_compressor_envelope_loss(tf, y_true, y_pred):  # type: ignore[no-untyped-def]
+    epsilon = tf.cast(1.0e-5, y_true.dtype)
+    slope_weight = tf.cast(COMPRESSOR_ENVELOPE_SLOPE_WEIGHT, y_true.dtype)
+    total = tf.cast(0.0, y_true.dtype)
+
+    target_abs = tf.abs(y_true)
+    prediction_abs = tf.abs(y_pred)
+
+    for frame_size in COMPRESSOR_ENVELOPE_FRAME_SIZES:
+        target_env = tf.nn.avg_pool1d(
+            target_abs,
+            ksize=frame_size,
+            strides=1,
+            padding="SAME",
+        )
+        prediction_env = tf.nn.avg_pool1d(
+            prediction_abs,
+            ksize=frame_size,
+            strides=1,
+            padding="SAME",
+        )
+        env_error = target_env - prediction_env
+        env_energy = tf.reduce_mean(tf.square(target_env))
+        envelope = tf.reduce_mean(tf.square(env_error)) / tf.maximum(env_energy, epsilon)
+
+        target_slope = target_env[:, 1:, :] - target_env[:, :-1, :]
+        prediction_slope = prediction_env[:, 1:, :] - prediction_env[:, :-1, :]
+        slope_error = target_slope - prediction_slope
+        slope_energy = tf.reduce_mean(tf.square(target_slope))
+        slope = tf.reduce_mean(tf.square(slope_error)) / tf.maximum(slope_energy, epsilon)
+
+        total += envelope + slope_weight * slope
+
+    return total / tf.cast(len(COMPRESSOR_ENVELOPE_FRAME_SIZES), y_true.dtype)
 
 
 def keras_multi_resolution_stft_loss(tf, y_true, y_pred):  # type: ignore[no-untyped-def]
@@ -1012,7 +1071,7 @@ def save_keras_model_checkpoint(model, path: Path) -> None:  # type: ignore[no-u
 
 def default_learning_rate_plateau_patience(early_stopping_patience: int) -> int:
     if early_stopping_patience > 0:
-        return max(1, min(10, early_stopping_patience // 2))
+        return max(1, min(20, early_stopping_patience // 2))
     return 5
 
 
@@ -1240,6 +1299,7 @@ def estimate_realtime_factor(preset: PresetConfig) -> float:
         return 3.0
     if preset.preset_id in {
         "wavenet_tcn_quality",
+        "wavenet_tcn_compressor",
         "wavenet_tcn_quality_tanh15",
         "wavenet_tcn_quality_tanh18",
     }:

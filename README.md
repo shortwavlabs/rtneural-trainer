@@ -391,6 +391,10 @@ Current product presets are:
 - `wavenet_tcn_quality`: wider/deeper WaveNet-style TCN for slower refinement
   runs, especially crunch/rhythm/high-gain tones. Benchmark before treating
   quality exports as plugin-ready.
+- `wavenet_tcn_compressor`: quality-compatible dynamics-pedal preset with a
+  light `compressor_envelope_mrstft` loss for compressor attack/release
+  matching. Use it when a compressor pedal stalls around the normal quality
+  preset.
 - `wavenet_tcn_quality_tanh15`: research quality WaveNet with smoothed
   `tanh(x / 1.5)` training. This keeps the proven quality receptive field while
   probing whether a gentler nonlinearity reduces high-band residual and aliasing.
@@ -677,6 +681,7 @@ Tauri bundle outputs, staged sidecars, and
 - [PANAMA / WaveNet findings](docs/Research-PANAMA-WaveNet-Active-Learning.md)
 - [NAM / WaveNet performance findings](docs/Research-NAM-Performance-And-WaveNet.md)
 - [Clean/crunch/rhythm capture baseline](docs/Research-Clean-Crunch-Rhythm-Capture-Baseline.md)
+- [Compressor pedal capture findings](docs/Research-Compressor-Pedal-Capture.md)
 - [WaveNet amp simulation paper review](docs/Research-WaveNet-Amp-Simulation-Papers-2026-06-24.md)
 - [Implementation guide](docs/Implementation-Guide-RTNeural-Training-Desktop-App.md)
 - [Audio capture guidelines](docs/Audio-Capture-Guidelines.md)

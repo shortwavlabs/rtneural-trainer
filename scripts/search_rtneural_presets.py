@@ -26,6 +26,7 @@ DEFAULT_PRESETS = (
     "wavenet_tcn_balanced_tanh15",
     "wavenet_tcn_balanced_tanh18",
     "wavenet_tcn_quality",
+    "wavenet_tcn_compressor",
     "wavenet_tcn_quality_tanh15",
     "wavenet_tcn_quality_tanh18",
     "wavenet_tcn_a2_prelu",

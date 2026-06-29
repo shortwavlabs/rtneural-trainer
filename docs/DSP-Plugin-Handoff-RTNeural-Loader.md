@@ -131,6 +131,7 @@ package names the plugin may encounter include:
 - `wavenet_tcn_balanced_tanh15`
 - `wavenet_tcn_balanced_tanh18`
 - `wavenet_tcn_quality`
+- `wavenet_tcn_compressor`
 - `wavenet_tcn_quality_tanh15`
 - `wavenet_tcn_quality_tanh18`
 - `wavenet_tcn_high_gain`
@@ -144,6 +145,8 @@ Current practical favorites from experiments:
 - Edge-of-breakup and dynamic clean/dirty captures: `wavenet_tcn_edge` first,
   `wavenet_tcn_edge_detail` only if it proves useful.
 - Medium to high gain amp captures: `wavenet_tcn_a2_prelu`.
+- Compressor and dynamics-pedal captures: `wavenet_tcn_compressor` when normal
+  quality stalls above the target ESR.
 - Fast auditioning or CPU-constrained trials: `wavenet_tcn_fast` or
   `wavenet_tcn_balanced`.
 - `wavenet_tcn_high_gain` is a research preset that has underperformed so far;
