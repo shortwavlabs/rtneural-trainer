@@ -3,6 +3,7 @@
 Status: internal scientific draft  
 Date: 2026-06-29  
 Repository: `shortwavlabs/rtneural-trainer`  
+Peer review: [Peer-Review-RTNeural-WaveNet-DSP-Research.md](Peer-Review-RTNeural-WaveNet-DSP-Research.md)
 
 ## Abstract
 
@@ -11,38 +12,40 @@ development of RTNeural Trainer, a desktop system for learning real-time
 RTNeural-compatible models of guitar amplifiers and pedals from paired dry and
 processed audio captures. The work began with broad support for dense,
 recurrent, and convolutional architectures, but converged on finite-memory
-WaveNet-style temporal convolutional networks as the only product-facing model
-family that consistently survived capture, training, export, native validation,
-and DAW playback tests. The core engineering constraint was not merely training
-accuracy; the exported model had to run as a causal real-time DSP block through
-RTNeural JSON, validate against Python parity, benchmark above real time in a
-native C++ runtime, and avoid obviously objectionable aliasing or latency
-artifacts.
+WaveNet-style temporal convolutional networks as the best-tested product path
+inside the current 48 kHz mono paired-capture dataset and RTNeural JSON
+constraints. The core engineering constraint was not merely training accuracy;
+the exported model had to run as a causal real-time DSP block through RTNeural
+JSON, validate against Python parity, benchmark above real time in a native C++
+runtime on the reference system, and avoid obvious aliasing or latency
+artifacts in engineering diagnostics and listening checks.
 
 Across clean, crunch, rhythm, lead, edge-of-breakup, and overdrive-pedal
-captures, WaveNet-family presets dominated smaller recurrent and shallow
-convolutional baselines. The strongest high-gain result came from an
-A2-inspired, RTNeural-safe sequential WaveNet variant using mixed kernel sizes,
-non-power-of-two dilations, and PReLU nonlinearities. On the RHYTHM4 high-gain
-case study, this preset improved preview ESR from 0.0646 for the previous
-quality smoothed-tanh model to 0.0381 after continuation, while reducing average
-aliasing-to-signal ratio from 0.0419 to 0.0145 and retaining a native Eigen
-worst-case real-time factor of approximately 6.62x. Real hardware captures later
-produced even stronger export packages: clean/edge, overdrive pedal, and rhythm
-exports reached ESR values of 0.00217, 0.00043, and 0.00355 respectively, all
-with low ASR and passing native RTNeural validation.
+captures, WaveNet-family presets provided the most reliable end-to-end export
+results in our internal comparisons. The strongest high-gain result came from
+an A2-inspired, RTNeural-safe sequential WaveNet variant using mixed kernel
+sizes, non-power-of-two dilations, and PReLU nonlinearities. On the RHYTHM4
+high-gain case study, this preset improved preview ESR from 0.0646 for the
+previous quality smoothed-tanh model to 0.0381 after continuation, while
+reducing probe-measured average aliasing-to-signal ratio from 0.0419 to 0.0145
+and benchmarking at a native Eigen worst-case real-time factor of approximately
+6.62x on the reference system. Real hardware captures later produced even
+stronger export packages: clean/edge, overdrive pedal, and rhythm exports
+reached ESR values of 0.00217, 0.00043, and 0.00355 respectively, all passing
+native RTNeural validation with low probe ASR.
 
-The results support four technical conclusions. First, for guitar amp and pedal
-modeling under RTNeural JSON constraints, finite-memory causal dilated Conv1D
-models are a better product architecture than LSTM/GRU or shallow Conv models.
+The results support four scoped technical conclusions. First, within the
+current internal captures and export constraints, WaveNet-family causal Conv1D
+presets are the strongest product path tested so far; this paper does not claim
+a general architecture theorem over all recurrent or convolutional alternatives.
 Second, latency estimation, polarity handling, capture headroom, and source
 material diversity are first-order model-quality variables rather than
-preprocessing details. Third, ESR is necessary but insufficient: aliasing,
-residual spectra, prediction level, native runtime, and listening tests must all
-participate in the export gate. Fourth, NAM A2-style topology is a promising
-direction, but exact A2 support requires RTNeural runtime extensions for
-residual/skip/head structure; the current A2-inspired sequential preset is a
-practical MVP compromise.
+preprocessing details. Third, ESR is necessary but insufficient:
+probe-measured aliasing, residual spectra, prediction level, native runtime, and
+listening tests must all participate in the export gate. Fourth, NAM A2-style
+topology is a promising direction, but exact A2 support requires RTNeural
+runtime extensions for residual/skip/head structure; the current A2-inspired
+sequential preset is a practical MVP compromise.
 
 ## Keywords
 
@@ -206,7 +209,13 @@ We also compute:
 MAE  = mean_n |e[n]|
 RMSE = sqrt(mean_n e[n]^2)
 peak_residual = max_n |e[n]|
-rms_residual = sqrt(mean_n e[n]^2)
+```
+
+In the app reports, residual RMS is the same quantity as RMSE, often expressed
+in dBFS for audio interpretation:
+
+```text
+residual_rms_dbfs = 20 * log10(max(RMSE, epsilon))
 ```
 
 Correlation is used as a shape agreement diagnostic:
@@ -215,6 +224,29 @@ Correlation is used as a shape agreement diagnostic:
 corr = cov(y, y_hat) / (std(y) * std(y_hat))
 ```
 
+The report also tracks prediction RMS ratio:
+
+```text
+prediction_rms_ratio = rms(y_hat) / max(rms(y), epsilon)
+```
+
+This is not a fidelity metric by itself. It is a guardrail for models that
+reduce error by becoming underpowered or otherwise mismatching target level.
+
+Several metric spans appear in the project notes:
+
+| Term | Definition | Use |
+| --- | --- | --- |
+| Window validation | ESR/MAE/RMSE on held-out training windows. | Stable epoch-to-epoch checkpoint signal. |
+| Stream validation | ESR/MAE/RMSE on a longer continuous validation stream. | Catches state and continuity failures missed by isolated windows. |
+| Composite validation score | `stream_esr + 0.25 * window_esr + underpowered_output_penalty`. | Checkpoint selection and LR/early-stop monitor. |
+| Preview or state-continuous metrics | Metrics computed on rendered preview WAVs from a saved checkpoint/export. | User-facing quality comparison and listening aid. |
+
+The main result tables use preview/state-continuous ESR unless explicitly
+identified otherwise. This means they are directly useful for product
+comparison inside the app, but they are not identical to training-window loss or
+stream-validation score.
+
 These metrics are useful but incomplete. A model can have low ESR while still
 producing objectionable aliasing or level-dependent artifacts. Conversely, a
 model may have a warning-level ASR but sound acceptable in a dense mix or after
@@ -222,6 +254,33 @@ cabinet filtering. Therefore, the export system treats ASR as warning-oriented
 rather than as a hard rejection criterion.
 
 ## 4. Methods
+
+### 4.0 Reproducibility envelope
+
+This paper is an internal scientific report over iterative product experiments,
+not a fully controlled benchmark suite. The table below records the
+reproducibility envelope of the reported runs and separates fixed implementation
+details from remaining experimental limitations.
+
+| Item | Current value or protocol | Reproducibility note |
+| --- | --- | --- |
+| Audio format | 48 kHz mono prepared WAV, preferably float32. | Stereo/dual-mono captures are mixed to mono. |
+| Pairing | Dry DI and processed target from the same performance. | Mismatched performances are outside scope. |
+| Latency | Auto-estimated or known sample offset; top candidates exposed for review. | Low-confidence high-gain offsets remain a threat to validity. |
+| Polarity | Preparation is polarity-aware for captures that invert target polarity. | Polarity metadata should be preserved per project. |
+| Sequence length | Default 1024 samples unless overridden by recipe/user. | Some long-field presets have receptive fields larger than one sequence window, so stream validation remains important. |
+| Window budget | Default `max_windows = 512`; larger runs often used 2048+ windows. | Training windows may be resampled between epochs when enabled. |
+| Validation windows | Held fixed while training windows may resample. | Supports stable checkpoint comparisons. |
+| Default seed | `1337` unless overridden. | Most reported comparisons are single-seed product experiments, not repeated-seed statistics. |
+| Batch size | Default 16 unless overridden. | User may override in custom recipes. |
+| Optimizer | TensorFlow/Keras Adam. | PyTorch support has been removed from the product trainer. |
+| Early stopping | Composite validation score, default patience 5, min delta `1e-4`. | Longer product runs often use larger patience. |
+| LR plateau | `ReduceLROnPlateau`, factor 0.5, patience derived from early-stop patience, min LR `1e-6`. | Resume runs cap LR unless explicitly allowed to increase. |
+| Pre-emphasis | Coefficient 0.95; pre-emphasis loss weight 0.35. | Used by `preemphasis_mse` and WaveNet losses. |
+| MR-STFT | Frame sizes 256, 1024, 2048; MRSTFT weight 0.02; log-mag weight 0.05. | Exact psychoacoustic weighting remains research territory. |
+| ASR probes | 1250, 2500, 5000 Hz requested frequencies; amplitude 0.5; 2048-sample warmup; 4096-sample analysis. | Probe-specific diagnostic, not a perceptual aliasing model. |
+| Native benchmark | RTNeural validator block-size/channel matrix, usually Eigen backend on Apple Silicon. | Release/plugin benchmarks across weaker machines remain future work. |
+| Plugin smoke | JUCE AU debug loader in Logic Pro on the reference MacBook Pro M5 Max. | Demonstrates viability on one strong machine, not production portability. |
 
 ### 4.1 Capture preparation
 
@@ -304,15 +363,15 @@ product-facing.
 
 The current product/research WaveNet family includes:
 
-| Preset family | Structure | Purpose |
-| --- | --- | --- |
-| `wavenet_tcn_fast` | 6 causal dilated Conv1D blocks | Quick sanity probe. |
-| `wavenet_tcn_balanced` | 8 causal dilated Conv1D blocks | Practical first quality run. |
-| `wavenet_tcn_quality` | 10 causal dilated Conv1D blocks | High-gain or maximum-fidelity run. |
-| `wavenet_tcn_quality_tanh15` | Quality graph with smoothed hidden tanh | Anti-alias/tone research candidate. |
-| `wavenet_tcn_a2_prelu` | 12 mixed-kernel, non-power-dilation Conv1D/PReLU blocks | Strong high-gain candidate. |
-| `wavenet_tcn_clean` | Long-field, mostly linear path | Clean amp transfer. |
-| `wavenet_tcn_edge` | Clean-inspired long field with gentle nonlinearity | Edge-of-breakup captures. |
+| Preset family | Layers | Filters | Kernel(s) | Dilations | Activation | Default loss | Purpose |
+| --- | ---: | ---: | --- | --- | --- | --- | --- |
+| `wavenet_tcn_fast` | 6 | 12 | 3 | 1, 2, 4, 8, 16, 32 | tanh | MR-STFT pre-emphasis | Quick sanity probe. |
+| `wavenet_tcn_balanced` | 8 | 16 | 3 | 1, 2, 4, ..., 128 | tanh | MR-STFT pre-emphasis | Practical first quality run. |
+| `wavenet_tcn_quality` | 10 | 20 | 3 | 1, 2, 4, ..., 512 | tanh | MR-STFT pre-emphasis | High-gain or maximum-fidelity run. |
+| `wavenet_tcn_quality_tanh15` | 10 | 20 | 3 | 1, 2, 4, ..., 512 | `tanh(x / 1.5)` during training | MR-STFT pre-emphasis | Anti-alias/tone research candidate. |
+| `wavenet_tcn_a2_prelu` | 12 | 16 | 6, 6, 6, 6, 6, 6, 6, 6, 15, 15, 6, 6 | 1, 3, 7, 17, 41, 101, 239, 1, 3, 7, 17, 41 | PReLU | MR-STFT pre-emphasis | Strong high-gain candidate. |
+| `wavenet_tcn_clean` | 10 | 8 | 7 | 1, 2, 4, ..., 512 | linear hidden Conv1D | pre-emphasis MSE | Clean amp transfer. |
+| `wavenet_tcn_edge` | 10 | 8 | 7 | 1, 2, 4, ..., 512 | `tanh(x / 1.8)` | pre-emphasis MSE | Edge-of-breakup captures. |
 
 The standard sequential WaveNet graph is intentionally RTNeural-safe:
 
@@ -489,18 +548,21 @@ The RHYTHM4 project is the clearest high-gain architecture study.
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `wavenet_tcn_balanced` | 0.6309 | 0.0740 | 0.6109 | not measured in export study | not measured in export study | not measured in export study | Plateaued immediately. |
 | `wavenet_tcn_quality` | 0.0713 | 0.0249 | 0.9640 | 0.290 | 0.100 | 12.17x | Strong waveform result; ASR warning. |
-| `wavenet_tcn_quality_tanh15` | 0.0646 | 0.0237 | 0.9674 | 0.0670 | 0.0419 | 11.74x | Improved fit and aliasing. |
+| `wavenet_tcn_quality_tanh15` | 0.0646 | 0.0237 | 0.9674 | 0.0670 | 0.0419 | 11.74x | Improved fit and probe ASR. |
 | `wavenet_tcn_a2_prelu` | 0.0440 | 0.0196 | 0.9778 | 0.0354 | 0.0205 | 6.54x | Best fresh-run result. |
 | `wavenet_tcn_a2_prelu` continued | 0.0381 | 0.0182 | 0.9808 | 0.0201 | 0.0145 | 6.62x | Best high-gain result. |
 
-This sequence is scientifically useful because it isolates several hypotheses:
+This sequence is scientifically useful because it generates several concrete
+hypotheses, although it does not isolate them with matched repeated-seed
+ablations:
 
 - More capacity within the existing quality graph improves high-gain modeling.
 - Smoothed tanh can help, but its effect is capture- and depth-dependent.
-- A2-inspired mixed kernels, non-power dilations, and PReLU nonlinearities
-  improve both waveform fit and aliasing diagnostics in this case.
+- The A2-inspired combination of mixed kernels, non-power dilations, and PReLU
+  nonlinearities is associated with better waveform fit and better probe ASR in
+  this case.
 - The strongest model is slower and larger, but still real-time on the
-  reference machine.
+  reference machine's native benchmark and debug-plugin smoke path.
 
 ### 5.5 RHYTHM3-B quality export
 
@@ -533,10 +595,11 @@ The strongest practical evidence came from the real hardware export trio.
 | `export_drive` | Real overdrive pedal | `wavenet_tcn_a2_prelu` | 0.00043 | 0.00195 | 0.00080 | 6.49x | 86 samples | 2481 samples |
 | `export_rhythm` | Real amp rhythm | `wavenet_tcn_a2_prelu` | 0.00355 | 0.00913 | 0.00359 | 6.63x | 136 samples | 2481 samples |
 
-All three passed native RTNeural validation and reported low ASR. This is a
-major result: the real amp and pedal captures trained more reliably than many
+All three passed native RTNeural validation and reported low probe ASR. This is
+a major result: the real amp and pedal captures trained more reliably than many
 of the earlier DAW amp-simulation renders. We should not overgeneralize from
-one hardware set, but the plausible causes are concrete:
+one hardware set. The plausible contributors below are hypotheses for follow-up
+experiments, not isolated causal effects:
 
 - The capture workflow had matured by then.
 - Float32 preparation was preserved.
@@ -552,11 +615,13 @@ one hardware set, but the plausible causes are concrete:
 ### 6.1 Why WaveNet won
 
 Guitar amp and pedal modeling needs nonlinear memory. A dense model sees too
-little temporal context. A shallow Conv model can be extremely fast but leaves
-upper-band residuals and compression behavior behind. Recurrent models are
-expressive, but in our product setting they did not beat causal dilated Conv1D
-for the difficult captures, and they complicate export/performance work without
-obvious benefit.
+little temporal context. A shallow Conv model can be extremely fast but left
+upper-band residuals and compression behavior behind in our internal
+comparisons. Recurrent models are expressive, but they did not become the best
+validated export path in this product workflow, and the current paper does not
+present a matched recurrent-versus-TCN ablation. The supported claim is narrower
+and more practical: under the current RTNeural JSON constraints and capture set,
+WaveNet-family TCNs produced the strongest end-to-end product evidence.
 
 WaveNet-style TCNs occupy the right compromise:
 
@@ -570,7 +635,8 @@ WaveNet-style TCNs occupy the right compromise:
 
 The result is not full academic WaveNet. It is an RTNeural-compatible temporal
 convolutional model shaped by plugin constraints. That constraint is a feature:
-the system optimizes models that can actually ship as real-time DSP.
+the system optimizes models that can actually be validated as real-time DSP on
+the reference runtime before being considered for plugin use.
 
 ### 6.2 Latency as a bottleneck
 
@@ -766,18 +832,18 @@ could provide useful interoperability and architecture research data.
 
 ## 9. Conclusion
 
-The research converged on a clear engineering thesis: real-time neural guitar
-amp modeling for this product should optimize around RTNeural-compatible
-WaveNet/TCN exports, not around recurrent or shallow convolutional presets.
-The decisive evidence is end-to-end. WaveNet-family models trained better,
-exported cleanly, passed native validation, benchmarked above real time, and
-worked in a JUCE/Logic smoke path.
+The research converged on a scoped engineering thesis: for the current internal
+48 kHz mono paired-capture workflow, RTNeural-compatible WaveNet/TCN exports
+are the best-tested product path. The evidence is end-to-end rather than purely
+loss-based. WaveNet-family models trained well on the tested captures, exported
+cleanly, passed native validation, benchmarked above real time on the reference
+runtime, and worked in a JUCE/Logic smoke path on the reference machine.
 
 The current strongest high-gain model is `wavenet_tcn_a2_prelu`, an A2-inspired
-sequential architecture that substantially improved RHYTHM4 ESR and ASR while
-remaining RTNeural-compatible. The strongest real hardware evidence is the
+sequential architecture that substantially improved RHYTHM4 ESR and probe ASR
+while remaining RTNeural-compatible. The strongest real hardware evidence is the
 clean/drive/rhythm export trio, where all three models passed validation with
-low ASR and strong runtime headroom.
+low probe ASR and strong reference-system runtime headroom.
 
 The most important lesson is that model architecture is only one part of the
 DSP problem. Capture design, level discipline, latency alignment, spectral
