@@ -1,6 +1,6 @@
 # Clean, Crunch, Rhythm, Edge, Lead, And Pedal Capture Baseline
 
-Reviewed: 2026-06-25
+Reviewed: 2026-06-25 through 2026-06-29
 
 This note summarizes the first comparable clean, crunch, heavy rhythm,
 edge-of-breakup, lead, and overdrive pedal training passes after the latest
@@ -565,6 +565,32 @@ channels and smoother nonlinearity appear to add capacity without solving the
 remaining upper-band error. Keep `wavenet_tcn_edge` as the preferred preset and
 treat `wavenet_tcn_edge_detail` as a research-only A/B until another capture
 proves it can beat Edge.
+
+## Real Amp And Pedal Export Check
+
+The first hardware-capture export trio copied to the desktop as `export_clean`,
+`export_drive`, and `export_rhythm` is a stronger result than the earlier
+amp-simulation-render experiments. All three exports passed native RTNeural
+validation and reported low ASR.
+
+| Export | Source | Preset | ESR | Worst ASR | Avg ASR | Native RTF | Latency | RF |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `export_clean` | Real amp clean/edge capture | `wavenet_tcn_edge` | `0.00217` | `0.00673` | `0.00251` | `20.72x` | `130` samples | `6139` samples |
+| `export_drive` | Real overdrive pedal capture | `wavenet_tcn_a2_prelu` | `0.00043` | `0.00195` | `0.00080` | `6.49x` | `86` samples | `2481` samples |
+| `export_rhythm` | Real amp rhythm capture | `wavenet_tcn_a2_prelu` | `0.00355` | `0.00913` | `0.00359` | `6.63x` | `136` samples | `2481` samples |
+
+Working conclusion: with the current capture workflow, real amp and pedal
+captures are training more reliably than the earlier DAW amp-simulation
+renders. The hardware captures are not automatically easier in every way, but
+this set produced lower aliasing, good listening results, and export-ready
+validation without the instability seen in several simulator-render tests.
+
+The likely reasons are practical rather than mystical: the real capture path is
+now consistent, float32 prep is preserved, the source material is shorter and
+more focused, and the ADC path naturally band-limits the analog nonlinear
+output. Amp-simulation renders remain useful stress tests, but they may include
+hidden latency, oversampling/downsampling filters, and digital nonlinear
+artifacts that make exact student-model matching less forgiving.
 
 ## Product Changes Suggested By This Baseline
 

@@ -241,6 +241,15 @@ Second-generation DI3 findings refine this rule:
 - The app now preserves prepared audio as 32-bit float WAV. That avoids
   avoidable quantization in prep and is appropriate for captures exported from
   DAWs such as Logic.
+- The first real hardware export trio beat the earlier amp-simulation-render
+  experiments in practical quality and aliasing. `export_clean`, `export_drive`,
+  and `export_rhythm` all passed native validation with low ASR; the drive and
+  rhythm A2 PReLU exports landed around `6.5x` native realtime while the clean
+  edge export had much larger runtime headroom. Prefer real reamped amp/pedal
+  captures when calibrating production presets. DAW amp-simulation renders are
+  still useful stress tests, but watch for hidden plugin latency,
+  oversampling/downsampling filters, and digital artifacts that can make the
+  student model harder to fit exactly.
 
 ## Interpreting Warnings
 
