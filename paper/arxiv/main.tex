@@ -1,0 +1,567 @@
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{microtype}
+
+\geometry{letterpaper, margin=1in}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue,
+  pdftitle={Aliasing-Aware RTNeural-Compatible WaveNet Modeling of Guitar Amplifier and Pedal Captures},
+  pdfauthor={Shortwav Labs}
+}
+
+\newcommand{\esr}{\mathrm{ESR}}
+\newcommand{\asr}{\mathrm{ASR}}
+\newcommand{\rms}{\mathrm{RMS}}
+\newcommand{\rtf}{\mathrm{RTF}}
+
+\title{Aliasing-Aware RTNeural-Compatible WaveNet Modeling of Guitar Amplifier and Pedal Captures}
+
+\author{
+Shortwav Labs\\
+\small RTNeural Trainer Project\\
+\small \url{https://github.com/shortwavlabs/rtneural-trainer}
+}
+
+\date{June 29, 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We report an applied study of neural guitar amplifier and pedal modeling under
+a strict real-time export constraint: trained models must be representable as
+RTNeural JSON, validate against TensorFlow/Keras reference inference, and run as
+causal low-latency DSP in a native C++ audio runtime. The study began with
+dense, recurrent, and convolutional candidates, but the strongest end-to-end
+evidence in our internal 48 kHz mono paired-capture dataset favored
+WaveNet-style temporal convolutional networks (TCNs). We evaluate clean,
+edge-of-breakup, crunch, rhythm, lead, and overdrive-pedal captures using
+waveform error, residual statistics, native real-time factor, and a
+probe-based aliasing-to-signal ratio (ASR). The best high-gain result came from
+an A2-inspired sequential TCN using mixed kernel sizes, non-power-of-two
+dilations, and PReLU nonlinearities while remaining compatible with current
+RTNeural dynamic JSON. On a difficult high-gain rhythm capture, this model
+improved preview error-to-signal ratio (ESR) from 0.0646 for the previous
+smoothed-tanh quality model to 0.0381 after continuation, while reducing
+probe-measured average ASR from 0.0419 to 0.0145 and benchmarking at a
+worst-case native Eigen real-time factor of approximately 6.62 on the
+reference system. Real hardware captures later produced stronger export
+packages: clean/edge, overdrive pedal, and rhythm exports reached ESR values of
+0.00217, 0.00043, and 0.00355 respectively, all passing native RTNeural
+validation with low probe ASR. The results support a practical, scoped
+conclusion: under current RTNeural JSON and product-workflow constraints,
+WaveNet-family causal TCNs are the best-tested architecture family for this
+trainer, while exact NAM A2-style residual/skip topology remains future
+runtime work.
+\end{abstract}
+
+\section{Introduction}
+
+Neural modeling of guitar amplifiers and pedals is a system-identification
+problem with unusually unforgiving perceptual constraints. A fixed amp or pedal
+setting maps a dry direct-input signal \(x[n]\) to a processed target
+\(y[n]\), but the mapping is nonlinear, level-dependent, often highly
+compressive, and sensitive to latency errors of only a few samples. High-gain
+tones further expose residual energy in the upper bands, where small spectral
+mistakes can become audible as fizz, foldback, or loss of pick definition.
+
+The goal of RTNeural Trainer is not merely to minimize a training loss. The
+model must be usable as real-time DSP: it must be causal, streamable,
+exportable to RTNeural, parity-checked against the training backend,
+benchmarked in a native runtime, and loadable in a DAW plugin. This engineering
+constraint rules out treating the training graph as an arbitrary offline model.
+It also makes runtime validation a first-class part of model evaluation.
+
+This paper summarizes the DSP research performed while building the trainer.
+Our main contributions are:
+
+\begin{itemize}
+  \item an end-to-end RTNeural-compatible training and export workflow for
+  paired guitar amp/pedal captures;
+  \item a comparison of product-facing WaveNet-style TCN presets across clean,
+  edge, crunch, rhythm, lead, and overdrive-pedal cases;
+  \item an aliasing-to-signal ratio diagnostic for exported RTNeural JSON
+  models;
+  \item an A2-inspired sequential TCN that improves difficult high-gain
+  captures without requiring new RTNeural graph topology; and
+  \item a set of capture and validation lessons for real-time neural audio
+  effects.
+\end{itemize}
+
+The central claim is deliberately scoped. We do not prove that TCNs dominate
+all recurrent or convolutional models for all amplifier modeling tasks. We show
+that, in this internal dataset and under the current RTNeural JSON export
+constraint, WaveNet-family causal TCNs produced the strongest end-to-end
+product evidence.
+
+\section{Related Work}
+
+WaveNet introduced dilated causal convolutional stacks for raw audio modeling
+\cite{oord2016wavenet}. Subsequent neural audio-effects and amplifier-modeling
+work has used recurrent models, convolutional models, spectral losses,
+pre-emphasis, and finite-memory feed-forward architectures for real-time
+nonlinear system approximation \cite{damskagg2019tube,steinmetz2022auraloss}.
+PANAMA frames amplifier modeling as a parametric and active-learning problem,
+where control settings are sampled strategically and the model is conditioned
+on those settings \cite{grotschla2025panama}. That broader parametric
+setting remains future work here; the present trainer models one fixed capture
+setting per project.
+
+Neural Amp Modeler (NAM) is an important practical reference for this work
+\cite{namrepo,namplugin,namcore}. NAM separates training/export from real-time
+plugin inference and treats the exported model package as a runtime contract.
+Recent NAM A2 models use WaveNet-like residual and skip structures with
+specialized C++ runtime paths. Current RTNeural dynamic JSON can host
+sequential Conv1D and PReLU stacks \cite{rtneural}, but it does not directly
+express A2-style residual fan-out, skip accumulation, layer-array heads, or
+slimmable submodel selection. This motivated an A2-inspired sequential preset
+rather than direct NAM conversion.
+
+Aliasing is another relevant thread. Nonlinear models generate harmonics that
+can fold above Nyquist, and high-gain guitar models stress this behavior. Work
+on smoothing neural activations for amp modeling suggests that activation shape
+can trade waveform accuracy against aliasing behavior
+\cite{steinmetz2025aliasing}. We therefore added explicit ASR diagnostics and
+smoothed-tanh WaveNet variants, but treat ASR as a warning signal rather than a
+psychoacoustic score.
+
+\section{Problem Formulation}
+
+Let \(x[n]\) be the prepared dry input and \(y[n]\) the prepared target. After
+channel policy, resampling policy, polarity handling, and latency alignment,
+both are mono 48 kHz floating-point sequences. A causal finite-memory model
+produces
+\begin{equation}
+  \hat{y}[n] = f_\theta(x[n], x[n-1], \ldots, x[n-R+1]),
+\end{equation}
+where \(R\) is the effective receptive field. For a sequential stack of causal
+Conv1D layers with kernel sizes \(k_\ell\), dilations \(d_\ell\), and no
+striding, the receptive field is
+\begin{equation}
+  R = 1 + \sum_\ell (k_\ell - 1)d_\ell .
+\end{equation}
+
+The residual is
+\begin{equation}
+  e[n] = y[n] - \hat{y}[n].
+\end{equation}
+The primary waveform metric is error-to-signal ratio:
+\begin{equation}
+  \esr = \frac{\sum_n e[n]^2}{\max(\sum_n y[n]^2, \epsilon)} .
+\end{equation}
+We also report mean absolute error, root mean square error, peak residual, and
+correlation. Prediction level is tracked by
+\begin{equation}
+  \rho_{\rms} = \frac{\rms(\hat{y})}{\max(\rms(y), \epsilon)} ,
+\end{equation}
+which guards against underpowered predictions that appear deceptively stable.
+
+Three metric spans appear in our reports. Window validation is computed on
+held-out training windows. Stream validation is computed on a longer
+continuous segment to catch state and continuity failures. Preview or
+state-continuous metrics are computed on rendered preview WAVs from a saved
+checkpoint or export and are the main user-facing comparison metrics in this
+paper unless otherwise noted.
+
+\section{Methods}
+
+\subsection{Capture preparation}
+
+The capture contract is a paired dry/processed recording from the same
+performance. Captures are prepared as 48 kHz mono WAVs, with float32 preserved
+when available. Stereo or dual-mono sources are mixed to mono for the current
+trainer. The preparation stage reports clipping, duration, level, channel
+policy, latency candidates, confidence, and polarity.
+
+Latency is treated as an experimental variable. If the target is shifted by
+\(L\) samples, then the prepared pair is
+\begin{equation}
+  x_{\mathrm{aligned}}[n] = x[n], \qquad
+  y_{\mathrm{aligned}}[n] = y[n+L].
+\end{equation}
+For high-gain captures the processed waveform can correlate weakly with the
+dry DI, producing several plausible offsets separated by only a few samples.
+The application therefore exposes top candidate offsets and allows manual
+sample nudging. In practice we found that a short transient preamble at the
+start of the DI---palm mutes, single-note plucks, and hard/soft attacks---is
+valuable for alignment.
+
+\subsection{Training protocol}
+
+Training uses TensorFlow/Keras only. The default optimizer is Adam, with a
+default seed of 1337 unless overridden. Default batch size is 16 and default
+sequence length is 1024 samples, though product recipes can override these
+values. Candidate windows are sampled across the prepared file; validation
+windows are fixed, while training windows may be resampled between epochs.
+
+Checkpoint selection uses a composite validation score:
+\begin{equation}
+  s = \esr_{\mathrm{stream}} + 0.25\,\esr_{\mathrm{window}} + p_{\mathrm{under}},
+\end{equation}
+where \(p_{\mathrm{under}}\) penalizes severely underpowered predictions. Early
+stopping monitors this score with default patience 5 and minimum improvement
+\(10^{-4}\). The learning rate scheduler uses ReduceLROnPlateau with factor
+0.5, a minimum learning rate of \(10^{-6}\), and patience derived from the
+early-stopping patience.
+
+Losses include waveform ESR/MSE variants, pre-emphasis MSE, and a
+multi-resolution STFT plus pre-emphasis loss. The pre-emphasis coefficient is
+0.95, with pre-emphasis loss weight 0.35. The multi-resolution STFT frame sizes
+are 256, 1024, and 2048 samples, with STFT weight 0.02 and log-magnitude weight
+0.05. These values are implementation settings rather than claimed optima.
+
+\subsection{Architectures}
+
+The project initially included dense, GRU, LSTM, shallow Conv1D,
+BatchNorm/PReLU, and hybrid presets. Those paths remain useful as internal
+export fixtures, but product-facing recipes have moved to WaveNet-family TCNs.
+The main presets are summarized in Table~\ref{tab:presets}.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lrrp{2.2cm}p{3.0cm}p{2.2cm}@{}}
+\toprule
+Preset & Layers & Filters & Kernels & Dilations & Activation \\
+\midrule
+Fast & 6 & 12 & 3 & \(1,\ldots,32\) powers of two & tanh \\
+Balanced & 8 & 16 & 3 & \(1,\ldots,128\) powers of two & tanh \\
+Quality & 10 & 20 & 3 & \(1,\ldots,512\) powers of two & tanh \\
+Quality Tanh 1.5 & 10 & 20 & 3 & \(1,\ldots,512\) powers of two & \(\tanh(x/1.5)\) \\
+Clean & 10 & 8 & 7 & \(1,\ldots,512\) powers of two & linear hidden \\
+Edge & 10 & 8 & 7 & \(1,\ldots,512\) powers of two & \(\tanh(x/1.8)\) \\
+A2 PReLU & 12 & 16 & 6, 15 mixed & 1,3,7,17,41,101,239,1,3,7,17,41 & PReLU \\
+\bottomrule
+\end{tabular}
+\caption{Principal RTNeural-compatible TCN presets. The shorthand
+\(1,\ldots,512\) denotes powers-of-two dilations.}
+\label{tab:presets}
+\end{table}
+
+These models are intentionally sequential:
+\begin{equation}
+  x \rightarrow [\mathrm{causal\ Conv1D} \rightarrow
+  \mathrm{activation}]^N \rightarrow \mathrm{output}.
+\end{equation}
+They are not full residual/skip WaveNet graphs. That limitation preserves
+RTNeural dynamic-JSON compatibility, but it also limits how much depth can be
+added before optimization becomes difficult. A failed high-gain experiment with
+one additional plain tanh dilation stage suggested that larger receptive field
+alone does not solve difficult rhythm captures.
+
+\subsection{Aliasing-to-signal ratio}
+
+For each exported RTNeural JSON model, we render deterministic sine probes at
+requested frequencies 1250, 2500, and 5000 Hz. The input amplitude is 0.5, with
+2048 warmup samples and a 4096-sample analysis window. The actual frequency is
+snapped to the nearest FFT bin so the fundamental is on-bin. After subtracting
+the mean, the analyzer computes FFT power and identifies harmonic bins. It then
+defines
+\begin{align}
+  E_{\mathrm{harm}} &= \sum_{b\in \mathcal{H}} P[b],\\
+  E_{\mathrm{alias}} &= \sum_{b>0} P[b] - E_{\mathrm{harm}},\\
+  \asr &= \frac{E_{\mathrm{alias}}}{\max(E_{\mathrm{harm}}, \epsilon)} .
+\end{align}
+Worst-case ASR below 0.02 is treated as low aliasing in the current probes;
+values below 0.08 produce a review warning; larger values produce a stronger
+warning. These thresholds are not audibility thresholds. They are engineering
+diagnostics to focus listening tests.
+
+\subsection{Native validation and plugin smoke testing}
+
+Exports are gated by Keras-to-RTNeural JSON parity, native RTNeural validation,
+and native benchmark results. The validator tests block sizes 16, 32, 64, 128,
+256, and 512 samples, mono and stereo when applicable, and records worst-case
+real-time factor:
+\begin{equation}
+  \rtf = \frac{\mathrm{audio\ duration\ processed}}
+              {\mathrm{wall\ time\ elapsed}} .
+\end{equation}
+An RTF above one is faster than real time, but product headroom requires a
+larger margin because DAWs may run multiple instances and small buffers.
+
+A JUCE Audio Unit debug plugin was used for smoke testing \cite{juce}. It
+loads exported RTNeural package folders, stages model objects off the audio
+thread, and keeps \texttt{processBlock()} free of parsing, file I/O, locks, and
+heap allocation. These plugin tests were performed on a MacBook Pro M5 Max
+reference machine and should not be interpreted as broad release qualification.
+
+\section{Experiments}
+
+The main internal capture families are listed in Table~\ref{tab:captures}. All
+audio was prepared at 48 kHz mono for training.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lp{3.0cm}p{6.6cm}@{}}
+\toprule
+Family & Duration & Notes \\
+\midrule
+DI2 & 151.6 s & Same dry DI rendered to clean, crunch, rhythm, edge, lead,
+and overdrive-pedal targets. \\
+DI3/CLEAN3 & 613.08 s & Long clean capture with known 13-sample DAW latency. \\
+DI3-B/RHYTHM3-B & 444.25 s & Trimmed high-gain rhythm capture; 10-sample
+estimated latency with low confidence. \\
+DI4/RHYTHM4 & 158.8 s & Short high-gain rhythm control capture; 9-sample
+estimated latency. \\
+Hardware trio & focused captures & Real amp clean/edge, real overdrive pedal,
+and real amp rhythm exports. \\
+\bottomrule
+\end{tabular}
+\caption{Capture families used in the internal experiments.}
+\label{tab:captures}
+\end{table}
+
+The DI2 family established tone-dependent difficulty. WaveNet quality achieved
+preview ESR 0.0052 on clean, 0.0115 on crunch, 0.1100 on rhythm, 0.0045 on
+edge, and 0.0021 on the overdrive pedal. Lead was the primary outlier:
+balanced slightly beat quality at ESR 0.0810 versus 0.0821. Shallow stacked
+Conv/PReLU baselines were fast but trailed WaveNet-family presets across the
+reported product comparisons.
+
+\section{Results}
+
+\subsection{High-gain RHYTHM4 progression}
+
+Table~\ref{tab:rhythm4} shows the most informative high-gain progression. The
+plain balanced model plateaued. The quality model fit the waveform much better
+but produced a strong ASR warning. The smoothed-tanh quality model improved
+both ESR and probe ASR. The A2-inspired PReLU model then improved both metrics
+again, at a runtime and model-size cost.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Preset & ESR & RMSE & Corr. & Worst ASR & Avg. ASR & Native RTF \\
+\midrule
+Balanced & 0.6309 & 0.0740 & 0.6109 & -- & -- & -- \\
+Quality & 0.0713 & 0.0249 & 0.9640 & 0.290 & 0.100 & 12.17 \\
+Quality Tanh 1.5 & 0.0646 & 0.0237 & 0.9674 & 0.0670 & 0.0419 & 11.74 \\
+A2 PReLU & 0.0440 & 0.0196 & 0.9778 & 0.0354 & 0.0205 & 6.54 \\
+A2 PReLU continued & 0.0381 & 0.0182 & 0.9808 & 0.0201 & 0.0145 & 6.62 \\
+\bottomrule
+\end{tabular}
+\caption{RHYTHM4 high-gain progression. Missing ASR/RTF values indicate runs
+not used as export candidates in the benchmarked export study.}
+\label{tab:rhythm4}
+\end{table}
+
+This sequence does not isolate which A2-inspired change caused the
+improvement. Kernel sizes, dilation pattern, activation type, training dynamics,
+and continuation all differ. The result should therefore be read as evidence
+for the combined preset, not as a controlled ablation of individual features.
+
+\subsection{Clean and edge-of-breakup behavior}
+
+The real clean amp project exposed an architecture mismatch. A2 PReLU initially
+improved but then diverged from full-stream validation, despite stable
+130-sample alignment and polarity handling. A clean long-field linear preset
+improved the run to ESR 0.0675 and correlation 0.9663. The capture was
+technically clean for single coils but behaved closer to edge-of-breakup with
+humbuckers; adding gentle hidden nonlinearity in the edge preset reduced ESR to
+0.00362 and correlation to 0.9982. A larger edge-detail variant did not
+improve this result, suggesting that the key correction was light nonlinearity
+rather than more capacity.
+
+\subsection{Real hardware exports}
+
+The hardware export trio is summarized in Table~\ref{tab:hardware}. All three
+exports passed native RTNeural validation and reported low probe ASR.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+Export & Preset & ESR & Worst ASR & Avg. ASR & Native RTF \\
+\midrule
+Clean/edge amp & Edge & 0.00217 & 0.00673 & 0.00251 & 20.72 \\
+Overdrive pedal & A2 PReLU & 0.00043 & 0.00195 & 0.00080 & 6.49 \\
+Rhythm amp & A2 PReLU & 0.00355 & 0.00913 & 0.00359 & 6.63 \\
+\bottomrule
+\end{tabular}
+\caption{Real hardware export results. Native RTF values are reference-system
+Eigen-backend results.}
+\label{tab:hardware}
+\end{table}
+
+These hardware captures trained more reliably than several earlier DAW
+amp-simulation renders. Plausible contributors include the matured capture
+workflow, float32 preparation, shorter focused material, consistent reamping,
+and the analog capture path's natural band limiting. These explanations remain
+hypotheses; matched experiments would be needed to isolate causes.
+
+\section{Discussion}
+
+\subsection{Why TCNs fit the product constraint}
+
+The successful presets combine three properties: finite memory, causal
+streaming, and RTNeural compatibility. Dilation expands temporal context
+without sample-by-sample recurrence, and Conv1D exports naturally to current
+RTNeural JSON. Smaller Conv models were fast but left residual structure in
+important tones. Recurrent models were considered during development, but the
+strongest validated export evidence in this workflow came from TCNs.
+
+The models in this paper are not full WaveNet graphs with residual and skip
+topology. They are sequential TCNs shaped by export constraints. That
+constraint is useful: it forces every architecture to survive the same native
+validation and real-time benchmark path.
+
+\subsection{Latency as experimental control}
+
+Latency is a major bottleneck. A few samples of error can dominate
+high-frequency residuals, and high-gain distortion weakens simple correlation
+between dry and processed signals. The trainer therefore treats latency as an
+interactive measurement problem, not a hidden preprocessing step. Future work
+should combine transient alignment, envelope correlation, band-limited scoring,
+phase methods, and post-training residual-shift diagnostics.
+
+\subsection{ESR, ASR, and listening}
+
+ESR is necessary but insufficient. A low-ESR model can still alias, mismatch
+level, or produce unacceptable residual spectra. ASR provides a deterministic
+probe-specific stress test for nonlinear foldback, but it is not a perceptual
+model. The appropriate export gate is multi-objective: backend parity, native
+validation, runtime headroom, preview metrics, probe ASR, residual listening,
+and user judgment.
+
+\subsection{Runtime scope}
+
+The A2 PReLU result ran comfortably on the reference machine and in a JUCE
+debug plugin smoke test, including a four-instance Logic Pro test at a
+32-sample buffer. This is encouraging but not production qualification. The
+next runtime work is controlled plugin benchmarking across weaker systems,
+release builds, sample rates, block sizes, plugin validation tools
+\cite{pluginval}, and full pedal-plus-amp-plus-IR chains. Static RTNeural
+\texttt{ModelT} specializations or fused residual TCN layers may eventually be
+necessary.
+
+\section{Limitations}
+
+This study is an internal applied research report rather than a fully
+controlled public benchmark. Most comparisons are single-seed product
+experiments. Dataset diversity is limited to the available captures and
+hardware. ASR thresholds are engineering heuristics rather than calibrated
+audibility thresholds. Some high-gain captures have low latency confidence.
+Runtime evidence is strongest on Apple Silicon with the Eigen backend. Finally,
+although the A2-inspired sequential preset is effective, it is not equivalent
+to NAM A2 topology.
+
+\section{Future Work}
+
+The most immediate research tasks are repeated-seed comparisons for the best
+WaveNet variants, matched latency-offset ablations, listening-calibrated ASR
+thresholds, and controlled plugin benchmarks. A day-2 RTNeural runtime
+extension should add a fused \texttt{a2\_wavenet} or \texttt{residual\_tcn}
+layer with preallocated state, residual/skip accumulation, and constrained JSON
+schema. Longer-term work includes NAM-teacher distillation, plugin-side
+oversampling or higher-rate model support, and PANAMA-style parametric active
+learning for controllable amplifier settings.
+
+\section{Conclusion}
+
+Under the current 48 kHz mono paired-capture workflow and RTNeural JSON export
+constraint, WaveNet-family causal TCNs are the best-tested architecture family
+for RTNeural Trainer. The strongest high-gain evidence is an A2-inspired
+sequential PReLU TCN that substantially improves RHYTHM4 waveform fit and
+probe ASR while remaining compatible with current RTNeural exports. The
+strongest practical evidence is the real hardware clean/drive/rhythm export
+trio, which passed native validation with low probe ASR and reference-system
+runtime headroom.
+
+The broader lesson is that neural amp modeling is not just a training problem.
+Capture discipline, latency alignment, spectral loss, aliasing diagnostics,
+native validation, and DAW runtime behavior all determine whether a model is
+musically useful.
+
+\section*{Data and Code Availability}
+
+The trainer implementation, native validator, documentation, and experimental
+notes are maintained at
+\url{https://github.com/shortwavlabs/rtneural-trainer}. Some source captures
+used in this study are not included in the repository because they contain
+performance audio and third-party tone references.
+
+\section*{Acknowledgments}
+
+This work builds on the RTNeural, Neural Amp Modeler, JUCE, and audio-ML
+research communities. We thank the maintainers of those projects for making
+their code and documentation available.
+
+\begin{thebibliography}{99}
+
+\bibitem{oord2016wavenet}
+A.~van~den Oord, S.~Dieleman, H.~Zen, K.~Simonyan, O.~Vinyals, A.~Graves,
+N.~Kalchbrenner, A.~Senior, and K.~Kavukcuoglu.
+\newblock WaveNet: A generative model for raw audio.
+\newblock \emph{arXiv preprint arXiv:1609.03499}, 2016.
+
+\bibitem{damskagg2019tube}
+E.-P. Damsk\"agg, L.~Juvela, E.~Thuillier, and V.~V\"alim\"aki.
+\newblock Deep learning for tube amplifier emulation.
+\newblock \emph{ICASSP}, 2019. arXiv:1811.00334.
+
+\bibitem{steinmetz2022auraloss}
+C.~J. Steinmetz and J.~D. Reiss.
+\newblock auraloss: Audio-focused loss functions in PyTorch.
+\newblock In \emph{Digital Music Research Network One-day Workshop}, 2020.
+
+\bibitem{grotschla2025panama}
+F.~Gr\"otschla, L.~A. Lanzend\"orfer, L.~Jiao, and R.~Wattenhofer.
+\newblock Parametric neural amp modeling with active learning.
+\newblock \emph{arXiv preprint arXiv:2507.02109}, 2025.
+
+\bibitem{steinmetz2025aliasing}
+R.~Sato and J.~O. Smith III.
+\newblock Aliasing reduction in neural amp modeling by smoothing activations.
+\newblock \emph{arXiv preprint arXiv:2505.04082}, 2025.
+
+\bibitem{namrepo}
+S.~Atkinson.
+\newblock Neural Amp Modeler.
+\newblock \url{https://github.com/sdatkinson/neural-amp-modeler}.
+
+\bibitem{namplugin}
+S.~Atkinson.
+\newblock NeuralAmpModelerPlugin.
+\newblock \url{https://github.com/sdatkinson/NeuralAmpModelerPlugin}.
+
+\bibitem{namcore}
+S.~Atkinson.
+\newblock NeuralAmpModelerCore.
+\newblock \url{https://github.com/sdatkinson/NeuralAmpModelerCore}.
+
+\bibitem{rtneural}
+J.~Chowdhury.
+\newblock RTNeural.
+\newblock \url{https://github.com/jatinchowdhury18/RTNeural}.
+
+\bibitem{juce}
+Raw Material Software.
+\newblock JUCE.
+\newblock \url{https://juce.com/}.
+
+\bibitem{pluginval}
+Tracktion.
+\newblock pluginval.
+\newblock \url{https://github.com/Tracktion/pluginval}.
+
+\end{thebibliography}
+
+\end{document}
