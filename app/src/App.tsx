@@ -1974,7 +1974,7 @@ function TrainView({
   const selectedResumeRun =
     resumeCandidates.find((run) => run.id === resumeFromRunId) ?? null;
   const completedRuns = project.runs.filter((run) => run.status === "completed");
-  const canTrain = project.audio?.status === "ready";
+  const canTrain = audioPreflightAllowsTraining(project.audio?.status);
   const currentOptions: TrainingOptions = {
     preset,
     resumeFromRunId,
@@ -2479,7 +2479,7 @@ function TrainView({
             <AlertTriangle size={18} />
             <span>
               <strong>Training is blocked.</strong>
-              <small>Run Capture preflight and resolve blocking audio warnings first.</small>
+              <small>Run Capture preflight with paired WAV files first.</small>
             </span>
           </div>
         ) : null}
@@ -3607,7 +3607,7 @@ function GateList({
   selectedRun: TrainingRun | null;
 }) {
   const checks = [
-    { label: "Audio prepared", ok: project.audio?.status === "ready" },
+    { label: "Audio prepared", ok: audioPreflightAllowsTraining(project.audio?.status) },
     { label: "Training completed", ok: Boolean(selectedRun) },
     { label: "Metrics saved", ok: Boolean(selectedRun?.metrics) },
     { label: "Native validation", ok: Boolean(selectedRun?.metrics) },
@@ -4948,8 +4948,12 @@ function runtimeDeviceWarning(
 
 function audioStatusLabel(status: AudioStatus) {
   if (status === "ready") return "Audio ready";
-  if (status === "warning") return "Audio warnings";
+  if (status === "warning") return "Audio ready with warnings";
   return "Audio missing";
+}
+
+function audioPreflightAllowsTraining(status: AudioStatus | undefined) {
+  return status === "ready" || status === "warning";
 }
 
 function formatMetric(value: number) {

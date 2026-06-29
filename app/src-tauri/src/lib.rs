@@ -81,6 +81,18 @@ enum AudioStatus {
     Ready,
 }
 
+fn audio_preflight_allows_training(status: &AudioStatus) -> bool {
+    matches!(status, AudioStatus::Ready | AudioStatus::Warning)
+}
+
+fn project_status_from_audio_status(status: &AudioStatus) -> ProjectStatus {
+    if audio_preflight_allows_training(status) {
+        ProjectStatus::Ready
+    } else {
+        ProjectStatus::Draft
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum RunStatus {
@@ -1094,11 +1106,7 @@ fn prepare_project_audio(
         status: prepare_report.status,
     };
 
-    let project_status = if matches!(report.status, AudioStatus::Ready) {
-        ProjectStatus::Ready
-    } else {
-        ProjectStatus::Draft
-    };
+    let project_status = project_status_from_audio_status(&report.status);
     let updated_at = now();
     let db = state.db.lock().map_err(lock_error)?;
     upsert_audio_report(&db, &payload.project_id, &report)?;
@@ -1237,11 +1245,7 @@ fn update_project_alignment_blocking(
         status: prepare_report.status,
     };
 
-    let project_status = if matches!(report.status, AudioStatus::Ready) {
-        ProjectStatus::Ready
-    } else {
-        ProjectStatus::Draft
-    };
+    let project_status = project_status_from_audio_status(&report.status);
     let updated_at = now();
     let db = state.db.lock().map_err(lock_error)?;
     upsert_audio_report(&db, &payload.project_id, &report)?;
@@ -1281,7 +1285,7 @@ fn start_training(
         let audio_ready = project
             .audio
             .as_ref()
-            .map(|audio| audio.status == AudioStatus::Ready)
+            .map(|audio| audio_preflight_allows_training(&audio.status))
             .unwrap_or(false);
         if !audio_ready {
             return Err("Audio must pass preflight before training.".to_string());
@@ -2618,7 +2622,7 @@ fn recover_interrupted_jobs(db: &Connection) -> Result<(), String> {
         "UPDATE projects
          SET status = CASE
              WHEN EXISTS (SELECT 1 FROM exports WHERE exports.project_id = projects.id AND exports.status = 'ready') THEN 'exported'
-             WHEN EXISTS (SELECT 1 FROM audio_files WHERE audio_files.project_id = projects.id AND audio_files.status = 'ready') THEN 'ready'
+             WHEN EXISTS (SELECT 1 FROM audio_files WHERE audio_files.project_id = projects.id AND audio_files.status IN ('ready', 'warning')) THEN 'ready'
              ELSE 'draft'
          END,
          updated_at = ?1
@@ -5026,6 +5030,24 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warning_audio_preflight_allows_training() {
+        assert!(audio_preflight_allows_training(&AudioStatus::Ready));
+        assert!(audio_preflight_allows_training(&AudioStatus::Warning));
+        assert!(!audio_preflight_allows_training(&AudioStatus::Missing));
+
+        assert_eq!(
+            enum_to_string(&project_status_from_audio_status(&AudioStatus::Warning))
+                .expect("warning project status"),
+            "ready"
+        );
+        assert_eq!(
+            enum_to_string(&project_status_from_audio_status(&AudioStatus::Missing))
+                .expect("missing project status"),
+            "draft"
+        );
+    }
 
     #[test]
     fn legacy_smoothed_tanh_wavenet_metrics_use_wavenet_runtime_estimate() {
