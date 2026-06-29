@@ -3,11 +3,13 @@
 namespace {
 
 constexpr auto inputGainId = "input_gain_db";
+constexpr auto pedalOutputGainId = "pedal_output_gain_db";
 constexpr auto outputGainId = "output_gain_db";
 constexpr auto lowEqId = "eq_low_db";
 constexpr auto midEqId = "eq_mid_db";
 constexpr auto highEqId = "eq_high_db";
 constexpr auto bypassId = "bypass";
+constexpr auto pedalEnabledId = "pedal_enabled";
 constexpr auto irEnabledId = "ir_enabled";
 
 juce::String formatPeak(float peak)
@@ -25,10 +27,12 @@ RTNeuralLoaderAudioProcessorEditor::RTNeuralLoaderAudioProcessorEditor(
     : AudioProcessorEditor(&owner),
       processorRef(owner),
       inputAttachment(owner.apvts, inputGainId, inputSlider),
+      pedalOutputAttachment(owner.apvts, pedalOutputGainId, pedalOutputSlider),
       outputAttachment(owner.apvts, outputGainId, outputSlider),
       lowAttachment(owner.apvts, lowEqId, lowSlider),
       midAttachment(owner.apvts, midEqId, midSlider),
       highAttachment(owner.apvts, highEqId, highSlider),
+      pedalAttachment(owner.apvts, pedalEnabledId, pedalButton),
       irAttachment(owner.apvts, irEnabledId, irButton),
       bypassAttachment(owner.apvts, bypassId, bypassButton)
 {
@@ -45,6 +49,7 @@ RTNeuralLoaderAudioProcessorEditor::RTNeuralLoaderAudioProcessorEditor(
     addAndMakeVisible(subtitleLabel);
 
     configureGainSlider(inputSlider, "Input");
+    configureGainSlider(pedalOutputSlider, "Pedal Out");
     configureGainSlider(outputSlider, "Output");
     configureGainSlider(lowSlider, "Low");
     configureGainSlider(midSlider, "Mid");
@@ -53,8 +58,15 @@ RTNeuralLoaderAudioProcessorEditor::RTNeuralLoaderAudioProcessorEditor(
     loadButton.onClick = [this] { openModelChooser(); };
     addAndMakeVisible(loadButton);
 
+    loadPedalButton.onClick = [this] { openPedalChooser(); };
+    addAndMakeVisible(loadPedalButton);
+
     loadIrButton.onClick = [this] { openImpulseResponseChooser(); };
     addAndMakeVisible(loadIrButton);
+
+    pedalButton.setClickingTogglesState(true);
+    pedalButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff8ae78b));
+    addAndMakeVisible(pedalButton);
 
     irButton.setClickingTogglesState(true);
     irButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff8ae78b));
@@ -66,17 +78,20 @@ RTNeuralLoaderAudioProcessorEditor::RTNeuralLoaderAudioProcessorEditor(
 
     configureInfoLabel(statusLabel, 15.0f, true);
     configureInfoLabel(pathLabel, 11.0f);
+    configureInfoLabel(pedalLabel, 11.0f);
     configureInfoLabel(irLabel, 11.0f);
     configureInfoLabel(safetyLabel, 12.0f, true);
     configureInfoLabel(peakLabel, 12.0f, true);
 
     pathLabel.setColour(juce::Label::textColourId, juce::Colour(0xffaeb9b4));
+    pedalLabel.setColour(juce::Label::textColourId, juce::Colour(0xffaeb9b4));
     irLabel.setColour(juce::Label::textColourId, juce::Colour(0xffaeb9b4));
     safetyLabel.setColour(juce::Label::textColourId, juce::Colour(0xffffcf5f));
     peakLabel.setColour(juce::Label::textColourId, juce::Colour(0xff8ae78b));
 
     addAndMakeVisible(statusLabel);
     addAndMakeVisible(pathLabel);
+    addAndMakeVisible(pedalLabel);
     addAndMakeVisible(irLabel);
     addAndMakeVisible(safetyLabel);
     addAndMakeVisible(peakLabel);
@@ -91,7 +106,7 @@ RTNeuralLoaderAudioProcessorEditor::RTNeuralLoaderAudioProcessorEditor(
     startTimerHz(10);
 
     setResizable(false, false);
-    setSize(760, 500);
+    setSize(840, 560);
 }
 
 void RTNeuralLoaderAudioProcessorEditor::configureGainSlider(juce::Slider& slider,
@@ -143,8 +158,9 @@ void RTNeuralLoaderAudioProcessorEditor::resized()
     left.removeFromTop(18);
 
     auto firstRow = left.removeFromTop(106);
-    inputSlider.setBounds(firstRow.removeFromLeft(140).reduced(8));
-    outputSlider.setBounds(firstRow.removeFromLeft(140).reduced(8));
+    inputSlider.setBounds(firstRow.removeFromLeft(96).reduced(6));
+    pedalOutputSlider.setBounds(firstRow.removeFromLeft(96).reduced(6));
+    outputSlider.setBounds(firstRow.removeFromLeft(96).reduced(6));
 
     auto eqRow = left.removeFromTop(106);
     lowSlider.setBounds(eqRow.removeFromLeft(96).reduced(6));
@@ -154,17 +170,22 @@ void RTNeuralLoaderAudioProcessorEditor::resized()
     left.removeFromTop(16);
     loadButton.setBounds(left.removeFromTop(40));
     left.removeFromTop(8);
+    loadPedalButton.setBounds(left.removeFromTop(34));
+    left.removeFromTop(8);
     loadIrButton.setBounds(left.removeFromTop(34));
     left.removeFromTop(8);
     auto toggles = left.removeFromTop(34);
-    irButton.setBounds(toggles.removeFromLeft(144).reduced(0, 1));
-    toggles.removeFromLeft(10);
+    pedalButton.setBounds(toggles.removeFromLeft(90).reduced(0, 1));
+    toggles.removeFromLeft(8);
+    irButton.setBounds(toggles.removeFromLeft(90).reduced(0, 1));
+    toggles.removeFromLeft(8);
     bypassButton.setBounds(toggles.reduced(0, 1));
     left.removeFromTop(8);
     peakLabel.setBounds(left.removeFromTop(24));
 
     statusLabel.setBounds(right.removeFromTop(28));
     pathLabel.setBounds(right.removeFromTop(42));
+    pedalLabel.setBounds(right.removeFromTop(26));
     irLabel.setBounds(right.removeFromTop(26));
     safetyLabel.setBounds(right.removeFromTop(46));
     right.removeFromTop(8);
@@ -182,6 +203,9 @@ void RTNeuralLoaderAudioProcessorEditor::timerCallback()
     safetyLabel.setText(processorRef.getSafetyStatus(), juce::dontSendNotification);
     irLabel.setText(processorRef.getImpulseResponseStatus() + ": " + processorRef.getImpulseResponseName(),
                     juce::dontSendNotification);
+    pedalLabel.setText(processorRef.getPedalStatus() + ": " + processorRef.getPedalName(),
+                       juce::dontSendNotification);
+    updateControlEnablement();
 }
 
 void RTNeuralLoaderAudioProcessorEditor::openModelChooser()
@@ -203,6 +227,30 @@ void RTNeuralLoaderAudioProcessorEditor::openModelChooser()
         juce::String error;
         if(! processorRef.loadModelFromSelection(selection, error))
             statusLabel.setText(error, juce::dontSendNotification);
+
+        updateModelLabels();
+    });
+}
+
+void RTNeuralLoaderAudioProcessorEditor::openPedalChooser()
+{
+    fileChooser = std::make_unique<juce::FileChooser>(
+        "Load RTNeural pedal export folder or model JSON",
+        juce::File(),
+        "*.json;*.rtneural.json");
+
+    constexpr auto flags = juce::FileBrowserComponent::openMode
+        | juce::FileBrowserComponent::canSelectFiles
+        | juce::FileBrowserComponent::canSelectDirectories;
+
+    fileChooser->launchAsync(flags, [this](const juce::FileChooser& chooser) {
+        const auto selection = chooser.getResult();
+        if(selection == juce::File())
+            return;
+
+        juce::String error;
+        if(! processorRef.loadPedalFromSelection(selection, error))
+            pedalLabel.setText(error, juce::dontSendNotification);
 
         updateModelLabels();
     });
@@ -249,7 +297,14 @@ void RTNeuralLoaderAudioProcessorEditor::updateModelLabels()
                         : processorRef.getImpulseResponseStatus() + ": " + processorRef.getImpulseResponseName(),
                     juce::dontSendNotification);
 
+    const auto pedalPath = processorRef.getPedalPath();
+    pedalLabel.setText(pedalPath.isEmpty()
+                           ? processorRef.getPedalStatus() + ": choose a pedal export folder."
+                           : processorRef.getPedalStatus() + ": " + processorRef.getPedalName(),
+                       juce::dontSendNotification);
+
     safetyLabel.setText(processorRef.getSafetyStatus(), juce::dontSendNotification);
+    updateControlEnablement();
 
     const auto lines = processorRef.getModelInfoLines();
     for(size_t i = 0; i < infoLabels.size(); ++i)
@@ -257,4 +312,11 @@ void RTNeuralLoaderAudioProcessorEditor::updateModelLabels()
         infoLabels[i].setText(static_cast<int>(i) < lines.size() ? lines[static_cast<int>(i)] : juce::String(),
                               juce::dontSendNotification);
     }
+}
+
+void RTNeuralLoaderAudioProcessorEditor::updateControlEnablement()
+{
+    const auto hasPedal = processorRef.hasLoadedPedal();
+    pedalButton.setEnabled(hasPedal);
+    pedalOutputSlider.setEnabled(hasPedal && pedalButton.getToggleState());
 }

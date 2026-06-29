@@ -9,11 +9,13 @@
 namespace {
 
 constexpr auto inputGainId = "input_gain_db";
+constexpr auto pedalOutputGainId = "pedal_output_gain_db";
 constexpr auto outputGainId = "output_gain_db";
 constexpr auto lowEqId = "eq_low_db";
 constexpr auto midEqId = "eq_mid_db";
 constexpr auto highEqId = "eq_high_db";
 constexpr auto bypassId = "bypass";
+constexpr auto pedalEnabledId = "pedal_enabled";
 constexpr auto irEnabledId = "ir_enabled";
 
 float dbToGain(float db)
@@ -233,6 +235,12 @@ RTNeuralLoaderAudioProcessor::createParameterLayout()
         0.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB")));
     layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID { pedalOutputGainId, 1 },
+        "Pedal Out",
+        juce::NormalisableRange<float> { -36.0f, 12.0f, 0.01f },
+        0.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB")));
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID { outputGainId, 1 },
         "Output",
         juce::NormalisableRange<float> { -36.0f, 12.0f, 0.01f },
@@ -261,6 +269,10 @@ RTNeuralLoaderAudioProcessor::createParameterLayout()
         "Bypass",
         false));
     layout.add(std::make_unique<juce::AudioParameterBool>(
+        juce::ParameterID { pedalEnabledId, 1 },
+        "Pedal",
+        true));
+    layout.add(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID { irEnabledId, 1 },
         "Cab IR",
         true));
@@ -275,15 +287,20 @@ RTNeuralLoaderAudioProcessor::RTNeuralLoaderAudioProcessor()
       apvts(*this, nullptr, "Parameters", createParameterLayout())
 {
     inputGainDb = apvts.getRawParameterValue(inputGainId);
+    pedalOutputGainDb = apvts.getRawParameterValue(pedalOutputGainId);
     outputGainDb = apvts.getRawParameterValue(outputGainId);
     lowEqDb = apvts.getRawParameterValue(lowEqId);
     midEqDb = apvts.getRawParameterValue(midEqId);
     highEqDb = apvts.getRawParameterValue(highEqId);
     bypass = apvts.getRawParameterValue(bypassId);
+    pedalEnabled = apvts.getRawParameterValue(pedalEnabledId);
     irEnabled = apvts.getRawParameterValue(irEnabledId);
     apvts.state.setProperty("modelPath", loadedModelPath, nullptr);
     apvts.state.setProperty("modelName", loadedModelName, nullptr);
     apvts.state.setProperty("packagePath", loadedPackagePath, nullptr);
+    apvts.state.setProperty("pedalPath", loadedPedalPath, nullptr);
+    apvts.state.setProperty("pedalName", loadedPedalName, nullptr);
+    apvts.state.setProperty("pedalPackagePath", loadedPedalPackagePath, nullptr);
     apvts.state.setProperty("irPath", loadedIrPath, nullptr);
     apvts.state.setProperty("irName", loadedIrName, nullptr);
 }
@@ -308,6 +325,15 @@ void RTNeuralLoaderAudioProcessor::prepareToPlay(double sampleRate, int samplesP
     if(auto* model = currentModel.load(std::memory_order_acquire))
     {
         for(auto& channelModel : model->channels)
+        {
+            if(channelModel != nullptr)
+                channelModel->reset();
+        }
+    }
+
+    if(auto* pedal = currentPedal.load(std::memory_order_acquire))
+    {
+        for(auto& channelModel : pedal->channels)
         {
             if(channelModel != nullptr)
                 channelModel->reset();
@@ -343,6 +369,10 @@ void RTNeuralLoaderAudioProcessor::processBlock(
 
     const auto modelBypassed = bypass != nullptr && bypass->load(std::memory_order_relaxed) > 0.5f;
     auto* model = modelBypassed ? nullptr : currentModel.load(std::memory_order_acquire);
+    auto* pedal = modelBypassed ? nullptr : currentPedal.load(std::memory_order_acquire);
+    const auto pedalActive = pedal != nullptr
+        && pedalEnabled != nullptr
+        && pedalEnabled->load(std::memory_order_relaxed) > 0.5f;
 
     if(! modelBypassed)
     {
@@ -352,6 +382,31 @@ void RTNeuralLoaderAudioProcessor::processBlock(
                                             ? inputGainDb->load(std::memory_order_relaxed)
                                             : 0.0f);
         buffer.applyGain(inputGain);
+    }
+
+    if(pedalActive)
+    {
+        float input[1] {};
+
+        for(auto channel = 0; channel < buffer.getNumChannels(); ++channel)
+        {
+            auto* channelData = buffer.getWritePointer(channel);
+            auto* channelModel = pedal->channels[static_cast<size_t>(std::min(channel, 1))].get();
+
+            if(channelModel == nullptr)
+                continue;
+
+            for(auto sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                input[0] = channelData[sample];
+                channelData[sample] = channelModel->forward(input);
+            }
+        }
+
+        const auto pedalGain = dbToGain(pedalOutputGainDb != nullptr
+                                            ? pedalOutputGainDb->load(std::memory_order_relaxed)
+                                            : 0.0f);
+        buffer.applyGain(pedalGain);
     }
 
     if(model != nullptr)
@@ -455,6 +510,53 @@ bool RTNeuralLoaderAudioProcessor::resolveModelSelection(const juce::File& selec
     return true;
 }
 
+std::unique_ptr<RTNeuralLoaderAudioProcessor::ModelSet>
+RTNeuralLoaderAudioProcessor::loadModelSetFromSelection(const juce::File& selection,
+                                                        juce::String& errorMessage)
+{
+    ResolvedSelection resolved;
+    if(! resolveModelSelection(selection, resolved, errorMessage))
+        return {};
+
+    std::ifstream stream(resolved.modelFile.getFullPathName().toStdString(), std::ios::binary);
+    if(! stream.good())
+    {
+        errorMessage = "Could not open model file.";
+        return {};
+    }
+
+    auto next = std::make_unique<ModelSet>();
+    next->channels[0] = RTNeural::json_parser::parseJson<float>(stream);
+
+    stream.clear();
+    stream.seekg(0, std::ios::beg);
+    next->channels[1] = RTNeural::json_parser::parseJson<float>(stream);
+
+    if(next->channels[0] == nullptr || next->channels[1] == nullptr)
+    {
+        errorMessage = "RTNeural could not parse this model.";
+        return {};
+    }
+
+    next->channels[0]->reset();
+    next->channels[1]->reset();
+    next->inputSize = next->channels[0]->layers.empty() ? 1 : next->channels[0]->layers[0]->in_size;
+
+    if(next->inputSize != 1)
+    {
+        errorMessage = "This test plugin only supports mono-input RTNeural models.";
+        return {};
+    }
+
+    next->name = resolved.packageDirectory == juce::File()
+                     ? resolved.modelFile.getFileName()
+                     : resolved.packageDirectory.getFileName();
+    next->path = resolved.modelFile.getFullPathName();
+    next->packagePath = resolved.packageDirectory.getFullPathName();
+    next->metadata = readMetadata(resolved.modelFile, resolved.packageDirectory);
+    return next;
+}
+
 RTNeuralLoaderAudioProcessor::ModelMetadata RTNeuralLoaderAudioProcessor::readMetadata(
     const juce::File& modelFile,
     const juce::File& packageDirectory)
@@ -523,48 +625,12 @@ bool RTNeuralLoaderAudioProcessor::loadModelFromSelection(const juce::File& sele
 bool RTNeuralLoaderAudioProcessor::loadModelFromFile(const juce::File& file,
                                                      juce::String& errorMessage)
 {
-    ResolvedSelection resolved;
-    if(! resolveModelSelection(file, resolved, errorMessage))
-        return false;
-
     try
     {
-        std::ifstream stream(resolved.modelFile.getFullPathName().toStdString(), std::ios::binary);
-        if(! stream.good())
-        {
-            errorMessage = "Could not open model file.";
+        auto next = loadModelSetFromSelection(file, errorMessage);
+        if(next == nullptr)
             return false;
-        }
 
-        auto next = std::make_unique<ModelSet>();
-        next->channels[0] = RTNeural::json_parser::parseJson<float>(stream);
-
-        stream.clear();
-        stream.seekg(0, std::ios::beg);
-        next->channels[1] = RTNeural::json_parser::parseJson<float>(stream);
-
-        if(next->channels[0] == nullptr || next->channels[1] == nullptr)
-        {
-            errorMessage = "RTNeural could not parse this model.";
-            return false;
-        }
-
-        next->channels[0]->reset();
-        next->channels[1]->reset();
-        next->inputSize = next->channels[0]->layers.empty() ? 1 : next->channels[0]->layers[0]->in_size;
-
-        if(next->inputSize != 1)
-        {
-            errorMessage = "This test plugin only supports mono-input RTNeural models.";
-            return false;
-        }
-
-        next->name = resolved.packageDirectory == juce::File()
-                         ? resolved.modelFile.getFileName()
-                         : resolved.packageDirectory.getFileName();
-        next->path = resolved.modelFile.getFullPathName();
-        next->packagePath = resolved.packageDirectory.getFullPathName();
-        next->metadata = readMetadata(resolved.modelFile, resolved.packageDirectory);
         auto* raw = next.get();
         retainedModels.push_back(std::move(next));
 
@@ -583,6 +649,44 @@ bool RTNeuralLoaderAudioProcessor::loadModelFromFile(const juce::File& file,
     {
         errorMessage = juce::String("Failed to load model: ") + e.what();
         loadStatus = errorMessage;
+        return false;
+    }
+}
+
+bool RTNeuralLoaderAudioProcessor::loadPedalFromSelection(const juce::File& selection,
+                                                          juce::String& errorMessage)
+{
+    return loadPedalFromFile(selection, errorMessage);
+}
+
+bool RTNeuralLoaderAudioProcessor::loadPedalFromFile(const juce::File& file,
+                                                     juce::String& errorMessage)
+{
+    try
+    {
+        auto next = loadModelSetFromSelection(file, errorMessage);
+        if(next == nullptr)
+            return false;
+
+        auto* raw = next.get();
+        retainedPedalModels.push_back(std::move(next));
+
+        loadedPedalName = raw->name;
+        loadedPedalPath = raw->path;
+        loadedPedalPackagePath = raw->packagePath;
+        loadedPedalMetadata = raw->metadata;
+        pedalStatus = "Pedal loaded";
+        apvts.state.setProperty("pedalPath", loadedPedalPath, nullptr);
+        apvts.state.setProperty("pedalName", loadedPedalName, nullptr);
+        apvts.state.setProperty("pedalPackagePath", loadedPedalPackagePath, nullptr);
+        pedalLoaded.store(true, std::memory_order_release);
+        currentPedal.store(raw, std::memory_order_release);
+        return true;
+    }
+    catch(const std::exception& e)
+    {
+        errorMessage = juce::String("Failed to load pedal: ") + e.what();
+        pedalStatus = errorMessage;
         return false;
     }
 }
@@ -608,6 +712,21 @@ juce::String RTNeuralLoaderAudioProcessor::getModelPath() const
 juce::String RTNeuralLoaderAudioProcessor::getPackagePath() const
 {
     return loadedPackagePath;
+}
+
+juce::String RTNeuralLoaderAudioProcessor::getPedalName() const
+{
+    return loadedPedalName;
+}
+
+juce::String RTNeuralLoaderAudioProcessor::getPedalPath() const
+{
+    return loadedPedalPath;
+}
+
+juce::String RTNeuralLoaderAudioProcessor::getPedalStatus() const
+{
+    return pedalStatus;
 }
 
 bool RTNeuralLoaderAudioProcessor::loadImpulseResponseFromFile(const juce::File& file,
@@ -684,27 +803,33 @@ juce::StringArray RTNeuralLoaderAudioProcessor::getModelInfoLines() const
 {
     juce::StringArray lines;
 
-    if(! hasLoadedModel())
+    if(! hasLoadedModel() && ! hasLoadedPedal())
     {
         lines.add("No model loaded.");
-        lines.add("Load an export folder or model.rtneural.json.");
+        lines.add("Load amp and/or pedal export folders.");
         lines.add("Audio is passthrough with output trim.");
         return lines;
     }
 
-    lines.add("Preset: " + (loadedMetadata.preset.isNotEmpty() ? loadedMetadata.preset : "unknown"));
-    lines.add("ESR: " + formatMetric(loadedMetadata.esr, 4)
-              + "  ASR worst/avg: " + formatMetric(loadedMetadata.worstAsr, 4)
-              + " / " + formatMetric(loadedMetadata.averageAsr, 4));
-    lines.add("Native RTF: " + formatMetric(loadedMetadata.nativeRealtimeFactor, 2)
-              + "x  Validation: "
-              + (loadedMetadata.validationStatus.isNotEmpty() ? loadedMetadata.validationStatus : "n/a"));
-    lines.add("Sample rate: " + (loadedMetadata.sampleRate > 0 ? juce::String(loadedMetadata.sampleRate) : "n/a")
-              + " Hz  Latency: " + juce::String(loadedMetadata.latencySamples) + " samples");
+    lines.add("Amp: " + (hasLoadedModel() ? loadedModelName : "none"));
+    lines.add("Pedal: " + (hasLoadedPedal() ? loadedPedalName : "none"));
 
-    if(loadedMetadata.receptiveFieldSamples > 0 || loadedMetadata.conv1dLayers > 0)
-        lines.add("Receptive field: " + juce::String(loadedMetadata.receptiveFieldSamples)
-                  + " samples  Conv1D layers: " + juce::String(loadedMetadata.conv1dLayers));
+    if(hasLoadedModel())
+    {
+        lines.add("Preset: " + (loadedMetadata.preset.isNotEmpty() ? loadedMetadata.preset : "unknown"));
+        lines.add("ESR: " + formatMetric(loadedMetadata.esr, 4)
+                  + "  ASR worst/avg: " + formatMetric(loadedMetadata.worstAsr, 4)
+                  + " / " + formatMetric(loadedMetadata.averageAsr, 4));
+        lines.add("Native RTF: " + formatMetric(loadedMetadata.nativeRealtimeFactor, 2)
+                  + "x  Validation: "
+                  + (loadedMetadata.validationStatus.isNotEmpty() ? loadedMetadata.validationStatus : "n/a"));
+        lines.add("Sample rate: " + (loadedMetadata.sampleRate > 0 ? juce::String(loadedMetadata.sampleRate) : "n/a")
+                  + " Hz  Latency: " + juce::String(loadedMetadata.latencySamples) + " samples");
+
+        if(loadedMetadata.receptiveFieldSamples > 0 || loadedMetadata.conv1dLayers > 0)
+            lines.add("Receptive field: " + juce::String(loadedMetadata.receptiveFieldSamples)
+                      + " samples  Conv1D layers: " + juce::String(loadedMetadata.conv1dLayers));
+    }
 
     lines.add("Cab IR: " + (hasLoadedImpulseResponse() ? loadedIrName : "none"));
 
@@ -724,7 +849,7 @@ juce::String RTNeuralLoaderAudioProcessor::getLoadStatus() const
 
 juce::String RTNeuralLoaderAudioProcessor::getSafetyStatus() const
 {
-    if(! hasLoadedModel())
+    if(! hasLoadedModel() && ! hasLoadedPedal())
         return "No model loaded.";
 
     juce::StringArray warnings;
@@ -737,12 +862,26 @@ juce::String RTNeuralLoaderAudioProcessor::getSafetyStatus() const
                      + juce::String(loadedMetadata.sampleRate) + " Hz.");
     }
 
+    if(hostRate > 0.0 && loadedPedalMetadata.sampleRate > 0
+       && std::abs(hostRate - static_cast<double>(loadedPedalMetadata.sampleRate)) > 1.0)
+    {
+        warnings.add("Session is " + juce::String(hostRate, 0) + " Hz; pedal is "
+                     + juce::String(loadedPedalMetadata.sampleRate) + " Hz.");
+    }
+
     if(loadedMetadata.aliasingStatus.isNotEmpty() && loadedMetadata.aliasingStatus != "pass")
         warnings.add("Aliasing report: " + loadedMetadata.aliasingStatus + ".");
+
+    if(loadedPedalMetadata.aliasingStatus.isNotEmpty() && loadedPedalMetadata.aliasingStatus != "pass")
+        warnings.add("Pedal aliasing report: " + loadedPedalMetadata.aliasingStatus + ".");
 
     if(loadedMetadata.nativeRealtimeFactor > 0.0 && loadedMetadata.nativeRealtimeFactor < 2.0)
         warnings.add("Low native runtime headroom: "
                      + formatMetric(loadedMetadata.nativeRealtimeFactor, 2) + "x.");
+
+    if(loadedPedalMetadata.nativeRealtimeFactor > 0.0 && loadedPedalMetadata.nativeRealtimeFactor < 2.0)
+        warnings.add("Low pedal runtime headroom: "
+                     + formatMetric(loadedPedalMetadata.nativeRealtimeFactor, 2) + "x.");
 
     const auto irOn = irEnabled != nullptr && irEnabled->load(std::memory_order_relaxed) > 0.5f;
     if(irOn && ! hasLoadedImpulseResponse())
@@ -764,6 +903,12 @@ bool RTNeuralLoaderAudioProcessor::hasLoadedModel() const
     return currentModel.load(std::memory_order_acquire) != nullptr;
 }
 
+bool RTNeuralLoaderAudioProcessor::hasLoadedPedal() const
+{
+    return pedalLoaded.load(std::memory_order_acquire)
+        && currentPedal.load(std::memory_order_acquire) != nullptr;
+}
+
 bool RTNeuralLoaderAudioProcessor::hasLoadedImpulseResponse() const
 {
     return impulseResponseLoaded.load(std::memory_order_acquire);
@@ -777,6 +922,16 @@ void RTNeuralLoaderAudioProcessor::applyRestoredModelPath()
     juce::String error;
     if(! loadModelFromFile(juce::File(loadedModelPath), error))
         loadStatus = "Could not restore model: " + error;
+}
+
+void RTNeuralLoaderAudioProcessor::applyRestoredPedalPath()
+{
+    if(loadedPedalPath.isEmpty())
+        return;
+
+    juce::String error;
+    if(! loadPedalFromFile(juce::File(loadedPedalPath), error))
+        pedalStatus = "Could not restore pedal: " + error;
 }
 
 void RTNeuralLoaderAudioProcessor::applyRestoredImpulseResponsePath()
@@ -880,6 +1035,9 @@ void RTNeuralLoaderAudioProcessor::getStateInformation(juce::MemoryBlock& destDa
     state.setProperty("modelPath", loadedModelPath, nullptr);
     state.setProperty("modelName", loadedModelName, nullptr);
     state.setProperty("packagePath", loadedPackagePath, nullptr);
+    state.setProperty("pedalPath", loadedPedalPath, nullptr);
+    state.setProperty("pedalName", loadedPedalName, nullptr);
+    state.setProperty("pedalPackagePath", loadedPedalPackagePath, nullptr);
     state.setProperty("irPath", loadedIrPath, nullptr);
     state.setProperty("irName", loadedIrName, nullptr);
 
@@ -897,10 +1055,14 @@ void RTNeuralLoaderAudioProcessor::setStateInformation(const void* data, int siz
             loadedModelPath = restoredState.getProperty("modelPath", {}).toString();
             loadedModelName = restoredState.getProperty("modelName", "No model loaded").toString();
             loadedPackagePath = restoredState.getProperty("packagePath", {}).toString();
+            loadedPedalPath = restoredState.getProperty("pedalPath", {}).toString();
+            loadedPedalName = restoredState.getProperty("pedalName", "No pedal loaded").toString();
+            loadedPedalPackagePath = restoredState.getProperty("pedalPackagePath", {}).toString();
             loadedIrPath = restoredState.getProperty("irPath", {}).toString();
             loadedIrName = restoredState.getProperty("irName", "No IR loaded").toString();
             apvts.replaceState(restoredState);
             applyRestoredModelPath();
+            applyRestoredPedalPath();
             applyRestoredImpulseResponsePath();
         }
     }

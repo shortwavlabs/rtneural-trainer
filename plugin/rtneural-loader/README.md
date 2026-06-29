@@ -6,12 +6,13 @@ This is intentionally plain, but it is now useful enough for real DAW smoke
 tests:
 
 - load an exported package folder or a raw `.json` / `.rtneural.json` model;
+- load an optional pedal RTNeural export before the amp model;
 - load an optional cabinet impulse response (`.wav`, `.aif`, `.aiff`, `.flac`);
 - restore the last loaded path when a DAW session reopens;
 - show export metadata such as preset, ESR, ASR, validation, native benchmark
   headroom, sample rate, latency, and receptive field;
-- expose input gain, output gain, model bypass, cab IR enable, and a simple
-  low/mid/high EQ shell;
+- expose input gain, pedal output gain, output gain, model bypass, pedal enable,
+  cab IR enable, and a simple low/mid/high EQ shell;
 - show a lightweight output peak/clip indicator.
 
 If no model is loaded, audio is passed through with output trim applied.
@@ -45,17 +46,21 @@ cmake -S plugin/rtneural-loader -B plugin/rtneural-loader/build -DRTNEURAL_LOADE
 ## Notes
 
 - Model loading happens from the editor button on the message thread.
-- DAW state stores the selected model path, package path, parameters, and model
-  name, plus the selected impulse response path. On session restore, the plugin
-  reloads the model and IR if the paths still exist.
+- DAW state stores the selected amp path, pedal path, package paths, parameters,
+  display names, and selected impulse response path. On session restore, the
+  plugin reloads the amp, pedal, and IR if the paths still exist.
 - The audio thread only reads the latest loaded model pointer, cached EQ
   coefficients, the prepared convolution stage, atomics, and sample data.
-- Loaded model objects are retained for the lifetime of the processor so a model
-  swap cannot delete an object still being read by the audio callback.
+- Loaded amp and pedal model objects are retained for the lifetime of the
+  processor so a model swap cannot delete an object still being read by the
+  audio callback.
 - Package-folder loading expects `model.rtneural.json` at the selected folder
   root. Metadata is read opportunistically from `validation-report.json`,
   `benchmark-report.json`, `aliasing-report.json`, and `package.json`.
-- The IR stage runs after model inference and EQ, matching an amp-head into
+- The audio chain is input gain -> optional pedal model -> pedal output gain ->
+  amp model -> low/mid/high EQ -> optional cab IR -> output gain. The pedal
+  output knob is disabled until a pedal is loaded and enabled.
+- The IR stage runs after amp inference and EQ, matching an amp-head into
   cabinet flow. IRs are loaded with JUCE `dsp::Convolution`, trimmed and
   normalised on load.
 - This is a test harness, not the final AIDA-X-style player UI.
@@ -77,6 +82,9 @@ Validated on June 25, 2026:
   peak indicator; `auval -v aufx RtL1 SwLv` still passes.
 - A follow-up build added a cabinet IR loader with a DAW-persisted IR path and
   `Cab IR` enable parameter; `auval -v aufx RtL1 SwLv` still passes.
+- A later build added a front-of-amp pedal loader, `Pedal` enable parameter,
+  DAW-persisted pedal path, and `Pedal Out` gain trim; `auval -v aufx RtL1 SwLv`
+  still passes.
 
 Next checks: reload a saved Logic project to verify model path restore in the
 host, test `64`/`128` buffers, test 96 kHz sessions, and try less powerful
