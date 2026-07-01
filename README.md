@@ -1,5 +1,7 @@
 # RTNeural Trainer
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21109537.svg)](https://doi.org/10.5281/zenodo.21109537)
+
 RTNeural Trainer is a local desktop workbench for preparing paired audio,
 training a small neural audio model, exporting RTNeural-compatible JSON, and
 validating/benchmarking the result before use in a real-time target.
@@ -36,6 +38,14 @@ Still deferred: signed/notarized release distribution, richer waveform/spectrum
 inspection, UI smoke tests with a real Tauri window, true installed-app bundle
 automation, and any `.aidax` or generated player envelope until format/license
 review is complete.
+
+## Research Paper
+
+The accompanying technical preprint is archived on Zenodo:
+
+Shortwav Labs. (2026). *Aliasing-Aware RTNeural-Compatible WaveNet Modeling of
+Guitar Amplifier and Pedal Captures*. Zenodo.
+https://doi.org/10.5281/zenodo.21109537
 
 ## Requirements
 

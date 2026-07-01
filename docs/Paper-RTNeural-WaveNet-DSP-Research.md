@@ -3,6 +3,7 @@
 Status: internal scientific draft  
 Date: 2026-06-29  
 Repository: `shortwavlabs/rtneural-trainer`  
+DOI: [10.5281/zenodo.21109537](https://doi.org/10.5281/zenodo.21109537)
 Peer review: [Peer-Review-RTNeural-WaveNet-DSP-Research.md](Peer-Review-RTNeural-WaveNet-DSP-Research.md)
 
 ## Abstract

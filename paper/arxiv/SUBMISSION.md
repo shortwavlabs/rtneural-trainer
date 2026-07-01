@@ -7,6 +7,8 @@ Paper source:
 Recommended arXiv metadata:
 
 - Title: `Aliasing-Aware RTNeural-Compatible WaveNet Modeling of Guitar Amplifier and Pedal Captures`
+- DOI: `10.5281/zenodo.21109537`
+- DOI URL: `https://doi.org/10.5281/zenodo.21109537`
 - Primary category: `eess.AS` Audio and Speech Processing
 - Cross-list candidates: `cs.SD` Sound, optionally `cs.LG` Machine Learning
 - Comments: `Draft; source code and experiment notes available at https://github.com/shortwavlabs/rtneural-trainer`
@@ -39,7 +41,7 @@ Before submission:
 1. Replace the author block in `main.tex` with final author names,
    affiliations, ORCID links if desired, and contact email if desired.
 2. Decide whether the source-code URL should point to the public GitHub repo,
-   a release tag, or an archive/Zenodo DOI.
+   a release tag, or the Zenodo DOI above.
 3. Decide whether private capture audio should remain unavailable, be released
    as ancillary files, or be replaced by a public reproducibility dataset.
 4. Compile locally with a TeX distribution before upload:

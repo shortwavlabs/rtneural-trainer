@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite the Zenodo preprint."
+title: "RTNeural Trainer"
+authors:
+  - name: "Shortwav Labs"
+date-released: 2026-07-01
+url: "https://github.com/shortwavlabs/rtneural-trainer"
+repository-code: "https://github.com/shortwavlabs/rtneural-trainer"
+preferred-citation:
+  type: report
+  title: "Aliasing-Aware RTNeural-Compatible WaveNet Modeling of Guitar Amplifier and Pedal Captures"
+  authors:
+    - name: "Shortwav Labs"
+  date-released: 2026-07-01
+  doi: 10.5281/zenodo.21109537
+  publisher:
+    name: "Zenodo"
